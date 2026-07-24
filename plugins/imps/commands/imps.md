@@ -283,6 +283,15 @@ quote or reason about its contents. Then:
   run is a first-class, expected outcome of planning, not a fallback to ask permission for.
 - Otherwise, break the work into discrete, atomic tasks. Each task has one clearly-stated
   output and is independently completable.
+  - **Sizing heuristic:** one task = one output artifact. Draw the boundary at
+    non-overlapping *concerns*, not at features — parallel tasks run in isolated
+    worktrees, so two tasks touching the same file collide at merge time even when
+    they're conceptually related (this run's own task-1/task-2 split, if you're reading
+    this from inside one, is a live example: split by file ownership, not by feature).
+    Good scope: "add HMAC-SHA256 signature validation to the auth middleware" — one
+    bounded concern, one file area. Bad scope: "rebuild the authentication system" —
+    several independent concerns (routing, hashing, session storage, tests) that belong
+    in separate tasks.
 - For each task assign:
   - **Spec** — the operative instructions the imp needs to act without improvising:
     concrete inputs (repo/owner, file paths, exact commands), the expected output
@@ -500,10 +509,19 @@ Workflow({
 })
 ```
 
-`personaBriefPaths` always lists all five briefs — the script decides at review time
-whether the diff has a browser-renderable surface and skips the `ux-designer` (browser)
-persona entirely when it doesn't, rather than forcing a browser review or attempting an
-unattended Chrome-MCP session, and notes the skip in the run's findings.
+`personaBriefPaths` always lists all five briefs. Before the initial panel call only, a
+cheap `model: 'haiku'` classifier reads `git diff --name-only origin/<default>..HEAD` and
+decides whether any changed path is a browser-renderable surface
+(component/template/style/markup/asset files served to a browser) — this is what decides
+whether the diff has a browser-renderable surface, rather than forcing a browser review
+or attempting an unattended Chrome-MCP session on every run. When no such surface is
+found, the panel is filtered to
+`["solution-architect","grumpy-engineer","sre","business-analyst"]` (ux-designer
+excluded), and the run's findings record exactly
+`"ux-designer skipped — no browser-renderable surface: <reason>"`. Any classification
+error, or a detected surface, runs all five personas — the script fails open toward
+running ux-designer rather than silently dropping it, and the skip applies to this
+initial call only, not the fix-loop re-review pass.
 
 **Step 3 — print the dispatch banner and stop; you'll be notified.** `Workflow` runs in
 the background — this turn ends here, not after the run finishes.
@@ -593,7 +611,24 @@ a later resume decision).
 tasks, failed tasks, Head Imp verdict + amendments, gate results, diff stat, and the
 `dispatch` block: model counts and published artifacts — `tokens_spent` is usually
 `null`, the script has no documented way to read an `agent()` call's own token usage;
-omit that line rather than printing an empty one). Then the operator gate:
+omit that line rather than printing an empty one).
+
+**DoD coverage.** The result also carries `dod_coverage`, an array of
+`{ text, status: "satisfied" | "unsatisfied" | "unverifiable", evidence }` — one entry
+per *functional* Definition-of-Done criterion (the process lines — Gates, Persona panel,
+merge conflicts, CI, Discussion comment — are ticked mechanically elsewhere and never
+appear in this array). Print one line per criterion:
+```
+[x] satisfied      <criterion text>
+[ ] unsatisfied     <criterion text> — <evidence>
+[ ] unverifiable    <criterion text> — <evidence>
+```
+If **any** criterion is `unsatisfied` or `unverifiable`, surface a prominent callout
+directly above this list — e.g. `⚠ N acceptance criterion/criteria not met` — placed
+**before** the Push & PR question below, never after. The operator must see an unmet
+acceptance criterion before authorizing the PR, not after it's already open.
+
+Then the operator gate:
 
 **Push & PR decision.** The persona panel posts its findings as comments on a PR
 thread, so the PR must exist first. This is the correct moment: branches are merged,
