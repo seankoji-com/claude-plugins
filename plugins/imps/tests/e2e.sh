@@ -57,10 +57,29 @@ assert "escape-probes-denied" "$([ "$smoke_rc" -eq 0 ] && echo 1 || echo 0)" "sa
 [ "$smoke_rc" -eq 0 ] || { echo "e2e: aborting before spending money — the sandbox is not sound" >&2; exit 1; }
 
 # --- 2. scratch worktree ----------------------------------------------------
+# A genuine LINKED worktree off the repo this test is actually running inside
+# (not a synthetic throwaway repo) — real dispatch always targets a linked
+# worktree of a real, substantial project, and the two are not interchangeable
+# under the sandbox: identical sandbox-wrap.sh invocations succeed against a
+# real repo's worktree and fail against a minimal/near-empty repo's worktree
+# (single commit, no tracked files) with opencode's generic "An unknown error
+# occurred (Unexpected)" and ZERO Seatbelt denials in the kernel log — not a
+# permissions gap, and confirmed independent of both /tmp-vs-$TMPDIR placement
+# and a configured remote. Root cause not further identified (smells like an
+# opencode-side quirk with near-empty repos); matching real dispatch's shape
+# — a worktree of whatever real repo the harness is invoked from — sidesteps
+# it rather than chasing it further, and is also simply more representative.
+BASE="$(cd "$PLUGIN_ROOT" && git rev-parse --show-toplevel)" || exit 1
 TMP_CANON="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || exit 1
-WT="$(mktemp -d "$TMP_CANON/imps-e2e-wt.XXXXXX")" || exit 1
-cleanup() { [ "${IMPS_KEEP_E2E_WORKTREE:-}" = "1" ] || rm -rf "$WT"; }
+WT="$(mktemp -u "$TMP_CANON/imps-e2e-wt.XXXXXX")"
+cleanup() {
+  if [ "${IMPS_KEEP_E2E_WORKTREE:-}" = "1" ]; then return; fi
+  git -C "$BASE" worktree remove --force "$WT" >/dev/null 2>&1
+  git -C "$BASE" branch -D "imps-e2e-fixture-$$" >/dev/null 2>&1
+}
 trap cleanup EXIT
+
+git -C "$BASE" worktree add -q -b "imps-e2e-fixture-$$" "$WT" HEAD
 
 for f in "$FIXTURE"/*; do
   case "$(basename "$f")" in
@@ -69,7 +88,6 @@ for f in "$FIXTURE"/*; do
   cp "$f" "$WT/"
 done
 
-git -C "$WT" init -q
 git -C "$WT" -c user.name=imps-fixture -c user.email=imps@local -c commit.gpgsign=false \
   add -A
 git -C "$WT" -c user.name=imps-fixture -c user.email=imps@local -c commit.gpgsign=false \

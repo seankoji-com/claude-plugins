@@ -245,9 +245,11 @@ LOG_PATH="$TMP_CANON/opencode-dispatch-$$.jsonl"
 # with the default external_directory:"ask" runs silently uncontained.
 jq -e '.permission.external_directory == "deny"' "$WT/opencode.json" >/dev/null 2>&1 \
   || abort config_missing "$WT/opencode.json does not set permission.external_directory=\"deny\""
-mkdir -p "$GITMETA/info"
-grep -qxF 'opencode.json' "$GITMETA/info/exclude" 2>/dev/null \
-  || echo 'opencode.json' >>"$GITMETA/info/exclude"
+# Deliberately NOT written to $GITMETA/info/exclude: GITMETA is the git COMMON
+# dir, shared by the main checkout and every linked worktree of this repo — a
+# write there would permanently exclude opencode.json everywhere, forever,
+# with no cleanup. The scoped pathspec on the commit's `git add -A` below
+# keeps the exclusion local to this one dispatch instead.
 
 AUDIT_READY=1
 
@@ -285,7 +287,15 @@ extract_cost() {
 
 run_sandboxed() { bash "$WRAP" --worktree "$WT" --gitmeta "$GITMETA" --datadir "$DISPATCH_DIR" -- "$@"; }
 
-prompt="$(cat "$PROMPT_FILE")"
+# Kept separately from $prompt so a retry can always re-supply full task
+# context. --session normally makes this redundant (opencode has its own
+# history), but if attempt 1 dies before opencode ever emits a session id (see
+# the oc_rc!=0 handling above), SESSION_ID stays empty on retry, --session is
+# never added, and a fresh session with only the oracle failure message would
+# get zero task context — guaranteed-useless on exactly the failure path this
+# loop exists for.
+TASK="$(cat "$PROMPT_FILE")"
+prompt="$TASK"
 attempt=1
 while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   ATTEMPTS="$attempt"
@@ -325,7 +335,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     # live signing credentials. This is a synthetic bot commit in an ephemeral,
     # throwaway worktree — not final shared history. Promoting this work into a
     # shared branch goes through the normal reviewed, signed flow.
-    git -C "$WT" add -A
+    git -C "$WT" add -A -- ':(exclude)opencode.json'
     git -C "$WT" -c user.name=imps-opencode -c user.email=imps@local -c commit.gpgsign=false \
         commit -q -m "opencode: $(basename "$PROMPT_FILE") (attempt $attempt)" --no-gpg-sign || true
     log "oracle green on attempt $attempt — committed"
@@ -333,7 +343,9 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   fi
 
   if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
-    prompt="The acceptance command still fails. Fix the code in this worktree so it passes.
+    prompt="$TASK
+---
+The acceptance command still fails. Fix the code in this worktree so it passes.
 Do not weaken, delete, or rewrite the acceptance command or its test file to make it pass trivially.
 
 \$ $ORACLE

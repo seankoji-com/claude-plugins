@@ -112,10 +112,11 @@ isolate in a worktree before the first edit if not already isolated, then:
 
 Append one line to `~/.claude/audit.jsonl` for this `/learn` run itself, using the schema
 documented in this repo's `AGENTS.md` (`id`, `ts`, `plugin: "learn"`, `command: "/learn"`,
-`scope`, `project`, `exit_status`, `duration_ms`, `cost_estimate_usd: null`, `notes`
-truncated to 200 chars — e.g. which plugins got edits, which were skipped, and the PR
-number if one was opened). This is a plain `jq`/append — no new bundled script needed,
-this command isn't shipped as an installable plugin.
+`scope`, `project`, `exit_status`, `duration_ms`, `cost_estimate_usd: null`,
+`tier: null`, `attempts: null`, `notes` truncated to 200 chars — e.g. which plugins got
+edits, which were skipped, and the PR number if one was opened). This is a plain
+`jq`/append — no new bundled script needed, this command isn't shipped as an installable
+plugin.
 
 ## Notes
 

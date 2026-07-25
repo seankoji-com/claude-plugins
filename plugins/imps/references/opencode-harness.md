@@ -238,6 +238,16 @@ worktree — including the test file the oracle runs. The retry prompt tells it 
 to, and the fixtures are trivial enough that gaming them is more work than solving
 them, but v1 does not *enforce* this. Read the diff before promoting anything.
 
+### Known limitation: the bash denylist is a typo-guard, not egress control
+
+`templates/opencode.sandbox.json`'s bash denylist (`rm -rf *`, `git push *`, `sudo *`,
+`curl *` denied, everything else allowed) only blocks opencode's own permission layer —
+it does nothing at the OS level. `/usr/bin/curl`, `wget`, `nc`, or
+`python3 -c 'import urllib...'` all match the wildcard allow and run fine; the sandbox
+grants network egress and `$TMPDIR` wholesale (including the redirected `auth.json` copy
+and every other dispatch's scratch dir). Egress is unrestricted by design in v1 — the
+denylist exists to stop an *accidental* `rm -rf *`/`git push`, not a deliberate one.
+
 ---
 
 ## The Claude Code permission entry
