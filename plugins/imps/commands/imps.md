@@ -117,10 +117,13 @@ agent(
    ARTIFACT (fetch it yourself):
    <a file path to Read, or a command to run>
 
-   Argue AGAINST this. Find wrong task boundaries, mis-routed models, missing deps,
-   correctness bugs, unsafe assumptions, gaps in the DoD. Steelman the case that this
-   should NOT ship. Return a list of findings (blocker | major | minor | nit), then a
-   one-line VERDICT: APPROVE | CHANGES_REQUESTED.`,
+   Argue AGAINST this. Find wrong task boundaries (for a plan artifact, check every
+   task's boundary against the sizing heuristic at
+   ${CLAUDE_PLUGIN_ROOT}/references/task-sizing.md — read it, don't rely on memory of
+   it — any task that fails it is a wrong-boundaries finding), mis-routed models,
+   missing deps, correctness bugs, unsafe assumptions, gaps in the DoD. Steelman the
+   case that this should NOT ship. Return a list of findings (blocker | major | minor |
+   nit), then a one-line VERDICT: APPROVE | CHANGES_REQUESTED.`,
   { model: '<opus model id>', label: '😈' }
 )
 ```

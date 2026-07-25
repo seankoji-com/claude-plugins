@@ -45,9 +45,12 @@ Look at the present: the diff or plan as written, input by input. Your bar for "
 ## Plan-review checklist (plan artifacts only)
 
 When reviewing a plan (`GOAL.md`), check every task's boundary against the task-sizing
-heuristic at `${CLAUDE_PLUGIN_ROOT}/references/task-sizing.md` (read it — don't rely on
-memory of it) before approving. Any task that fails it is a `[major]` "wrong boundaries"
-finding under Persona 1.
+heuristic — `references/task-sizing.md` relative to the plugin root your dispatch prompt
+gives you (a literal `${CLAUDE_PLUGIN_ROOT}` written in this brief is never auto-expanded
+for a file you Read this way — the caller must hand you the resolved root explicitly, and
+you must substitute it yourself; see the pattern in `agents/imp-agency.md`) — before
+approving. Any task that fails it is a `[major]` "wrong boundaries" finding under
+Persona 1.
 
 ## Rules
 

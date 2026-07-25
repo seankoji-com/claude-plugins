@@ -496,7 +496,7 @@ Report "merged": [{id, label, files changed}] for each that merged cleanly (map 
 
 function headImpReview(defaultBranch) {
   return agent(
-    `You are the Head Imp — a single adversarial reviewer combining two personas (read ${args.pluginRoot}/agents/head-imp.md for your full brief and follow it exactly). Review this diff by running it yourself, never accept it pasted: \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\`. If it produces no output, say so and stop rather than inventing a diff range.
+    `You are the Head Imp — a single adversarial reviewer combining two personas (read ${args.pluginRoot}/agents/head-imp.md for your full brief and follow it exactly). Your plugin root is ${args.pluginRoot} — wherever that brief (or anything it points you to) writes a literal \`\${CLAUDE_PLUGIN_ROOT}\` token, substitute this value yourself; it is never auto-expanded for a file you Read this way. Review this diff by running it yourself, never accept it pasted: \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\`. If it produces no output, say so and stop rather than inventing a diff range.
 Argue against the diff per your brief (Technical Architect + Chissy Engineer personas). Apply the amendments your blocker/major findings demand yourself where the fix is small and disjoint; note larger fixes as findings without applying them.
 Return via the required schema: "verdict" (APPROVE|CHANGES_REQUESTED), "findings" (list of one-line finding summaries), "amendments_applied" (count of fixes you made directly, 0 if none).`,
     { label: 'head-imp-diff', phase: 'Integrate', model: 'opus', schema: HEAD_IMP_SCHEMA }
@@ -656,15 +656,19 @@ function detectBrowserSurface(defaultBranch) {
   )
 }
 
-function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverage, surfaceDetectionError) {
+function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria, dodCoverageError, surfaceDetectionError) {
+  // Both are advisory-pass failures (surface-detection, dod-coverage) that must reach the
+  // audit trail the same way — neither is fatal to the run, but a silent null on either
+  // would hide a degraded advisory check behind a clean-looking finalize.
+  const advisoryNotes = [surfaceDetectionError, dodCoverageError].filter(Boolean).join('; ')
   return agent(
     `Finalize this /imps run. State file: ${args.stateFilePath}. GOAL.md: ${args.goalFilePath}.
-1. You MUST run this now, before any other step below (the script itself is fail-soft — a missing \`jq\` or unwritable log dir just warns and exits 0 — but calling it is not optional): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms> --scope <project-or-user> --notes "<one-line summary${surfaceDetectionError ? `; note also: ${surfaceDetectionError}` : ''}>"\`.
+1. You MUST run this now, before any other step below (the script itself is fail-soft — a missing \`jq\` or unwritable log dir just warns and exits 0 — but calling it is not optional): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms> --scope <project-or-user> --notes "<one-line summary${advisoryNotes ? `; note also: ${advisoryNotes}` : ''}>"\`.
 2. If a PR exists (${prInfo ? `#${prInfo.number}` : 'none'}), flip it to ready: \`gh pr ready ${prInfo ? prInfo.number : ''}\`. Skip if no PR.
 3. Collect artifact links from the state file's "artifacts" field into the result.
-4. If the state file's "source_discussion" is non-null AND "discussion_comment_url" is still null, post a short outcome comment (≤150 words: what shipped, PR/artifact URLs, unresolved findings — persona verdicts/findings for reference: ${JSON.stringify(verdicts)}; DoD acceptance-criteria coverage for reference, mention any unsatisfied ones: ${JSON.stringify(dodCoverage || [])}) via \`gh api graphql\` addDiscussionComment using source_discussion.id verbatim. Write the returned comment URL into the state file's discussion_comment_url field immediately (patch the state file yourself) — a non-null URL means never post again on a future invocation.
+4. If the state file's "source_discussion" is non-null AND "discussion_comment_url" is still null, post a short outcome comment (≤150 words: what shipped, PR/artifact URLs, unresolved findings — persona verdicts/findings for reference: ${JSON.stringify(verdicts)}; DoD acceptance-criteria coverage for reference, mention any unsatisfied ones: ${JSON.stringify(dodCoverageCriteria || [])}${dodCoverageError ? `, noting the coverage check itself did not complete: ${dodCoverageError}` : ''}) via \`gh api graphql\` addDiscussionComment using source_discussion.id verbatim. Write the returned comment URL into the state file's discussion_comment_url field immediately (patch the state file yourself) — a non-null URL means never post again on a future invocation.
 5. If a PR was opened, write ~/.claude/imps/runs/<slug>.prs.json (derive slug from the state file path) with: repo, pr_number, pr_url, branch, base_branch, poll_interval_seconds (from state file), started_at (now, ISO), handled_comment_ids: [], ci_fix_attempts: {}, max_age_hours: 48.
-6. Assemble run_stats: dispatched_at (from state file), elapsed (now minus dispatched_at, "Xm Ys"), tokens_spent and model_counts (from: ${JSON.stringify(dispatchStats)}), tasks ([{id, model}] for every task), achieved (≤5 one-liners in plain value terms — what changed for the user, not implementation detail), decision_points (one line per pivot: Head Imp amendments, conflicts resolved, skipped gates/tasks${surfaceDetectionError ? `, the surface-detection error noted above` : ''} — omit if none).
+6. Assemble run_stats: dispatched_at (from state file), elapsed (now minus dispatched_at, "Xm Ys"), tokens_spent and model_counts (from: ${JSON.stringify(dispatchStats)}), tasks ([{id, model}] for every task), achieved (≤5 one-liners in plain value terms — what changed for the user, not implementation detail), decision_points (one line per pivot: Head Imp amendments, conflicts resolved, skipped gates/tasks${advisoryNotes ? `, the advisory-check note(s) above` : ''} — omit if none).
 7. Set the state file's "phase" to "final" (NOT deleted yet — deletion happens only after the learnings step, so a death here still resumes gracefully).
 
 Return via the required schema: pr_ready (bool), discussion_comment_url (string or null), prs_monitor (object or null: {state_file, pr_number}), run_stats (object), learnings_candidates (array of ≤10 concise "rule to apply next time" strings — surprising, wrong, or notably effective things about this run; empty array if trivial/no surprises).`,
@@ -783,6 +787,12 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
         // instead of silently being excluded from every non-UI run.
         personaFilter = Object.keys(args.personaBriefPaths).filter((slug) => slug !== 'ux-designer')
         uxSkipFinding = `ux-designer skipped — no browser-renderable surface: ${surface.reason}`
+      } else if (!surface || typeof surface.has_surface !== 'boolean') {
+        // Non-throwing but malformed (missing/mistyped has_surface) resolves to the same
+        // fail-open "run all personas" outcome as the catch below — but without this branch
+        // it left no record of why, defeating the flaking-classifier visibility this field
+        // exists for.
+        surfaceDetectionError = `surface-detection returned a malformed result, ran all personas: ${JSON.stringify(surface)}`
       }
     } catch (e) {
       // fail-open on the skip = fail-closed on review: personaFilter stays undefined, all
@@ -790,11 +800,11 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
       surfaceDetectionError = `surface-detection errored, ran all personas: ${e && e.message ? e.message : e}`
     }
     const results = await runPersonaPanel(state, prInfo.number, state.last_result.default_branch, postingMode, personaFilter)
-    let current = Object.fromEntries(results.map((v) => [v.slug, { verdict: v.verdict, findings: v.findings }]))
+    let current = Object.fromEntries(results.map((v) => [v.slug, { verdict: v.verdict, posted: v.posted, findings: v.findings }]))
     // Record the skip as a ux-designer finding so it surfaces in findings_inline / the final
     // report. "SKIPPED" is not "CHANGES_REQUESTED", so the dissenter fix-loop never re-reviews it.
     if (uxSkipFinding) {
-      current['ux-designer'] = { verdict: 'SKIPPED', posted: false, findings: [uxSkipFinding] }
+      current['ux-designer'] = { verdict: 'SKIPPED', findings: [uxSkipFinding] }
     }
 
     // Fix loop, max 3 rounds. Deliberately does NOT persist `verdicts` to the state file
@@ -817,7 +827,7 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
         postingMode,
         dissenting.map((v) => v.slug) // only re-review personas that dissented — not the whole panel
       )
-      for (const v of reReview) current[v.slug] = { verdict: v.verdict, findings: v.findings }
+      for (const v of reReview) current[v.slug] = { verdict: v.verdict, posted: v.posted, findings: v.findings }
       dissenting = reReview.filter((v) => v.verdict === 'CHANGES_REQUESTED')
     }
     verdicts = current
@@ -832,7 +842,7 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
   if (state.phase === 'final' && state.last_result && state.last_result.status === 'final') {
     return state.last_result
   }
-  const finalized = await finalizeRun(state, prInfo, verdicts, state.last_result.dispatch, state.last_result.dod_coverage, surfaceDetectionError)
+  const finalized = await finalizeRun(state, prInfo, verdicts, state.last_result.dispatch, state.last_result.dod_coverage, state.last_result.dod_coverage_error, surfaceDetectionError)
   const result = {
     status: 'final',
     pr: prInfo ? { url: prInfo.url, number: prInfo.number, ready: finalized.pr_ready } : null,
@@ -842,6 +852,11 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
     // it never reached the PR body, the Discussion outcome comment, or audit.jsonl, leaving no
     // durable record of which acceptance criteria were (un)met at authorization time.
     dod_coverage: state.last_result.dod_coverage || [],
+    // Carried alongside dod_coverage for the same reason it was dropped before: an empty
+    // array is ambiguous between "no functional criteria" and "coverage check itself
+    // failed" — the PR body, Discussion outcome comment, and audit.jsonl all need this to
+    // disambiguate, per the note above finalizeRun's call site.
+    dod_coverage_error: state.last_result.dod_coverage_error || null,
     discussion_comment_url: finalized.discussion_comment_url,
     prs_monitor: finalized.prs_monitor,
     run_stats: finalized.run_stats,
@@ -983,6 +998,7 @@ let coverage
 let dodCoverageError = null
 if (!hasDiff) {
   coverage = { criteria: [] }
+  dodCoverageError = 'dod-coverage not checked: no merged diff to judge criteria against (artifact-only run)'
 } else {
   try {
     coverage = await dodCoverage(defaultBranch)
@@ -1009,7 +1025,7 @@ const result = {
   gates: gateOutcome.results,
   diff_stat: diffStatInfo.diff_stat,
   default_branch: defaultBranch,
-  dod_coverage: coverage.criteria,
+  dod_coverage: (coverage && coverage.criteria) || [],
   dod_coverage_error: dodCoverageError,
   dispatch: { model_counts: modelCounts, tokens_spent: null, artifacts: dispatchOutcome.artifacts },
 }
