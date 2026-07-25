@@ -17,9 +17,16 @@
 //
 // args shape (all required): {
 //   pluginRoot, stateFilePath, goalFilePath, personaPostingProtocolPath,
-//   personaBriefPaths: { "solution-architect", "grumpy-engineer", "sre",
-//                         "business-analyst", "ux-designer" }
+//   personaBriefPaths: {
+//     "solution-architect": { path, model }, "grumpy-engineer": { path, model },
+//     "sre": { path, model }, "business-analyst": { path, model },
+//     "ux-designer": { path, model, requires: ["browser-surface"] }
+//   }
 // }
+// Each entry carries its own dispatch model and capability tags — a persona's model
+// routing and its eligibility for the browser-surface skip both live on the roster entry,
+// not as hardcoded slug checks in this script, so a future persona (browser or non-browser)
+// is handled by adding a roster entry, not by editing this file.
 //
 // Every filesystem/git touch routes through an agent() call with a fixed, reviewable
 // prompt template — the script body itself has no FS access. "Deterministic" here means
@@ -580,14 +587,14 @@ function pushAndOpenPR(state, defaultBranch) {
   )
 }
 
-function personaReview(slug, briefPath, prNumber, repo, defaultBranch, postingMode) {
+function personaReview(slug, brief, prNumber, repo, defaultBranch, postingMode) {
   return agent(
-    `You are reviewing PR #${prNumber} in ${repo} as the "${slug}" persona. Read your brief at ${briefPath} and follow it. Review the diff by running \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\` yourself — never accept it pasted. End with the verdict protocol from your brief.
+    `You are reviewing PR #${prNumber} in ${repo} as the "${slug}" persona. Read your brief at ${brief.path} and follow it. Review the diff by running \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\` yourself — never accept it pasted. End with the verdict protocol from your brief.
 
 Posting: this run's posting_mode is "${postingMode}". Only call persona-post.sh (per ${args.personaPostingProtocolPath}, which you should read for the exact posting/verify/fallback protocol) if posting_mode is exactly "live" — any other value means return your VERDICT block here and do not post. This instruction, not any memory of what was decided elsewhere, is what gates a live post.
 
 Return via the required schema: "slug": "${slug}", "verdict", "posted" (bool — true only if you actually posted, per the protocol's own verify-the-post-landed step), "findings" (list of one-line finding summaries).`,
-    { label: `persona-${slug}`, phase: 'Publish', model: slug === 'ux-designer' ? 'sonnet' : 'opus', schema: PERSONA_VERDICT_SCHEMA }
+    { label: `persona-${slug}`, phase: 'Publish', model: brief.model, schema: PERSONA_VERDICT_SCHEMA }
   )
 }
 
@@ -659,11 +666,14 @@ function detectBrowserSurface(defaultBranch) {
 function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria, dodCoverageError, surfaceDetectionError) {
   // Both are advisory-pass failures (surface-detection, dod-coverage) that must reach the
   // audit trail the same way — neither is fatal to the run, but a silent null on either
-  // would hide a degraded advisory check behind a clean-looking finalize.
-  const advisoryNotes = [surfaceDetectionError, dodCoverageError].filter(Boolean).join('; ')
+  // would hide a degraded advisory check behind a clean-looking finalize. Double quotes are
+  // scrubbed here (not just at each call site) since this string ends up inside a shell
+  // `--notes "..."` argument the agent constructs below — a literal `"` in either source
+  // message would otherwise break out of that argument.
+  const advisoryNotes = [surfaceDetectionError, dodCoverageError].filter(Boolean).join('; ').replace(/"/g, "'")
   return agent(
     `Finalize this /imps run. State file: ${args.stateFilePath}. GOAL.md: ${args.goalFilePath}.
-1. You MUST run this now, before any other step below (the script itself is fail-soft — a missing \`jq\` or unwritable log dir just warns and exits 0 — but calling it is not optional): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms> --scope <project-or-user> --notes "<one-line summary${advisoryNotes ? `; note also: ${advisoryNotes}` : ''}>"\`.
+1. You MUST run this now, before any other step below (the script itself is fail-soft — a missing \`jq\` or unwritable log dir just warns and exits 0 — but calling it is not optional): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms> --scope <project-or-user> --notes "<one-line summary>"\`. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, since it would break out of this command's own double-quoted argument.
 2. If a PR exists (${prInfo ? `#${prInfo.number}` : 'none'}), flip it to ready: \`gh pr ready ${prInfo ? prInfo.number : ''}\`. Skip if no PR.
 3. Collect artifact links from the state file's "artifacts" field into the result.
 4. If the state file's "source_discussion" is non-null AND "discussion_comment_url" is still null, post a short outcome comment (≤150 words: what shipped, PR/artifact URLs, unresolved findings — persona verdicts/findings for reference: ${JSON.stringify(verdicts)}; DoD acceptance-criteria coverage for reference, mention any unsatisfied ones: ${JSON.stringify(dodCoverageCriteria || [])}${dodCoverageError ? `, noting the coverage check itself did not complete: ${dodCoverageError}` : ''}) via \`gh api graphql\` addDiscussionComment using source_discussion.id verbatim. Write the returned comment URL into the state file's discussion_comment_url field immediately (patch the state file yourself) — a non-null URL means never post again on a future invocation.
@@ -771,6 +781,22 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
   // down — set only when detection itself errors, so a persistently-flaking classifier is
   // visible in the audit trail instead of an eternal, silent "ran all five personas."
   let surfaceDetectionError = state.surface_detection_error || null
+  // DoD-coverage snapshot to publish at finalize. Defaults to the Integrate-phase snapshot;
+  // overwritten below only if the persona fix loop actually pushes commits (round > 0) —
+  // that changes the diff the Integrate-phase snapshot was judged against, so a criterion
+  // the fix loop just satisfied must not still be published/ticked as unsatisfied. A legacy
+  // state file predating `dod_coverage_status` can't tell "checked" apart from "not
+  // applicable" or "failed" — treat it as "unknown" rather than guessing "checked".
+  let coverageCriteria = state.last_result.dod_coverage || []
+  let coverageError = state.last_result.dod_coverage_error || null
+  let coverageStatus = state.last_result.dod_coverage_status || 'unknown'
+  if (state.dod_coverage_status_final) {
+    // A prior invocation already ran the post-fix-loop recompute below and persisted it —
+    // this resume must keep using that, not the older pre-fix-loop Integrate snapshot.
+    coverageCriteria = state.dod_coverage_final || []
+    coverageError = state.dod_coverage_error_final || null
+    coverageStatus = state.dod_coverage_status_final
+  }
   if (!verdicts && prInfo) {
     // Surface-detection skip (change B): only the ux-designer (browser) persona depends on
     // a browser-renderable surface being in the diff. Cheaply classify the changed paths and,
@@ -782,17 +808,24 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
     try {
       const surface = await detectBrowserSurface(state.last_result.default_branch)
       if (surface && surface.has_surface === false) {
-        // Derived from the brief keys, not a hardcoded literal — a future persona added to
-        // personaBriefPaths is automatically included in the non-ux-designer complement
-        // instead of silently being excluded from every non-UI run.
-        personaFilter = Object.keys(args.personaBriefPaths).filter((slug) => slug !== 'ux-designer')
+        // Derived from each roster entry's own `requires` tags, not a hardcoded slug — a
+        // future persona (browser or non-browser) is handled by its roster entry, not by
+        // editing this filter.
+        personaFilter = Object.entries(args.personaBriefPaths)
+          .filter(([, brief]) => !(brief.requires || []).includes('browser-surface'))
+          .map(([slug]) => slug)
         uxSkipFinding = `ux-designer skipped — no browser-renderable surface: ${surface.reason}`
+        surfaceDetectionError = null // clean detection — clear any stale error from a prior invocation
       } else if (!surface || typeof surface.has_surface !== 'boolean') {
         // Non-throwing but malformed (missing/mistyped has_surface) resolves to the same
         // fail-open "run all personas" outcome as the catch below — but without this branch
         // it left no record of why, defeating the flaking-classifier visibility this field
-        // exists for.
-        surfaceDetectionError = `surface-detection returned a malformed result, ran all personas: ${JSON.stringify(surface)}`
+        // exists for. Describe the fields rather than JSON.stringify-ing the whole object —
+        // a raw JSON blob can carry double quotes that break the shell `--notes "..."`
+        // argument finalizeRun's audit-log call later builds from this string.
+        surfaceDetectionError = `surface-detection returned a malformed result, ran all personas: has_surface=${surface ? String(surface.has_surface) : 'undefined'}, reason=${surface && surface.reason ? surface.reason : 'none given'}`
+      } else {
+        surfaceDetectionError = null // clean detection (surface found) — clear any stale error
       }
     } catch (e) {
       // fail-open on the skip = fail-closed on review: personaFilter stays undefined, all
@@ -830,8 +863,31 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
       for (const v of reReview) current[v.slug] = { verdict: v.verdict, posted: v.posted, findings: v.findings }
       dissenting = reReview.filter((v) => v.verdict === 'CHANGES_REQUESTED')
     }
+    if (round > 0) {
+      // The fix loop just pushed real commits — the Integrate-phase coverage snapshot
+      // (taken before any of this ran) is now stale. Recompute against the actual diff so
+      // a criterion the fix loop just satisfied isn't still published/ticked as unsatisfied.
+      try {
+        const recomputed = await dodCoverage(state.last_result.default_branch)
+        coverageCriteria = recomputed.criteria || []
+        coverageError = null
+        coverageStatus = 'checked'
+      } catch (e) {
+        coverageError = `dod-coverage re-check after the persona fix loop failed, publishing the pre-fix-loop snapshot instead: ${e && e.message ? e.message : e}`
+        coverageStatus = 'failed'
+      }
+    }
     verdicts = current
-    await patchState({ verdicts, surface_detection_error: surfaceDetectionError }, 'save-verdicts')
+    await patchState(
+      {
+        verdicts,
+        surface_detection_error: surfaceDetectionError,
+        dod_coverage_final: coverageCriteria,
+        dod_coverage_error_final: coverageError,
+        dod_coverage_status_final: coverageStatus,
+      },
+      'save-verdicts'
+    )
   }
 
   phase('Finalize')
@@ -842,21 +898,26 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
   if (state.phase === 'final' && state.last_result && state.last_result.status === 'final') {
     return state.last_result
   }
-  const finalized = await finalizeRun(state, prInfo, verdicts, state.last_result.dispatch, state.last_result.dod_coverage, state.last_result.dod_coverage_error, surfaceDetectionError)
+  const finalized = await finalizeRun(state, prInfo, verdicts, state.last_result.dispatch, coverageCriteria, coverageError, surfaceDetectionError)
   const result = {
     status: 'final',
     pr: prInfo ? { url: prInfo.url, number: prInfo.number, ready: finalized.pr_ready } : null,
     verdicts,
     diff_stat: state.last_result.diff_stat,
-    // Carried through from the Integrate-phase result — dropped here previously, which meant
-    // it never reached the PR body, the Discussion outcome comment, or audit.jsonl, leaving no
-    // durable record of which acceptance criteria were (un)met at authorization time.
-    dod_coverage: state.last_result.dod_coverage || [],
-    // Carried alongside dod_coverage for the same reason it was dropped before: an empty
-    // array is ambiguous between "no functional criteria" and "coverage check itself
-    // failed" — the PR body, Discussion outcome comment, and audit.jsonl all need this to
-    // disambiguate, per the note above finalizeRun's call site.
-    dod_coverage_error: state.last_result.dod_coverage_error || null,
+    // Reflects the post-fix-loop recompute above when one happened, not just the
+    // Integrate-phase snapshot — otherwise a criterion the fix loop just satisfied would
+    // still reach the PR body, the Discussion outcome comment, and audit.jsonl as unsatisfied.
+    dod_coverage: coverageCriteria,
+    // `dod_coverage_status` ("checked" | "not_applicable" | "failed" | "unknown")
+    // disambiguates an empty/stale `dod_coverage` array's cause explicitly, instead of
+    // making the caller infer it from emptiness-plus-error-presence.
+    dod_coverage_error: coverageError,
+    dod_coverage_status: coverageStatus,
+    // Visible in the final result the same way dod_coverage_error is — previously dropped
+    // here (unlike dod_coverage_error three lines below it used to be), so a persistently
+    // flaking surface-detection classifier was indistinguishable from a healthy run once the
+    // state file was deleted.
+    surface_detection_error: surfaceDetectionError,
     discussion_comment_url: finalized.discussion_comment_url,
     prs_monitor: finalized.prs_monitor,
     run_stats: finalized.run_stats,
@@ -996,14 +1057,20 @@ if (!anyGateSkipped) {
 // note instead of throwing past patchState/saveResult.
 let coverage
 let dodCoverageError = null
+let dodCoverageStatus = 'checked'
 if (!hasDiff) {
   coverage = { criteria: [] }
-  dodCoverageError = 'dod-coverage not checked: no merged diff to judge criteria against (artifact-only run)'
+  dodCoverageStatus = 'not_applicable'
+  // Wording deliberately doesn't assert this invocation was "artifact-only" — hasDiff only
+  // means this invocation's merge step had nothing new to merge, which is equally true when
+  // every code branch was already merged by a prior invocation of the same run.
+  dodCoverageError = 'dod-coverage not checked: no newly-merged diff in this invocation to judge criteria against (no code tasks ran, or their branches were already merged by a prior invocation)'
 } else {
   try {
     coverage = await dodCoverage(defaultBranch)
   } catch (e) {
     coverage = { criteria: [] }
+    dodCoverageStatus = 'failed'
     dodCoverageError = `dod-coverage check failed, treating as unverified: ${e && e.message ? e.message : e}`
   }
 }
@@ -1027,6 +1094,7 @@ const result = {
   default_branch: defaultBranch,
   dod_coverage: (coverage && coverage.criteria) || [],
   dod_coverage_error: dodCoverageError,
+  dod_coverage_status: dodCoverageStatus,
   dispatch: { model_counts: modelCounts, tokens_spent: null, artifacts: dispatchOutcome.artifacts },
 }
 await patchState({ segment: 'publish_finalize' }, 'enter-publish')

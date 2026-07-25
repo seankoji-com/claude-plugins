@@ -498,15 +498,20 @@ Workflow({
     goalFilePath: "<the echoed $GOAL_PATH value, e.g. /Users/you/.claude/imps/runs/<slug>.md>",
     personaPostingProtocolPath: "${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md",
     personaBriefPaths: {
-      "solution-architect": "${CLAUDE_PLUGIN_ROOT}/personas/solution-architect.md",
-      "grumpy-engineer": "${CLAUDE_PLUGIN_ROOT}/personas/grumpy-engineer.md",
-      "sre": "${CLAUDE_PLUGIN_ROOT}/personas/sre.md",
-      "business-analyst": "${CLAUDE_PLUGIN_ROOT}/personas/business-analyst.md",
-      "ux-designer": "${CLAUDE_PLUGIN_ROOT}/personas/ux-designer.md"
+      "solution-architect": { path: "${CLAUDE_PLUGIN_ROOT}/personas/solution-architect.md", model: "opus" },
+      "grumpy-engineer": { path: "${CLAUDE_PLUGIN_ROOT}/personas/grumpy-engineer.md", model: "opus" },
+      "sre": { path: "${CLAUDE_PLUGIN_ROOT}/personas/sre.md", model: "opus" },
+      "business-analyst": { path: "${CLAUDE_PLUGIN_ROOT}/personas/business-analyst.md", model: "opus" },
+      "ux-designer": { path: "${CLAUDE_PLUGIN_ROOT}/personas/ux-designer.md", model: "sonnet", requires: ["browser-surface"] }
     }
   }
 })
 ```
+
+Each roster entry carries its own dispatch `model` and, where relevant, `requires` — the
+capability tags the surface-detection skip below filters on. A future persona is handled
+by adding a roster entry (with whatever `model`/`requires` it needs), never by adding a new
+hardcoded slug check to the Workflow script.
 
 `personaBriefPaths` always lists all five briefs. Before the initial panel call only, a
 cheap `model: 'haiku'` classifier reads `git diff --name-only origin/<default>..HEAD` and
@@ -514,16 +519,17 @@ decides — by file role/location, not bare extension, since a plain `.js`/`.ts`
 be the browser surface itself (a React or Angular component, a client route) — whether
 any changed path is browser-renderable, rather than forcing a browser review or
 attempting an unattended Chrome-MCP session on every run. When no such surface is found,
-the panel is filtered to the four non-`ux-designer` slugs — derived from
-`personaBriefPaths`' own keys (`Object.keys(args.personaBriefPaths).filter(s => s !==
-'ux-designer')`), never a separate hardcoded list, so a future sixth persona is
-automatically included instead of silently excluded — and the run's findings record
-exactly `"ux-designer skipped — no browser-renderable surface: <reason>"` with a
-`"SKIPPED"` verdict (a third value alongside `APPROVE`/`CHANGES_REQUESTED` — it carries no
-`(posted)`/`(inline)` tag since nothing was reviewed to post, and the dissenter fix-loop
-never re-reviews it). Any classification error, or a detected surface, runs all five
-personas — the script fails open toward running ux-designer rather than silently dropping
-it, and the skip applies to this initial call only, not the fix-loop re-review pass.
+the panel is filtered to the slugs whose roster entry does NOT list `"browser-surface"` in
+`requires` (`Object.entries(args.personaBriefPaths).filter(([, b]) => !(b.requires ||
+[]).includes('browser-surface'))`), never a hardcoded `!== 'ux-designer'` check, so a
+future persona (browser or non-browser) is handled by its own roster entry instead of by
+editing this filter — and the run's findings record exactly `"ux-designer skipped — no
+browser-renderable surface: <reason>"` with a `"SKIPPED"` verdict (a third value alongside
+`APPROVE`/`CHANGES_REQUESTED` — it carries no `(posted)`/`(inline)` tag since nothing was
+reviewed to post, and the dissenter fix-loop never re-reviews it). Any classification
+error, or a detected surface, runs all five personas — the script fails open toward
+running ux-designer rather than silently dropping it, and the skip applies to this initial
+call only, not the fix-loop re-review pass.
 
 **Step 3 — print the dispatch banner and stop; you'll be notified.** `Workflow` runs in
 the background — this turn ends here, not after the run finishes.
@@ -619,32 +625,40 @@ omit that line rather than printing an empty one).
 `{ text, status: "satisfied" | "unsatisfied" | "unverifiable", evidence }` — one entry
 per *functional* Definition-of-Done criterion (the process lines — Gates, Persona panel,
 merge conflicts, CI, Discussion comment — are ticked mechanically elsewhere and never
-appear in this array). An empty array is ambiguous on its own — it prints no lines and no
-callout, which reads identically to "every criterion satisfied" directly above the PR
-authorization gate. Disambiguate explicitly:
-- Array present and non-empty but every entry `satisfied` → no callout, this is the
-  genuine all-clear.
-- Array empty **and** `dod_coverage_error` is set (the script's advisory pass failed, e.g.
-  on an artifact-only run with no diff to judge) → print
-  `⚠ DoD coverage not checked: <dod_coverage_error>` instead of staying silent.
-- Array empty and no error → print `⚠ no functional acceptance criteria found in the DoD`
-  rather than letting blank read as green.
+appear in this array) — plus `dod_coverage_status`, one of `"checked" | "not_applicable" |
+"failed" | "unknown"`, telling you WHY the array looks the way it does instead of making
+you infer it from emptiness-plus-error-presence:
+- `"checked"` → the pass ran against a real diff. Non-empty with every entry `satisfied` →
+  no callout, this is the genuine all-clear. Empty → the DoD genuinely has no functional
+  criteria → print `⚠ no functional acceptance criteria found in the DoD`.
+- `"not_applicable"` → an expected, non-alarming outcome (e.g. an artifact-only run, or
+  every code branch was already merged by a prior invocation) → print a neutral note, not a
+  warning glyph: `ⓘ DoD coverage not checked: <dod_coverage_error>`.
+- `"failed"` → the check itself crashed — worth a real warning, since a criterion could be
+  sitting unverified: `⚠ DoD coverage check failed: <dod_coverage_error>`.
+- `"unknown"` → the state file predates this field (resumed from an older run) — word it
+  as its own callout rather than folding it into "failed": `⚠ DoD coverage status unknown
+  (resumed from an older run) — verify the DoD manually before authorizing.`
 
-Otherwise print one line per criterion, and keep "not met" (a real problem) visually
-distinct from "not verifiable from the diff" (may already be true, e.g. manually
-smoke-tested — the script deliberately never unticks an `unverifiable` criterion's
-checkbox, precisely so a prior manual verification isn't erased on a later resume):
+Otherwise (status `"checked"` with unsatisfied/unverifiable entries present) print one line
+per criterion, and keep "not met" (a real problem) visually distinct from "not verifiable
+from the diff" (may already be true, e.g. manually smoke-tested — the script deliberately
+never unticks an `unverifiable` criterion's checkbox, precisely so a prior manual
+verification isn't erased on a later resume):
 ```
-[x] satisfied      <criterion text>
-[ ] unsatisfied     <criterion text> — <evidence>
-[ ] unverifiable    <criterion text> — <evidence>
+[x] satisfied    <criterion text>
+[ ] unsatisfied  <criterion text> — <evidence>
+[?] unverifiable <criterion text> — <evidence>
 ```
-If any criterion is `unsatisfied`, surface a prominent callout directly above this list —
-e.g. `⚠ N acceptance criterion/criteria not met`. If any is `unverifiable`, add a separate,
-lower-key line — e.g. `N criterion/criteria not verifiable from the diff alone` — don't
-fold it into the "not met" count, they're different claims. Both callouts go **before**
-the Push & PR question below, never after — the operator must see them before authorizing
-the PR, not after it's already open.
+`[?]` is a deliberate non-claim, not a checkbox reading — this pass never touches an
+`unverifiable` criterion's actual GOAL.md box (see above), so printing a hardcoded `[ ]`
+here would misreport a box a human may have already ticked by hand. If any criterion is
+`unsatisfied`, surface a prominent callout directly above this list — e.g. `⚠ N acceptance
+criterion/criteria not met`. If any is `unverifiable`, add a separate, lower-key line —
+e.g. `N criterion/criteria not verifiable from the diff alone` — don't fold it into the
+"not met" count, they're different claims. Both callouts go **before** the Push & PR
+question below, never after — the operator must see them before authorizing the PR, not
+after it's already open.
 
 Then the operator gate:
 
