@@ -1,0 +1,10 @@
+--plugin
+imps
+--command
+/imps:imps
+--exit-status
+completed
+--duration-ms
+5
+--attempts
+abc
