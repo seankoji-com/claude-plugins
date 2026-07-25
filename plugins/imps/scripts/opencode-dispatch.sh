@@ -246,8 +246,14 @@ run_with_timeout() { # run_with_timeout <seconds> -- <cmd...>
   timed_out_flag="$(mktemp "${TMPDIR:-/tmp}/imps-timeout-flag.XXXXXX" 2>/dev/null)" || timed_out_flag=""
   (
     sleep "$secs" 2>/dev/null
-    kill -TERM "-$pid" 2>/dev/null
+    # Sentinel BEFORE the kill, not after: written after, the killed process can
+    # reap and the `wait` below return while this subshell is still between the
+    # two statements — the main shell then kills this watchdog before the write
+    # lands, sees an empty flag, and returns the raw 143 instead of the 124
+    # sentinel. Downstream that turns a timed-out oracle into an ordinary oracle
+    # failure: no `oracle_timeout` abort, and another paid attempt.
     [ -n "$timed_out_flag" ] && printf '1' >"$timed_out_flag"
+    kill -TERM "-$pid" 2>/dev/null
     sleep 10
     kill -KILL "-$pid" 2>/dev/null
   ) </dev/null >/dev/null 2>&1 &
@@ -362,8 +368,21 @@ fi
 # load-bearing check for the whole boundary; a real hash removes that class.
 REAL_GITDIR="$(resolve_gitpath --git-dir)" || abort bad_arguments "cannot resolve --git-dir for $WT"
 GITMETA_POINTER_PATHS=("$WT/.git")
+# config.worktree/config in the PER-WORKTREE gitdir, not just the common dir.
+# deny-credentials.sbpl.in denies (literal "@GITMETA@/config.worktree"), but
+# @GITMETA@ is the git COMMON dir, and for a linked worktree — the shape every
+# real dispatch uses — git reads $GIT_DIR/config.worktree, i.e.
+# <gitmeta>/worktrees/<name>/config.worktree (verified live). That path sits
+# inside the read-write --add-dirs "$GITMETA" grant and is not denied, so a
+# model can drop a `[filter "x"] clean = <cmd>` there (plus a .gitattributes in
+# the worktree) and the harness's own UNSANDBOXED `git add -A` below executes
+# <cmd> at operator privilege — `-c core.fsmonitor=false` covers fsmonitor, not
+# filters. Snapshotting these bytes catches it regardless of
+# extensions.worktreeConfig, which is the only reason the deny list's gap is
+# not already exploitable everywhere.
 case "$REAL_GITDIR" in
-  "$GITMETA"/*) GITMETA_POINTER_PATHS+=("$REAL_GITDIR/commondir" "$REAL_GITDIR/gitdir" "$REAL_GITDIR/HEAD") ;;
+  "$GITMETA"/*) GITMETA_POINTER_PATHS+=("$REAL_GITDIR/commondir" "$REAL_GITDIR/gitdir" "$REAL_GITDIR/HEAD" \
+                                        "$REAL_GITDIR/config.worktree" "$REAL_GITDIR/config") ;;
 esac
 snapshot_gitmeta_pointers() {
   local p
@@ -578,7 +597,16 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     # depth as the commit below — the gitmeta_tampered check above is what
     # actually closes the hole, this is belt and braces.
     if [ -n "$ORACLE_GUARD" ]; then
-      ORACLE_FILES_MODIFIED="$(git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" -- "$ORACLE_GUARD" 2>/dev/null | tr '\n' ' ')"
+      # `git diff` alone sees only TRACKED changes — verified: a brand-new file
+      # under the guarded pathspec is invisible to it. That is the cheapest way
+      # to game the oracle without tripping this guard: with --oracle-guard
+      # 'tests/*' and an oracle of `pytest -q`, a model that creates a NEW
+      # tests/conftest.py emptying the collected item list turns the oracle
+      # green while this diff stays empty, and the run is reported as a clean
+      # pass. `ls-files --others` is the untracked half of the same question.
+      ORACLE_FILES_MODIFIED="$( { git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" -- "$ORACLE_GUARD" 2>/dev/null
+                                  git -C "$WT" -c core.fsmonitor=false ls-files --others --exclude-standard -- "$ORACLE_GUARD" 2>/dev/null
+                                } | sort -u | tr '\n' ' ')"
       ORACLE_FILES_MODIFIED="${ORACLE_FILES_MODIFIED% }"
       if [ -n "$ORACLE_FILES_MODIFIED" ]; then
         abort oracle_guard_violated "model modified guarded oracle file(s), not counted as a pass: $ORACLE_FILES_MODIFIED"
