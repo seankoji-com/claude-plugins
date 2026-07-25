@@ -117,10 +117,13 @@ agent(
    ARTIFACT (fetch it yourself):
    <a file path to Read, or a command to run>
 
-   Argue AGAINST this. Find wrong task boundaries, mis-routed models, missing deps,
-   correctness bugs, unsafe assumptions, gaps in the DoD. Steelman the case that this
-   should NOT ship. Return a list of findings (blocker | major | minor | nit), then a
-   one-line VERDICT: APPROVE | CHANGES_REQUESTED.`,
+   Argue AGAINST this. Find wrong task boundaries (for a plan artifact, check every
+   task's boundary against the sizing heuristic at
+   ${CLAUDE_PLUGIN_ROOT}/references/task-sizing.md — read it, don't rely on memory of
+   it — any task that fails it is a wrong-boundaries finding), mis-routed models,
+   missing deps, correctness bugs, unsafe assumptions, gaps in the DoD. Steelman the
+   case that this should NOT ship. Return a list of findings (blocker | major | minor |
+   nit), then a one-line VERDICT: APPROVE | CHANGES_REQUESTED.`,
   { model: '<opus model id>', label: '😈' }
 )
 ```
@@ -283,6 +286,11 @@ quote or reason about its contents. Then:
   run is a first-class, expected outcome of planning, not a fallback to ask permission for.
 - Otherwise, break the work into discrete, atomic tasks. Each task has one clearly-stated
   output and is independently completable.
+  - **Sizing heuristic:** read
+    `${CLAUDE_PLUGIN_ROOT}/references/task-sizing.md` (shared with the Head Imp's own
+    plan-review checklist — don't restate it here) and apply it to every task boundary.
+    This run's own task-1/task-2 split, if you're reading this from inside one, is a live
+    example of splitting by file ownership rather than by feature.
 - For each task assign:
   - **Spec** — the operative instructions the imp needs to act without improvising:
     concrete inputs (repo/owner, file paths, exact commands), the expected output
@@ -490,20 +498,38 @@ Workflow({
     goalFilePath: "<the echoed $GOAL_PATH value, e.g. /Users/you/.claude/imps/runs/<slug>.md>",
     personaPostingProtocolPath: "${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md",
     personaBriefPaths: {
-      "solution-architect": "${CLAUDE_PLUGIN_ROOT}/personas/solution-architect.md",
-      "grumpy-engineer": "${CLAUDE_PLUGIN_ROOT}/personas/grumpy-engineer.md",
-      "sre": "${CLAUDE_PLUGIN_ROOT}/personas/sre.md",
-      "business-analyst": "${CLAUDE_PLUGIN_ROOT}/personas/business-analyst.md",
-      "ux-designer": "${CLAUDE_PLUGIN_ROOT}/personas/ux-designer.md"
+      "solution-architect": { path: "${CLAUDE_PLUGIN_ROOT}/personas/solution-architect.md", model: "opus" },
+      "grumpy-engineer": { path: "${CLAUDE_PLUGIN_ROOT}/personas/grumpy-engineer.md", model: "opus" },
+      "sre": { path: "${CLAUDE_PLUGIN_ROOT}/personas/sre.md", model: "opus" },
+      "business-analyst": { path: "${CLAUDE_PLUGIN_ROOT}/personas/business-analyst.md", model: "opus" },
+      "ux-designer": { path: "${CLAUDE_PLUGIN_ROOT}/personas/ux-designer.md", model: "sonnet", requires: ["browser-surface"] }
     }
   }
 })
 ```
 
-`personaBriefPaths` always lists all five briefs — the script decides at review time
-whether the diff has a browser-renderable surface and skips the `ux-designer` (browser)
-persona entirely when it doesn't, rather than forcing a browser review or attempting an
-unattended Chrome-MCP session, and notes the skip in the run's findings.
+Each roster entry carries its own dispatch `model` and, where relevant, `requires` — the
+capability tags the surface-detection skip below filters on. A future persona is handled
+by adding a roster entry (with whatever `model`/`requires` it needs), never by adding a new
+hardcoded slug check to the Workflow script.
+
+`personaBriefPaths` always lists all five briefs. Before the initial panel call only, a
+cheap `model: 'haiku'` classifier reads `git diff --name-only origin/<default>..HEAD` and
+decides — by file role/location, not bare extension, since a plain `.js`/`.ts` file can
+be the browser surface itself (a React or Angular component, a client route) — whether
+any changed path is browser-renderable, rather than forcing a browser review or
+attempting an unattended Chrome-MCP session on every run. When no such surface is found,
+the panel is filtered to the slugs whose roster entry does NOT list `"browser-surface"` in
+`requires` (`Object.entries(args.personaBriefPaths).filter(([, b]) => !(b.requires ||
+[]).includes('browser-surface'))`), never a hardcoded `!== 'ux-designer'` check, so a
+future persona (browser or non-browser) is handled by its own roster entry instead of by
+editing this filter — and the run's findings record exactly `"ux-designer skipped — no
+browser-renderable surface: <reason>"` with a `"SKIPPED"` verdict (a third value alongside
+`APPROVE`/`CHANGES_REQUESTED` — it carries no `(posted)`/`(inline)` tag since nothing was
+reviewed to post, and the dissenter fix-loop never re-reviews it). Any classification
+error, or a detected surface, runs all five personas — the script fails open toward
+running ux-designer rather than silently dropping it, and the skip applies to this initial
+call only, not the fix-loop re-review pass.
 
 **Step 3 — print the dispatch banner and stop; you'll be notified.** `Workflow` runs in
 the background — this turn ends here, not after the run finishes.
@@ -593,7 +619,48 @@ a later resume decision).
 tasks, failed tasks, Head Imp verdict + amendments, gate results, diff stat, and the
 `dispatch` block: model counts and published artifacts — `tokens_spent` is usually
 `null`, the script has no documented way to read an `agent()` call's own token usage;
-omit that line rather than printing an empty one). Then the operator gate:
+omit that line rather than printing an empty one).
+
+**DoD coverage.** The result also carries `dod_coverage`, an array of
+`{ text, status: "satisfied" | "unsatisfied" | "unverifiable", evidence }` — one entry
+per *functional* Definition-of-Done criterion (the process lines — Gates, Persona panel,
+merge conflicts, CI, Discussion comment — are ticked mechanically elsewhere and never
+appear in this array) — plus `dod_coverage_status`, one of `"checked" | "not_applicable" |
+"failed" | "unknown"`, telling you WHY the array looks the way it does instead of making
+you infer it from emptiness-plus-error-presence:
+- `"checked"` → the pass ran against a real diff. Non-empty with every entry `satisfied` →
+  no callout, this is the genuine all-clear. Empty → the DoD genuinely has no functional
+  criteria → print `⚠ no functional acceptance criteria found in the DoD`.
+- `"not_applicable"` → an expected, non-alarming outcome (e.g. an artifact-only run, or
+  every code branch was already merged by a prior invocation) → print a neutral note, not a
+  warning glyph: `ⓘ DoD coverage not checked: <dod_coverage_error>`.
+- `"failed"` → the check itself crashed — worth a real warning, since a criterion could be
+  sitting unverified: `⚠ DoD coverage check failed: <dod_coverage_error>`.
+- `"unknown"` → the state file predates this field (resumed from an older run) — word it
+  as its own callout rather than folding it into "failed": `⚠ DoD coverage status unknown
+  (resumed from an older run) — verify the DoD manually before authorizing.`
+
+Otherwise (status `"checked"` with unsatisfied/unverifiable entries present) print one line
+per criterion, and keep "not met" (a real problem) visually distinct from "not verifiable
+from the diff" (may already be true, e.g. manually smoke-tested — the script deliberately
+never unticks an `unverifiable` criterion's checkbox, precisely so a prior manual
+verification isn't erased on a later resume):
+```
+[x] satisfied    <criterion text>
+[ ] unsatisfied  <criterion text> — <evidence>
+[?] unverifiable <criterion text> — <evidence>
+```
+`[?]` is a deliberate non-claim, not a checkbox reading — this pass never touches an
+`unverifiable` criterion's actual GOAL.md box (see above), so printing a hardcoded `[ ]`
+here would misreport a box a human may have already ticked by hand. If any criterion is
+`unsatisfied`, surface a prominent callout directly above this list — e.g. `⚠ N acceptance
+criterion/criteria not met`. If any is `unverifiable`, add a separate, lower-key line —
+e.g. `N criterion/criteria not verifiable from the diff alone` — don't fold it into the
+"not met" count, they're different claims. Both callouts go **before** the Push & PR
+question below, never after — the operator must see them before authorizing the PR, not
+after it's already open.
+
+Then the operator gate:
 
 **Push & PR decision.** The persona panel posts its findings as comments on a PR
 thread, so the PR must exist first. This is the correct moment: branches are merged,
@@ -653,7 +720,10 @@ order:
    Tag each verdict with how it was delivered — `(posted)` for a real GitHub review
    under that persona's own App identity, `(inline — <reason>)` when it fell back (no
    App identity installed for this org, or the post was denied) — a partial panel
-   should never read as full independent sign-off.
+   should never read as full independent sign-off. `ux-designer SKIPPED` (no
+   `(posted)`/`(inline)` tag — it never reviewed) means the surface-detection classifier
+   found no browser-renderable surface in the diff; print its one-line reason from
+   `findings`, don't render it as a bare unqualified word.
 
    Render `run_stats` as a short stats block (Achieved / Decision points / Timing /
    Imps — omit empty sections; `tokens_spent` is typically `null`, per the note above,
