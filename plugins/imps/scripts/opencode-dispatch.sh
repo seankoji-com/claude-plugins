@@ -238,21 +238,25 @@ run_with_timeout() { # run_with_timeout <seconds> -- <cmd...>
   # here ever produced GNU coreutils' conventional 124 despite callers
   # checking for it (dead code). Returning 124 only when this function itself
   # did the killing makes the timeout condition unambiguous to the caller.
+  # `mktemp` itself CREATES the flag file (empty), so an existence check below
+  # would be true from that instant regardless of whether the watchdog ever
+  # fired — every call would report 124. The watchdog must WRITE a byte to it
+  # on timeout, and the caller must check non-empty (-s), not existence (-f).
   local timed_out_flag=""
   timed_out_flag="$(mktemp "${TMPDIR:-/tmp}/imps-timeout-flag.XXXXXX" 2>/dev/null)" || timed_out_flag=""
   (
     sleep "$secs" 2>/dev/null
     kill -TERM "-$pid" 2>/dev/null
-    [ -n "$timed_out_flag" ] && : >"$timed_out_flag"
+    [ -n "$timed_out_flag" ] && printf '1' >"$timed_out_flag"
     sleep 10
     kill -KILL "-$pid" 2>/dev/null
-  ) &
+  ) </dev/null >/dev/null 2>&1 &
   local watchdog=$!
   local rc=0
   wait "$pid" 2>/dev/null || rc=$?
   kill "$watchdog" 2>/dev/null
   wait "$watchdog" 2>/dev/null
-  if [ -n "$timed_out_flag" ] && [ -f "$timed_out_flag" ]; then
+  if [ -n "$timed_out_flag" ] && [ -s "$timed_out_flag" ]; then
     rm -f "$timed_out_flag"
     return 124
   fi
@@ -351,6 +355,11 @@ fi
 # same redirect chain and is likewise inside the writable gitmeta grant.
 # Snapshotting these bytes before the model ever runs and refusing to commit
 # if they changed closes this regardless of which pointer gets rewritten.
+# shasum -a 256, not cksum: cksum is CRC32+length, an affine checksum forgeable
+# at fixed length with a handful of chosen bytes — and the model can read every
+# one of these pointer files (they're inside its own grants) and run cksum
+# itself inside the sandbox to find a colliding rewrite. This snapshot is the
+# load-bearing check for the whole boundary; a real hash removes that class.
 REAL_GITDIR="$(resolve_gitpath --git-dir)" || abort bad_arguments "cannot resolve --git-dir for $WT"
 GITMETA_POINTER_PATHS=("$WT/.git")
 case "$REAL_GITDIR" in
@@ -359,7 +368,7 @@ esac
 snapshot_gitmeta_pointers() {
   local p
   for p in "${GITMETA_POINTER_PATHS[@]}"; do
-    if [ -f "$p" ]; then cksum "$p" 2>/dev/null; else printf '%s: MISSING\n' "$p"; fi
+    if [ -f "$p" ]; then shasum -a 256 "$p" 2>/dev/null; else printf '%s: MISSING\n' "$p"; fi
   done
 }
 GITMETA_POINTER_BASELINE="$(snapshot_gitmeta_pointers)"
@@ -542,6 +551,21 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   fi
 
   if [ "$ORACLE_EXIT" -eq 0 ]; then
+    # This must run BEFORE any other unsandboxed git command touching the
+    # worktree — including the oracle-guard diff just below. Index-reading git
+    # commands execute a configured core.fsmonitor hook, so if the model
+    # redirected $WT/.git to a fake gitdir, the FIRST unsandboxed git
+    # invocation after the model ran is what pays for it, regardless of which
+    # one it is. Reproduced live: with this check placed after the guard diff,
+    # the guard diff itself fired the redirected hook at operator privilege
+    # before this check ever got a chance to say gitmeta_tampered. Denying
+    # writes to <gitmeta>/hooks and <gitmeta>/config (deny-credentials.sbpl.in)
+    # means nothing if the model instead redirected $WT/.git to a fake gitdir
+    # of its own — this snapshot comparison is what actually closes that.
+    if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
+      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect)"
+    fi
+
     # Surface, don't silently swallow: did the model's own edits touch the
     # file(s) the oracle depends on? A model that rewrites its own test to
     # pass trivially is otherwise byte-identical, in this contract, to one
@@ -549,22 +573,16 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     # pass-rate number that has to mean something. Reported as a FAIL, not a
     # tainted pass: a naive `jq -r .status` consumer (the shape every
     # automated aggregator actually takes) would otherwise miscount a gamed
-    # oracle as a genuine one.
+    # oracle as a genuine one. -c core.fsmonitor=false: this is itself an
+    # unsandboxed, index-reading git command, so it gets the same defense in
+    # depth as the commit below — the gitmeta_tampered check above is what
+    # actually closes the hole, this is belt and braces.
     if [ -n "$ORACLE_GUARD" ]; then
-      ORACLE_FILES_MODIFIED="$(git -C "$WT" diff --name-only "$BASE_SHA" -- "$ORACLE_GUARD" 2>/dev/null | tr '\n' ' ')"
+      ORACLE_FILES_MODIFIED="$(git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" -- "$ORACLE_GUARD" 2>/dev/null | tr '\n' ' ')"
       ORACLE_FILES_MODIFIED="${ORACLE_FILES_MODIFIED% }"
       if [ -n "$ORACLE_FILES_MODIFIED" ]; then
         abort oracle_guard_violated "model modified guarded oracle file(s), not counted as a pass: $ORACLE_FILES_MODIFIED"
       fi
-    fi
-
-    # Refuse to commit if the pointer files git actually follows to find this
-    # worktree's config/hooks changed since dispatch started (see the snapshot
-    # comment above the baseline). Denying writes to <gitmeta>/hooks and
-    # <gitmeta>/config means nothing if the model instead redirected $WT/.git
-    # to a fake gitdir of its own.
-    if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
-      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect)"
     fi
 
     # Commit deterministically — never delegate this to the model, which is

@@ -196,11 +196,20 @@ assert "commit-authored-by-harness" "$([ "$author" = "imps-opencode" ] && echo 1
 # actually satisfies the oracle. A harness bug that commits without a green
 # oracle (or a model that stages files without truly fixing the bug) would
 # sail through every assertion above undetected. Re-run the oracle
-# independently of the contract's own self-report.
-( cd "$WT" && eval "$ORACLE" ) >/dev/null 2>&1
+# independently of the contract's own self-report — but through the SAME
+# sandbox boundary opencode-dispatch.sh uses, not bare `eval`: the worktree
+# now contains the model's own edits, and executing them unsandboxed here
+# would cross exactly the boundary this harness exists to enforce.
+POST_GITMETA="$(git -C "$WT" rev-parse --git-common-dir)" || exit 1
+case "$POST_GITMETA" in /*) ;; *) POST_GITMETA="$WT/$POST_GITMETA" ;; esac
+POST_GITMETA="$(cd "$POST_GITMETA" && pwd -P)" || exit 1
+POST_DATADIR="$(mktemp -d "$TMP_CANON/imps-e2e-postcheck.XXXXXX")" || exit 1
+bash "$PLUGIN_ROOT/scripts/sandbox-wrap.sh" --worktree "$WT" --gitmeta "$POST_GITMETA" --datadir "$POST_DATADIR" \
+  -- /bin/bash -c 'cd "$1" && eval "$2"' _ "$WT" "$ORACLE" >/dev/null 2>&1
 oracle_post_rc=$?
+rm -rf "$POST_DATADIR"
 assert "oracle-green-post-dispatch" "$([ "$oracle_post_rc" -eq 0 ] && echo 1 || echo 0)" \
-  "oracle exited $oracle_post_rc against the post-dispatch worktree"
+  "oracle exited $oracle_post_rc against the post-dispatch worktree (sandboxed)"
 
 # The event-stream log must never end up in the diff.
 if git -C "$WT" ls-files | grep -q '\.jsonl$'; then

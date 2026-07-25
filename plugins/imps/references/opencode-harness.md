@@ -84,14 +84,18 @@ path — success, oracle exhaustion, failed preflight, rejected model:
 
 `session_id`, `cost_usd`, `oracle_exit`, `log_path` and `oracle_files_modified`
 are nullable. `oracle_files_modified` is a JSON array of paths (or `null`) —
-non-null means the model's own edits touched a file matching `--oracle-guard`,
-which a `status:"pass"` alone cannot distinguish from a genuine fix. `abort_reason`
-is `null` on normal paths (including a clean oracle exhaustion), else one of
-`preflight_smoke_failed`, `model_rejected`, `config_missing`, `bad_arguments`,
-`auth_missing`, `opencode_missing`, `sandbox_bypass_refused`, `dispatch_dir_failed`,
-`log_path_failed`, `jq_missing`, `unexpected_exit`, `oracle_timeout`,
-`oracle_sandbox_failed`, `commit_failed`. Exit code is still non-zero on failure.
-All progress goes to stderr.
+non-null means the model's own edits touched a file matching `--oracle-guard`.
+This is fail-closed by construction, not by reader diligence: a guard hit is
+reported as `status:"fail"` with `abort_reason:"oracle_guard_violated"`, never
+as a tainted `"pass"` a naive `jq -r .status` consumer would miscount as
+genuine. `abort_reason` is `null` on normal paths (including a clean oracle
+exhaustion), else one of `preflight_smoke_failed`, `model_rejected`,
+`config_missing`, `bad_arguments`, `auth_missing`, `opencode_missing`,
+`sandbox_bypass_refused`, `dispatch_dir_failed`, `log_path_failed`,
+`jq_missing`, `unexpected_exit`, `oracle_timeout`, `oracle_sandbox_failed`,
+`commit_failed`, `worktree_dirty`, `oracle_guard_violated`,
+`gitmeta_tampered`, `commit_lineage_invalid`. Exit code is still non-zero on
+failure. All progress goes to stderr.
 
 `log_path` lives under the dispatch dir, never in the worktree: the harness
 runs `git add -A`, so an event-stream log written inside would be committed and
@@ -203,10 +207,17 @@ rather than trying to enumerate every config surface they could redirect to:
 
 1. `opencode-dispatch.sh` snapshots `$WT/.git` and (for a linked worktree) the
    per-worktree gitdir's `commondir`, `gitdir`, and `HEAD` files *before* the
-   model ever runs (`GITMETA_POINTER_BASELINE`), and refuses to commit —
+   model ever runs (`GITMETA_POINTER_BASELINE`, hashed with `shasum -a 256` —
+   `cksum` is CRC32 and forgeable by a model that can read the pointer files
+   and run `cksum` itself inside the sandbox), and refuses to commit —
    `abort_reason:"gitmeta_tampered"` — if any byte of any of them differs
    afterward. This is the check that actually decides whether the boundary
-   holds; everything else here is defense in depth around it.
+   holds; everything else here is defense in depth around it. Ordering
+   matters: this comparison runs before *any* other unsandboxed git command
+   touches the worktree, including the `--oracle-guard` diff — an earlier cut
+   ran the guard diff first, and a redirected `$WT/.git` got its fake
+   `core.fsmonitor` hook executed at operator privilege by that diff, one
+   statement before the snapshot check that would have caught it.
 2. `deny-credentials.sbpl.in` still denies writes to `<gitmeta>/hooks`,
    `<gitmeta>/config`, `<gitmeta>/config.worktree` and `<gitmeta>/info/exclude`
    directly — the rest of gitmeta (index, objects, refs) stays writable, so
