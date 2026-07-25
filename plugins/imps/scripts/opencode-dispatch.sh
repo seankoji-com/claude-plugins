@@ -290,7 +290,7 @@ run_sandboxed() { bash "$WRAP" --worktree "$WT" --gitmeta "$GITMETA" --datadir "
 # Kept separately from $prompt so a retry can always re-supply full task
 # context. --session normally makes this redundant (opencode has its own
 # history), but if attempt 1 dies before opencode ever emits a session id (see
-# the oc_rc!=0 handling above), SESSION_ID stays empty on retry, --session is
+# the oc_rc!=0 handling below), SESSION_ID stays empty on retry, --session is
 # never added, and a fresh session with only the oracle failure message would
 # get zero task context — guaranteed-useless on exactly the failure path this
 # loop exists for.

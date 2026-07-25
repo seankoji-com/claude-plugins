@@ -12,12 +12,21 @@
 #   4. write inside the gitmeta dir is allowed
 #   5. write to /dev/null is allowed        (git dies without it)
 #   6. `git status` in the worktree exits 0 (needs ~/.gitconfig read access)
-#   7. reading the REAL ~/.local/share/opencode/auth.json is DENIED
+#   7. every path in sandbox/deny-credentials.sbpl.in is unreadable — the REAL
+#      ~/.local/share/opencode/auth.json, ~/.config/gh, ~/.ssh, ~/.aws and
+#      ~/.claude/.credentials.json
 #
-# Assertion 7 is the only test behind the credential-isolation claim: the
-# sandbox gets a redirected XDG_DATA_HOME holding a copy of auth.json, and the
-# original must be unreachable. If that file is absent on this host the
-# assertion is reported as vacuous rather than quietly counted as a pass.
+# Assertion group 7 is what backs the credential-isolation claim: the sandbox
+# gets a redirected XDG_DATA_HOME holding a copy of auth.json, and the original
+# must be unreachable. ~/.config/gh is the load-bearing member — safehouse
+# GRANTS it by default, so it is the only probe here that actually exercises
+# --append-profile's last-match-wins override. auth.json, ~/.ssh and ~/.aws are
+# denied by safehouse's own defaults and would stay green even if that override
+# silently stopped working, so they cannot stand in for it.
+#
+# A probe whose target is absent on this host is SKIPPED, not asserted: `cat` on
+# a missing file exits non-zero, so counting it as a pass would be evidence of
+# nothing.
 #
 # Exit codes: 0 all assertions passed · 1 an assertion failed (named on stdout)
 # · 2 the backend is unavailable · 77 cannot run here (Seatbelt does not nest,
@@ -97,9 +106,22 @@ expect_allow "gitmeta-write-allowed"  "touch '$GITMETA/imps-probe'"
 expect_allow "devnull-write-allowed"  "echo probe > /dev/null"
 expect_allow "git-status-ok"          "cd '$WT' && git status --porcelain"
 
-AUTH_JSON="$HOME_CANON/.local/share/opencode/auth.json"
-[ -e "$AUTH_JSON" ] || note "auth-json-denied: $AUTH_JSON absent on this host — assertion is vacuous here"
-expect_deny  "auth-json-denied"       "cat '$AUTH_JSON'"
+# One probe per path denied by sandbox/deny-credentials.sbpl.in. `cat || ls` is
+# the union of "content readable" and "metadata readable" — the profile denies
+# file-read*, which covers both, so a correct profile fails both and a partial
+# grant is still caught. Absent targets are skipped rather than counted.
+expect_deny_path() { # expect_deny_path <name> <path>
+  if [ -e "$2" ]; then
+    expect_deny "$1" "cat '$2' 2>/dev/null || ls '$2'"
+  else
+    note "$1: $2 absent on this host — skipped, NOT counted as a pass"
+  fi
+}
+expect_deny_path "auth-json-denied"    "$HOME_CANON/.local/share/opencode/auth.json"
+expect_deny_path "gh-config-denied"    "$HOME_CANON/.config/gh"
+expect_deny_path "ssh-denied"          "$HOME_CANON/.ssh"
+expect_deny_path "aws-denied"          "$HOME_CANON/.aws"
+expect_deny_path "claude-creds-denied" "$HOME_CANON/.claude/.credentials.json"
 
 if [ "$fails" -ne 0 ]; then
   echo "sandbox-smoke: $fails assertion(s) failed" >&2

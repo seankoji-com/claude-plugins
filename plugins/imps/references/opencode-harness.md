@@ -8,6 +8,13 @@ v1 is **harness + measurement only**. Nothing here changes `/imps`. These are
 hand-invocable scripts; whether `/imps:go` ever gets built is decided by the
 numbers from the measurement protocol at the bottom of this file.
 
+> **Scope: maintainers working inside the `claude-plugins` checkout.** Every
+> command and permission rule below is written repo-relative
+> (`plugins/imps/scripts/…`) and only resolves from the repo root. From an
+> *installed* plugin the same files live under `${CLAUDE_PLUGIN_ROOT}` — substitute
+> that prefix in both the commands and the `permissions.allow` entries, or they
+> will not resolve and the rules will never match.
+
 The load-bearing idea is the **oracle**: a cheap model is good at grinding
 iterations against a hard pass/fail signal and bad at knowing when to stop. Every
 offloaded task carries a machine-checkable acceptance command; the harness loops
