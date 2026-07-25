@@ -157,6 +157,54 @@ ${other#"$ROOT"/} differs from ${first#"$ROOT"/}"
   report "consistency/audit-log.sh" "$consistent" "$detail"
 fi
 
+# opencode execute-tier harness (plugins/imps). Two extra checks that cannot be
+# fixture-driven: they need a real macOS sandbox, and the E2E additionally needs
+# credentials and spends real money.
+#
+# A skip must NOT print "ok" — `report` only knows ok/FAIL, so reusing it here
+# would count a never-run E2E as a pass on ubuntu-latest CI. Skips print their
+# own line and stay outside the pass/fail counters.
+skip() { echo "skip $1: $2"; }
+
+sandbox_wrap="$ROOT/plugins/imps/scripts/sandbox-wrap.sh"
+sandbox_smoke="$ROOT/plugins/imps/scripts/sandbox-smoke.sh"
+if [ ! -x "$sandbox_smoke" ]; then
+  # A lost exec bit or a deleted file must not be silently invisible — that's
+  # exactly the regression class this whole skip-vs-pass distinction exists to
+  # catch, and a bare `:` here defeats it.
+  skip "imps/sandbox-smoke.sh" "missing or not executable: $sandbox_smoke"
+elif [ "$(uname -s)" != "Darwin" ]; then
+  skip "imps/sandbox-smoke.sh" "not Darwin (uname -s = $(uname -s))"
+elif ! bash "$sandbox_wrap" --check >/dev/null 2>&1; then
+  skip "imps/sandbox-smoke.sh" "sandbox backend unavailable (SANDBOX_MODE=${SANDBOX_MODE:-safehouse})"
+else
+  smoke_out="$(bash "$sandbox_smoke" 2>&1)"
+  smoke_rc=$?
+  case "$smoke_rc" in
+    0)  report "imps/sandbox-smoke.sh" 1 ;;
+    # 77 == "cannot run here": Seatbelt does not nest, so running this from
+    # inside Claude Code's own Bash sandbox proves nothing either way.
+    77) skip "imps/sandbox-smoke.sh" "sandbox cannot be applied here (nested sandbox); run it unsandboxed" ;;
+    *)  report "imps/sandbox-smoke.sh" 0 "$smoke_out" ;;
+  esac
+fi
+
+imps_e2e="$ROOT/plugins/imps/tests/e2e.sh"
+if [ -x "$imps_e2e" ]; then
+  e2e_out="$(bash "$imps_e2e" 2>&1)"
+  e2e_rc=$?
+  case "$e2e_rc" in
+    # 77 == the script's own "gate not met" status; it prints the reason itself.
+    77) skip "imps/tests/e2e.sh" "$(printf '%s\n' "$e2e_out" | tail -n 1 | sed 's/^skip e2e: //')" ;;
+    0)  report "imps/tests/e2e.sh" 1 ;;
+    *)  report "imps/tests/e2e.sh" 0 "$e2e_out" ;;
+  esac
+else
+  # Same visibility invariant as sandbox-smoke.sh above: missing/non-executable
+  # must never be silent.
+  skip "imps/tests/e2e.sh" "missing or not executable: $imps_e2e"
+fi
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

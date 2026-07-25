@@ -1,6 +1,6 @@
 {
   "name": "claude-tuneup",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Permission audit and settings tuneup for Claude Code — scans recent transcripts for common Bash/MCP patterns, classifies by scope, deduplicates global vs project settings.",
   "author": {
     "name": "seankoji",

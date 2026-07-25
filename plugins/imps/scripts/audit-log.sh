@@ -14,10 +14,12 @@
 #
 # Usage:
 #   audit-log.sh --plugin <name> --command <slash-command> --exit-status <status> \
-#     --duration-ms <int> [--notes <text>] [--cost-usd <number>] [--scope <user|project>]
+#     --duration-ms <int> [--notes <text>] [--cost-usd <number>] [--scope <user|project>] \
+#     [--tier <text>] [--attempts <int>]
 #
 #   status: completed | partial | failed | cancelled
 #   scope, if omitted, is auto-detected: "project" inside a git repo, else "user"
+#   tier, attempts: optional; null when omitted (e.g. tier="opencode" for offloaded work)
 #
 # Best-effort by design: a missing `jq`, an unwritable log dir, or a write failure warns
 # on stderr and exits 0 rather than breaking the caller's primary command — this is
@@ -27,7 +29,18 @@ set -uo pipefail
 
 AUDIT_FILE="${AUDIT_LOG_FILE:-$HOME/.claude/audit.jsonl}"
 
-plugin="" command="" exit_status="" duration_ms="" notes="" cost_usd="" scope=""
+# Pure single-arg helpers, kept above the arg loop so the unit test harness (which
+# sources this script with __SOURCED__=1 and calls one function directly) can exercise
+# them without going through argv parsing. --tier and --attempts are both optional, so
+# unlike --duration-ms's `''|*[!0-9]*` check (which must reject empty), these must map
+# an empty/unset value to JSON null rather than an error.
+tier_json()     { [ -z "${1:-}" ] && { echo null; return; }; jq -Rn --arg t "$1" '$t'; }
+attempts_json() { [ -z "${1:-}" ] && { echo null; return; }
+                  case "$1" in *[!0-9]*) echo "audit-log: --attempts must be a non-negative integer, got '$1'" >&2; return 1;; esac
+                  printf '%s\n' "$1"; }
+${__SOURCED__:+false} : || return 0
+
+plugin="" command="" exit_status="" duration_ms="" notes="" cost_usd="" scope="" tier="" attempts=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -38,6 +51,8 @@ while [ $# -gt 0 ]; do
     --notes) notes="${2:-}"; shift 2 ;;
     --cost-usd) cost_usd="${2:-}"; shift 2 ;;
     --scope) scope="${2:-}"; shift 2 ;;
+    --tier) tier="${2:-}"; shift 2 ;;
+    --attempts) attempts="${2:-}"; shift 2 ;;
     *) echo "audit-log: unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -77,10 +92,19 @@ if [ -n "$cost_usd" ]; then
   esac
 fi
 
+# attempts_json validates format even without jq present — a malformed --attempts is an
+# argument bug in the caller, not an environmental gap, so it must exit 1 regardless (see
+# AGENTS.md). tier_json needs jq to produce a safely-quoted JSON string, so it's deferred
+# past the jq-presence check below to avoid a spurious "jq: command not found" on a
+# jq-less machine that's about to exit 0 anyway.
+attempts_json_val="$(attempts_json "$attempts")" || exit 1
+
 if ! command -v jq >/dev/null 2>&1; then
   echo "audit-log: 'jq' not on PATH — skipping structured log entry" >&2
   exit 0
 fi
+
+tier_json_val="$(tier_json "$tier")"
 
 if ! mkdir -p "$(dirname "$AUDIT_FILE")" 2>/dev/null; then
   echo "audit-log: cannot create $(dirname "$AUDIT_FILE") — skipping structured log entry" >&2
@@ -101,10 +125,12 @@ if ! jq -nc \
   --arg exit_status "$exit_status" \
   --argjson duration_ms "$duration_ms" \
   --argjson cost_estimate_usd "$cost_json" \
+  --argjson tier "$tier_json_val" \
+  --argjson attempts "$attempts_json_val" \
   --arg notes "${notes:0:200}" \
   '{id:$id, ts:$ts, plugin:$plugin, command:$command, scope:$scope, project:$project,
     exit_status:$exit_status, duration_ms:$duration_ms, cost_estimate_usd:$cost_estimate_usd,
-    notes:$notes}' >> "$AUDIT_FILE" 2>/dev/null; then
+    tier:$tier, attempts:$attempts, notes:$notes}' >> "$AUDIT_FILE" 2>/dev/null; then
   echo "audit-log: failed to write to $AUDIT_FILE" >&2
   exit 0
 fi
