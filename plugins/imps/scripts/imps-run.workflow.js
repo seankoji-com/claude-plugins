@@ -666,14 +666,19 @@ function detectBrowserSurface(defaultBranch) {
 function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria, dodCoverageError, surfaceDetectionError) {
   // Both are advisory-pass failures (surface-detection, dod-coverage) that must reach the
   // audit trail the same way — neither is fatal to the run, but a silent null on either
-  // would hide a degraded advisory check behind a clean-looking finalize. Double quotes are
-  // scrubbed here (not just at each call site) since this string ends up inside a shell
-  // `--notes "..."` argument the agent constructs below — a literal `"` in either source
-  // message would otherwise break out of that argument.
-  const advisoryNotes = [surfaceDetectionError, dodCoverageError].filter(Boolean).join('; ').replace(/"/g, "'")
+  // would hide a degraded advisory check behind a clean-looking finalize. Their source text
+  // (a haiku classifier's freeform "reason", or a thrown error's .message) is untrusted —
+  // it can legitimately contain backticks around a file path, `$(...)`-shaped text, or other
+  // shell metacharacters — and this string ends up inside a shell `--notes "..."` argument
+  // the agent constructs below. Stripping only `"` (as an earlier version of this line did)
+  // still let backticks/`$(` reach that argument verbatim, a real command-injection path via
+  // the finalize agent dutifully copying it in "verbatim". Strip every shell-meaningful
+  // character here (not just at each call site) rather than relying on the agent's own
+  // quoting discipline to neutralize untrusted text.
+  const advisoryNotes = [surfaceDetectionError, dodCoverageError].filter(Boolean).join('; ').replace(/[`"$\\]/g, '')
   return agent(
     `Finalize this /imps run. State file: ${args.stateFilePath}. GOAL.md: ${args.goalFilePath}.
-1. You MUST run this now, before any other step below (the script itself is fail-soft — a missing \`jq\` or unwritable log dir just warns and exits 0 — but calling it is not optional): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms> --scope <project-or-user> --notes "<one-line summary>"\`. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, since it would break out of this command's own double-quoted argument.
+1. You MUST run this now, before any other step below (the script itself is fail-soft — a missing \`jq\` or unwritable log dir just warns and exits 0 — but calling it is not optional): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms> --scope <project-or-user> --notes "<one-line summary>"\`. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, backtick, dollar sign, or backslash, since any of those would break out of or reinterpret this command's own double-quoted argument.
 2. If a PR exists (${prInfo ? `#${prInfo.number}` : 'none'}), flip it to ready: \`gh pr ready ${prInfo ? prInfo.number : ''}\`. Skip if no PR.
 3. Collect artifact links from the state file's "artifacts" field into the result.
 4. If the state file's "source_discussion" is non-null AND "discussion_comment_url" is still null, post a short outcome comment (≤150 words: what shipped, PR/artifact URLs, unresolved findings — persona verdicts/findings for reference: ${JSON.stringify(verdicts)}; DoD acceptance-criteria coverage for reference, mention any unsatisfied ones: ${JSON.stringify(dodCoverageCriteria || [])}${dodCoverageError ? `, noting the coverage check itself did not complete: ${dodCoverageError}` : ''}) via \`gh api graphql\` addDiscussionComment using source_discussion.id verbatim. Write the returned comment URL into the state file's discussion_comment_url field immediately (patch the state file yourself) — a non-null URL means never post again on a future invocation.
