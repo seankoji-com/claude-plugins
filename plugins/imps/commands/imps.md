@@ -283,15 +283,11 @@ quote or reason about its contents. Then:
   run is a first-class, expected outcome of planning, not a fallback to ask permission for.
 - Otherwise, break the work into discrete, atomic tasks. Each task has one clearly-stated
   output and is independently completable.
-  - **Sizing heuristic:** one task = one output artifact. Draw the boundary at
-    non-overlapping *concerns*, not at features — parallel tasks run in isolated
-    worktrees, so two tasks touching the same file collide at merge time even when
-    they're conceptually related (this run's own task-1/task-2 split, if you're reading
-    this from inside one, is a live example: split by file ownership, not by feature).
-    Good scope: "add HMAC-SHA256 signature validation to the auth middleware" — one
-    bounded concern, one file area. Bad scope: "rebuild the authentication system" —
-    several independent concerns (routing, hashing, session storage, tests) that belong
-    in separate tasks.
+  - **Sizing heuristic:** read
+    `${CLAUDE_PLUGIN_ROOT}/references/task-sizing.md` (shared with the Head Imp's own
+    plan-review checklist — don't restate it here) and apply it to every task boundary.
+    This run's own task-1/task-2 split, if you're reading this from inside one, is a live
+    example of splitting by file ownership rather than by feature.
 - For each task assign:
   - **Spec** — the operative instructions the imp needs to act without improvising:
     concrete inputs (repo/owner, file paths, exact commands), the expected output
@@ -511,17 +507,20 @@ Workflow({
 
 `personaBriefPaths` always lists all five briefs. Before the initial panel call only, a
 cheap `model: 'haiku'` classifier reads `git diff --name-only origin/<default>..HEAD` and
-decides whether any changed path is a browser-renderable surface
-(component/template/style/markup/asset files served to a browser) — this is what decides
-whether the diff has a browser-renderable surface, rather than forcing a browser review
-or attempting an unattended Chrome-MCP session on every run. When no such surface is
-found, the panel is filtered to
-`["solution-architect","grumpy-engineer","sre","business-analyst"]` (ux-designer
-excluded), and the run's findings record exactly
-`"ux-designer skipped — no browser-renderable surface: <reason>"`. Any classification
-error, or a detected surface, runs all five personas — the script fails open toward
-running ux-designer rather than silently dropping it, and the skip applies to this
-initial call only, not the fix-loop re-review pass.
+decides — by file role/location, not bare extension, since a plain `.js`/`.ts` file can
+be the browser surface itself (a React or Angular component, a client route) — whether
+any changed path is browser-renderable, rather than forcing a browser review or
+attempting an unattended Chrome-MCP session on every run. When no such surface is found,
+the panel is filtered to the four non-`ux-designer` slugs — derived from
+`personaBriefPaths`' own keys (`Object.keys(args.personaBriefPaths).filter(s => s !==
+'ux-designer')`), never a separate hardcoded list, so a future sixth persona is
+automatically included instead of silently excluded — and the run's findings record
+exactly `"ux-designer skipped — no browser-renderable surface: <reason>"` with a
+`"SKIPPED"` verdict (a third value alongside `APPROVE`/`CHANGES_REQUESTED` — it carries no
+`(posted)`/`(inline)` tag since nothing was reviewed to post, and the dissenter fix-loop
+never re-reviews it). Any classification error, or a detected surface, runs all five
+personas — the script fails open toward running ux-designer rather than silently dropping
+it, and the skip applies to this initial call only, not the fix-loop re-review pass.
 
 **Step 3 — print the dispatch banner and stop; you'll be notified.** `Workflow` runs in
 the background — this turn ends here, not after the run finishes.
@@ -617,16 +616,32 @@ omit that line rather than printing an empty one).
 `{ text, status: "satisfied" | "unsatisfied" | "unverifiable", evidence }` — one entry
 per *functional* Definition-of-Done criterion (the process lines — Gates, Persona panel,
 merge conflicts, CI, Discussion comment — are ticked mechanically elsewhere and never
-appear in this array). Print one line per criterion:
+appear in this array). An empty array is ambiguous on its own — it prints no lines and no
+callout, which reads identically to "every criterion satisfied" directly above the PR
+authorization gate. Disambiguate explicitly:
+- Array present and non-empty but every entry `satisfied` → no callout, this is the
+  genuine all-clear.
+- Array empty **and** `dod_coverage_error` is set (the script's advisory pass failed, e.g.
+  on an artifact-only run with no diff to judge) → print
+  `⚠ DoD coverage not checked: <dod_coverage_error>` instead of staying silent.
+- Array empty and no error → print `⚠ no functional acceptance criteria found in the DoD`
+  rather than letting blank read as green.
+
+Otherwise print one line per criterion, and keep "not met" (a real problem) visually
+distinct from "not verifiable from the diff" (may already be true, e.g. manually
+smoke-tested — the script deliberately never unticks an `unverifiable` criterion's
+checkbox, precisely so a prior manual verification isn't erased on a later resume):
 ```
 [x] satisfied      <criterion text>
 [ ] unsatisfied     <criterion text> — <evidence>
 [ ] unverifiable    <criterion text> — <evidence>
 ```
-If **any** criterion is `unsatisfied` or `unverifiable`, surface a prominent callout
-directly above this list — e.g. `⚠ N acceptance criterion/criteria not met` — placed
-**before** the Push & PR question below, never after. The operator must see an unmet
-acceptance criterion before authorizing the PR, not after it's already open.
+If any criterion is `unsatisfied`, surface a prominent callout directly above this list —
+e.g. `⚠ N acceptance criterion/criteria not met`. If any is `unverifiable`, add a separate,
+lower-key line — e.g. `N criterion/criteria not verifiable from the diff alone` — don't
+fold it into the "not met" count, they're different claims. Both callouts go **before**
+the Push & PR question below, never after — the operator must see them before authorizing
+the PR, not after it's already open.
 
 Then the operator gate:
 
@@ -688,7 +703,10 @@ order:
    Tag each verdict with how it was delivered — `(posted)` for a real GitHub review
    under that persona's own App identity, `(inline — <reason>)` when it fell back (no
    App identity installed for this org, or the post was denied) — a partial panel
-   should never read as full independent sign-off.
+   should never read as full independent sign-off. `ux-designer SKIPPED` (no
+   `(posted)`/`(inline)` tag — it never reviewed) means the surface-detection classifier
+   found no browser-renderable surface in the diff; print its one-line reason from
+   `findings`, don't render it as a bare unqualified word.
 
    Render `run_stats` as a short stats block (Achieved / Decision points / Timing /
    Imps — omit empty sections; `tokens_spent` is typically `null`, per the note above,

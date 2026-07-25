@@ -44,13 +44,10 @@ Look at the present: the diff or plan as written, input by input. Your bar for "
 
 ## Plan-review checklist (plan artifacts only)
 
-When reviewing a plan (`GOAL.md`), check every task's boundary against this heuristic
-before approving: one task = one output artifact, independently completable, boundary
-drawn at non-overlapping *concerns* — not at features — so parallel worktree-isolated
-tasks never edit the same file. Good scope: "add HMAC-SHA256 signature validation to the
-auth middleware." Bad scope: "rebuild the authentication system" — several independent
-concerns (routing, hashing, session storage, tests) that belong in separate tasks. Any
-task that fails this test is a `[major]` "wrong boundaries" finding under Persona 1.
+When reviewing a plan (`GOAL.md`), check every task's boundary against the task-sizing
+heuristic at `${CLAUDE_PLUGIN_ROOT}/references/task-sizing.md` (read it — don't rely on
+memory of it) before approving. Any task that fails it is a `[major]` "wrong boundaries"
+finding under Persona 1.
 
 ## Rules
 
