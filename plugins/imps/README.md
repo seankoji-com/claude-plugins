@@ -212,6 +212,9 @@ protocol itself lives in `references/persona-posting.md`, shared by this panel a
 | Dispatch banner (cosmetic) | `${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-banner.py` |
 | Final banner (cosmetic) | `${CLAUDE_PLUGIN_ROOT}/scripts/final-banner.py` |
 | Structured audit-log appender | `${CLAUDE_PLUGIN_ROOT}/scripts/audit-log.sh` |
+| opencode execute-tier dispatcher | `${CLAUDE_PLUGIN_ROOT}/scripts/opencode-dispatch.sh` — hand-invocable; see `${CLAUDE_PLUGIN_ROOT}/references/opencode-harness.md` |
+| OS sandbox wrapper (macOS) | `${CLAUDE_PLUGIN_ROOT}/scripts/sandbox-wrap.sh` |
+| Sandbox containment assertions | `${CLAUDE_PLUGIN_ROOT}/scripts/sandbox-smoke.sh` |
 
 No manual setup needed for any of these — the plugin installs them at
 `${CLAUDE_PLUGIN_ROOT}` and the commands resolve them at runtime. The bundled

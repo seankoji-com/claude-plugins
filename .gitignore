@@ -3,6 +3,14 @@
 .claude/jobs/
 .claude/imps/learnings.md
 
+# Per-machine permission grants. This one is load-bearing, not tidiness: the
+# opencode harness needs a Bash rule that runs *outside* Claude Code's sandbox
+# (plugins/imps/references/opencode-harness.md), and a committed sandbox-off
+# grant in a public marketplace repo would be inherited by every contributor and
+# agent session that clones it. Previously ignored only by a machine-local
+# ~/.gitignore_global, i.e. by nothing at all on any other clone.
+.claude/settings.local.json
+
 # Goldfish judge run artifacts (transient scratch from /elephant-goldfish:elephant)
 .goldfish-runs/
 
