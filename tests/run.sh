@@ -169,7 +169,10 @@ skip() { echo "skip $1: $2"; }
 sandbox_wrap="$ROOT/plugins/imps/scripts/sandbox-wrap.sh"
 sandbox_smoke="$ROOT/plugins/imps/scripts/sandbox-smoke.sh"
 if [ ! -x "$sandbox_smoke" ]; then
-  :
+  # A lost exec bit or a deleted file must not be silently invisible — that's
+  # exactly the regression class this whole skip-vs-pass distinction exists to
+  # catch, and a bare `:` here defeats it.
+  skip "imps/sandbox-smoke.sh" "missing or not executable: $sandbox_smoke"
 elif [ "$(uname -s)" != "Darwin" ]; then
   skip "imps/sandbox-smoke.sh" "not Darwin (uname -s = $(uname -s))"
 elif ! bash "$sandbox_wrap" --check >/dev/null 2>&1; then
@@ -196,6 +199,10 @@ if [ -x "$imps_e2e" ]; then
     0)  report "imps/tests/e2e.sh" 1 ;;
     *)  report "imps/tests/e2e.sh" 0 "$e2e_out" ;;
   esac
+else
+  # Same visibility invariant as sandbox-smoke.sh above: missing/non-executable
+  # must never be silent.
+  skip "imps/tests/e2e.sh" "missing or not executable: $imps_e2e"
 fi
 
 echo "---"

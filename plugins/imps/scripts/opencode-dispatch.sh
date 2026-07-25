@@ -25,23 +25,37 @@
 #   --attempt-timeout seconds before a stalled `opencode run` is killed; default 300
 #   --oracle-timeout  seconds before a stalled oracle is killed; default 120
 #   --oracle-guard    optional pathspec (e.g. a test file). If the model's own
-#                     edits touch it, that's surfaced in the contract as
-#                     oracle_files_modified rather than silently counted as a
-#                     clean pass — a model that rewrites its own test to pass
-#                     trivially is otherwise indistinguishable from one that
-#                     genuinely fixed the code, and this v1's whole purpose is
-#                     to produce a trustworthy pass-rate number.
+#                     edits touch it, the attempt is reported as status:"fail"
+#                     with abort_reason:"oracle_guard_violated" and the
+#                     touched file(s) named in oracle_files_modified, rather
+#                     than silently counted as a clean pass — a model that
+#                     rewrites its own test to pass trivially is otherwise
+#                     indistinguishable from one that genuinely fixed the
+#                     code, and this v1's whole purpose is to produce a
+#                     trustworthy pass-rate number, fail-closed by
+#                     construction rather than by reader diligence.
 #
 # Contract: the FINAL line of stdout is always exactly one JSON object —
 #   {"status":"pass|fail","attempts":2,"session_id":"ses_…","cost_usd":0.0087,
 #    "oracle_exit":0,"log_path":"/abs/path.jsonl","abort_reason":null,
 #    "oracle_files_modified":null}
 # on every exit path, including a failed preflight or a rejected model. Exit code
-# is still non-zero on failure. Everything else goes to stderr.
+# is still non-zero on failure. Everything else goes to stderr. log_path is
+# null unless IMPS_KEEP_DISPATCH_DIR=1 — otherwise the dispatch dir (and the
+# log inside it) is removed by this same cleanup before the process exits, so
+# advertising the path would point at something already gone.
 #
 # See plugins/imps/references/opencode-harness.md for setup, the Claude Code
 # permission entry, and the measurement protocol.
 set -uo pipefail
+
+# Structural guarantee for "the final line of stdout is always exactly one
+# JSON object": save the real stdout on fd 3, then redirect the script's own
+# fd 1 to stderr for everything else. A stray bare `echo`/`printf` anywhere in
+# this file (now, or in a future edit) lands on stderr instead of silently
+# corrupting the contract — emit_contract is the only thing that writes to fd 3.
+exec 3>&1
+exec 1>&2
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 WRAP="$PLUGIN_ROOT/scripts/sandbox-wrap.sh"
@@ -93,12 +107,21 @@ as_json_string_array() {
   jq -Rn --arg v "$1" '$v | split(" ") | map(select(length > 0))'
 }
 
+# LOG_PATH lives under $DISPATCH_DIR, which on_exit deletes unless
+# IMPS_KEEP_DISPATCH_DIR=1 — so a contract that always advertised LOG_PATH
+# would, on every normal run, point at a directory this same trap invocation
+# is about to remove. Report it only when it will actually still exist.
+effective_log_path() {
+  [ "${IMPS_KEEP_DISPATCH_DIR:-}" = "1" ] && [ -n "$LOG_PATH" ] && printf '%s' "$LOG_PATH"
+  return 0
+}
+
 emit_contract() {
   if [ "$HAVE_JQ" = 0 ]; then
     # jq is a hard dependency of this repo's tooling, but the contract says
     # "exactly one line, always" — so even this path emits one.
     printf '{"status":"%s","attempts":%s,"session_id":null,"cost_usd":null,"oracle_exit":null,"log_path":null,"abort_reason":"jq_missing","oracle_files_modified":null}\n' \
-      "$STATUS" "$ATTEMPTS"
+      "$STATUS" "$ATTEMPTS" >&3
     return
   fi
   jq -nc \
@@ -107,12 +130,12 @@ emit_contract() {
     --argjson session_id              "$(as_json_string "$SESSION_ID")" \
     --argjson cost_usd                "$(as_json_number "$COST")" \
     --argjson oracle_exit             "$(as_json_number "$ORACLE_EXIT")" \
-    --argjson log_path                "$(as_json_string "$LOG_PATH")" \
+    --argjson log_path                "$(as_json_string "$(effective_log_path)")" \
     --argjson abort_reason            "$(as_json_string "$ABORT_REASON")" \
     --argjson oracle_files_modified   "$(as_json_string_array "$ORACLE_FILES_MODIFIED")" \
     '{status:$status, attempts:$attempts, session_id:$session_id, cost_usd:$cost_usd,
       oracle_exit:$oracle_exit, log_path:$log_path, abort_reason:$abort_reason,
-      oracle_files_modified:$oracle_files_modified}'
+      oracle_files_modified:$oracle_files_modified}' >&3
 }
 
 write_audit() {
@@ -158,7 +181,17 @@ on_exit() {
 # here (wiping a plaintext auth.json copy) is exactly the kind of cleanup that
 # must not depend on a clean shutdown. SIGKILL is still unstoppable; nothing
 # can trap that.
-trap on_exit EXIT HUP INT TERM
+#
+# A signal trap that only runs on_exit (without calling `exit`) lets the
+# script fall through and keep running afterwards — demonstrated: on TERM the
+# script resumed after the interrupted `wait`, went on to run the oracle and
+# `git commit`, and could exit 0 with a "fail"/unexpected_exit contract line
+# already emitted on stdout. Each of these calls `exit` explicitly, which
+# fires the EXIT trap above exactly once and actually ends the process.
+trap on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 finish() { # finish <status> <exit-code> [abort_reason]
   STATUS="$1"
@@ -186,14 +219,44 @@ abort() { # abort <slug> <message...>
 # already-gone wrapper shell.
 run_with_timeout() { # run_with_timeout <seconds> -- <cmd...>
   local secs="$1"; shift
+  # `kill -TERM "$pid"` alone reaches only that one process — demonstrated:
+  # the oracle's/model's own child processes (opencode's shell children, a
+  # test runner it started) survive a plain-PID kill and keep running — and
+  # keep writing to the worktree — afterwards, including during the
+  # unsandboxed commit that follows. `set -m` gives the backgrounded job its
+  # own process group (pgid == its own pid), so `kill -TERM -"$pid"`
+  # (negative PID = signal the whole group) reaches every descendant that
+  # hasn't detached into its own session.
+  local monitor_was_on=0
+  case "$-" in *m*) monitor_was_on=1 ;; esac
+  set -m
   "$@" &
   local pid=$!
-  ( sleep "$secs" 2>/dev/null; kill -TERM "$pid" 2>/dev/null; sleep 10; kill -KILL "$pid" 2>/dev/null ) &
+  [ "$monitor_was_on" = 1 ] || set +m
+  # Sentinel for "the watchdog actually fired", not the raw signal-death exit
+  # code: a legitimately-signalled process can also die with 143, and nothing
+  # here ever produced GNU coreutils' conventional 124 despite callers
+  # checking for it (dead code). Returning 124 only when this function itself
+  # did the killing makes the timeout condition unambiguous to the caller.
+  local timed_out_flag=""
+  timed_out_flag="$(mktemp "${TMPDIR:-/tmp}/imps-timeout-flag.XXXXXX" 2>/dev/null)" || timed_out_flag=""
+  (
+    sleep "$secs" 2>/dev/null
+    kill -TERM "-$pid" 2>/dev/null
+    [ -n "$timed_out_flag" ] && : >"$timed_out_flag"
+    sleep 10
+    kill -KILL "-$pid" 2>/dev/null
+  ) &
   local watchdog=$!
   local rc=0
   wait "$pid" 2>/dev/null || rc=$?
   kill "$watchdog" 2>/dev/null
   wait "$watchdog" 2>/dev/null
+  if [ -n "$timed_out_flag" ] && [ -f "$timed_out_flag" ]; then
+    rm -f "$timed_out_flag"
+    return 124
+  fi
+  [ -n "$timed_out_flag" ] && rm -f "$timed_out_flag"
   return "$rc"
 }
 
@@ -263,6 +326,43 @@ resolve_gitpath() { # resolve_gitpath <git rev-parse flag>
 # untracked-and-visible).
 GITMETA="$(resolve_gitpath --git-common-dir)" || abort bad_arguments "cannot resolve --git-common-dir for $WT"
 BASE_SHA="$(git -C "$WT" rev-parse HEAD 2>/dev/null)" || abort bad_arguments "cannot resolve HEAD in $WT"
+
+# A dirty worktree would get folded into the model's own harness commit below
+# (`git add -A` doesn't distinguish operator WIP from the model's edits), and
+# would poison the oracle-guard diff (`git diff "$BASE_SHA" -- "$ORACLE_GUARD"`)
+# by misattributing already-dirty guarded files to the model. This v1's whole
+# purpose is an uncontaminated measurement — refuse rather than silently mix
+# pre-existing changes into the reported result.
+if [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
+  abort worktree_dirty "worktree has uncommitted changes before dispatch — commit or stash them first: $WT"
+fi
+
+# The pointer files that decide WHICH config/hooks git actually reads for this
+# worktree — not the config/hooks files themselves. Denying writes to
+# <gitmeta>/hooks and <gitmeta>/config (deny-credentials.sbpl.in) does nothing
+# if the model instead rewrites $WT/.git — a plain-text redirect file,
+# necessarily writable since it lives inside the granted worktree — to point
+# at a model-created fake gitdir also inside the worktree, complete with its
+# own config setting core.fsmonitor (or a clean/smudge filter) to an arbitrary
+# command. The harness's own `git add`/`commit` below run OUTSIDE the sandbox
+# and would follow that redirect and execute the model's command at full
+# operator privilege — reproduced live during review against exactly this
+# grant shape. <gitmeta>/worktrees/<name>/commondir is the second half of the
+# same redirect chain and is likewise inside the writable gitmeta grant.
+# Snapshotting these bytes before the model ever runs and refusing to commit
+# if they changed closes this regardless of which pointer gets rewritten.
+REAL_GITDIR="$(resolve_gitpath --git-dir)" || abort bad_arguments "cannot resolve --git-dir for $WT"
+GITMETA_POINTER_PATHS=("$WT/.git")
+case "$REAL_GITDIR" in
+  "$GITMETA"/*) GITMETA_POINTER_PATHS+=("$REAL_GITDIR/commondir" "$REAL_GITDIR/gitdir" "$REAL_GITDIR/HEAD") ;;
+esac
+snapshot_gitmeta_pointers() {
+  local p
+  for p in "${GITMETA_POINTER_PATHS[@]}"; do
+    if [ -f "$p" ]; then cksum "$p" 2>/dev/null; else printf '%s: MISSING\n' "$p"; fi
+  done
+}
+GITMETA_POINTER_BASELINE="$(snapshot_gitmeta_pointers)"
 
 REAL_TMP_CANON="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || abort bad_arguments "TMPDIR is not a directory"
 
@@ -376,8 +476,6 @@ extract_cost() {
 run_sandboxed_direct() {
   bash "$WRAP" --worktree "$WT" --gitmeta "$GITMETA" --datadir "$DISPATCH_DIR" -- "$@"
 }
-# Used only where no timeout applies (the preflight already ran its own).
-run_sandboxed() { run_sandboxed_direct "$@"; }
 
 # Kept separately from $prompt so a retry can always re-supply full task
 # context. --session normally makes this redundant (opencode has its own
@@ -398,7 +496,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   log "attempt $attempt/$MAX_ATTEMPTS — model=$MODEL (timeout ${ATTEMPT_TIMEOUT}s)"
   run_with_timeout "$ATTEMPT_TIMEOUT" run_sandboxed_direct "${oc_args[@]}" | tee -a "$LOG_PATH" >&2
   oc_rc="${PIPESTATUS[0]}"
-  if [ "$oc_rc" -eq 124 ] || [ "$oc_rc" -eq 143 ]; then
+  if [ "$oc_rc" -eq 124 ]; then
     log "attempt $attempt timed out after ${ATTEMPT_TIMEOUT}s"
   fi
   # 2 is also sandbox-wrap.sh's own fail-closed status. It cannot be told apart
@@ -428,7 +526,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   rm -f "$ORACLE_OUT_FILE"
   log "oracle exit $ORACLE_EXIT"
 
-  if [ "$ORACLE_EXIT" -eq 124 ] || [ "$ORACLE_EXIT" -eq 143 ]; then
+  if [ "$ORACLE_EXIT" -eq 124 ]; then
     abort oracle_timeout "oracle did not finish within ${ORACLE_TIMEOUT}s on attempt $attempt"
   fi
   # Exit 2 from the oracle call is ambiguous by design (sandbox-wrap.sh's own
@@ -448,11 +546,25 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     # file(s) the oracle depends on? A model that rewrites its own test to
     # pass trivially is otherwise byte-identical, in this contract, to one
     # that genuinely fixed the code — and this v1's only real output is a
-    # pass-rate number that has to mean something.
+    # pass-rate number that has to mean something. Reported as a FAIL, not a
+    # tainted pass: a naive `jq -r .status` consumer (the shape every
+    # automated aggregator actually takes) would otherwise miscount a gamed
+    # oracle as a genuine one.
     if [ -n "$ORACLE_GUARD" ]; then
       ORACLE_FILES_MODIFIED="$(git -C "$WT" diff --name-only "$BASE_SHA" -- "$ORACLE_GUARD" 2>/dev/null | tr '\n' ' ')"
       ORACLE_FILES_MODIFIED="${ORACLE_FILES_MODIFIED% }"
-      [ -n "$ORACLE_FILES_MODIFIED" ] && log "guarded oracle file(s) modified by the model: $ORACLE_FILES_MODIFIED"
+      if [ -n "$ORACLE_FILES_MODIFIED" ]; then
+        abort oracle_guard_violated "model modified guarded oracle file(s), not counted as a pass: $ORACLE_FILES_MODIFIED"
+      fi
+    fi
+
+    # Refuse to commit if the pointer files git actually follows to find this
+    # worktree's config/hooks changed since dispatch started (see the snapshot
+    # comment above the baseline). Denying writes to <gitmeta>/hooks and
+    # <gitmeta>/config means nothing if the model instead redirected $WT/.git
+    # to a fake gitdir of its own.
+    if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
+      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect)"
     fi
 
     # Commit deterministically — never delegate this to the model, which is
@@ -470,11 +582,22 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     # commit runs OUTSIDE the sandbox — if a hook somehow still exists (a
     # pre-existing one in this repo, not model-planted), it must not fire at
     # full operator privilege from a script whose whole point is to run
-    # untrusted model output.
-    git -C "$WT" add -A -- ':(exclude)opencode.json'
+    # untrusted model output. -c core.fsmonitor=false is the same defense for
+    # the pointer-redirect variant of this attack — belt and braces alongside
+    # the byte-snapshot check above, not a substitute for it, since a fake
+    # config could still trigger arbitrary commands via other mechanisms this
+    # override doesn't cover (e.g. a clean/smudge filter).
+    git -C "$WT" -c core.fsmonitor=false add -A -- ':(exclude)opencode.json'
     if git -C "$WT" -c user.name=imps-opencode -c user.email=imps@local \
-        -c core.hooksPath=/dev/null \
+        -c core.hooksPath=/dev/null -c core.fsmonitor=false \
         commit -q -m "opencode: $(basename "$PROMPT_FILE") (attempt $attempt)" --no-gpg-sign --no-verify; then
+      # Belt and braces alongside the pointer-snapshot check above: confirm
+      # the commit that just landed actually descends from the pre-dispatch
+      # HEAD, not a root commit in some other gitdir the .git file got
+      # redirected to.
+      if ! git -C "$WT" merge-base --is-ancestor "$BASE_SHA" HEAD 2>/dev/null; then
+        abort commit_lineage_invalid "committed HEAD does not descend from pre-dispatch HEAD ($BASE_SHA) — refusing to report pass"
+      fi
       log "oracle green on attempt $attempt — committed"
       finish pass 0
     fi
@@ -485,13 +608,22 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   fi
 
   if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+    # Last-50-lines-only systematically drops the most useful diagnostic
+    # context: for verbose test runners the failing test name and assertion
+    # error are often near the TOP of the output, with the tail being just a
+    # summary banner. Head+tail at a similar total budget keeps both ends.
+    oracle_head="$(printf '%s\n' "$oracle_out" | head -n 10)"
+    oracle_tail="$(printf '%s\n' "$oracle_out" | tail -n 40)"
     prompt="$TASK
 ---
 The acceptance command still fails. Fix the code in this worktree so it passes.
 Do not weaken, delete, or rewrite the acceptance command or its test file to make it pass trivially.
 
 \$ $ORACLE
-$(printf '%s\n' "$oracle_out" | tail -n 50)"
+### first output:
+$oracle_head
+### last output:
+$oracle_tail"
   fi
   attempt=$((attempt + 1))
 done

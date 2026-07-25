@@ -71,15 +71,31 @@ assert "escape-probes-denied" "$([ "$smoke_rc" -eq 0 ] && echo 1 || echo 0)" "sa
 # it rather than chasing it further, and is also simply more representative.
 BASE="$(cd "$PLUGIN_ROOT" && git rev-parse --show-toplevel)" || exit 1
 TMP_CANON="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || exit 1
-WT="$(mktemp -u "$TMP_CANON/imps-e2e-wt.XXXXXX")"
+# mktemp -u prints a path without creating it — a classic TOCTOU: a stale or
+# squatted directory from a crashed prior run can already occupy that path by
+# the time `git worktree add` gets to it, silently changing behavior. `mktemp
+# -d` claims the path atomically; `git worktree add` then wants the target to
+# NOT exist, so remove the (empty, just-created) directory immediately before
+# handing the now-reserved-in-name-only path to it — same TOCTOU window as
+# before, but now bounded to a single, immediate rmdir instead of the whole
+# rest of this script's runtime.
+WT="$(mktemp -d "$TMP_CANON/imps-e2e-wt.XXXXXX")" || exit 1
+rmdir "$WT" || exit 1
+BRANCH="imps-e2e-fixture-$$"
 cleanup() {
   if [ "${IMPS_KEEP_E2E_WORKTREE:-}" = "1" ]; then return; fi
   git -C "$BASE" worktree remove --force "$WT" >/dev/null 2>&1
-  git -C "$BASE" branch -D "imps-e2e-fixture-$$" >/dev/null 2>&1
+  git -C "$BASE" branch -D "$BRANCH" >/dev/null 2>&1
 }
 trap cleanup EXIT
 
-git -C "$BASE" worktree add -q -b "imps-e2e-fixture-$$" "$WT" HEAD
+# Unchecked, this cascades into confusing secondary failures (cp into a
+# nonexistent dir, git errors) instead of one clear "worktree add failed"
+# message — e.g. a leftover branch/worktree from a killed prior run.
+if ! git -C "$BASE" worktree add -q -b "$BRANCH" "$WT" HEAD; then
+  echo "e2e: git worktree add failed for $WT (branch $BRANCH) — a prior run may have left stale state" >&2
+  exit 1
+fi
 
 for f in "$FIXTURE"/*; do
   case "$(basename "$f")" in
@@ -157,11 +173,15 @@ assert "exit-zero-on-pass" "$([ "$dispatch_rc" -eq 0 ] && echo 1 || echo 0)" "di
 guard_hit="$(printf '%s' "$CONTRACT" | jq -r '.oracle_files_modified // empty' 2>/dev/null)"
 assert "oracle-guard-not-triggered" "$([ -z "$guard_hit" ] && echo 1 || echo 0)" "oracle_files_modified=$guard_hit — the model edited its own test file"
 
+# log_path is null by default (the dispatch dir it lives in is deleted on
+# exit unless IMPS_KEEP_DISPATCH_DIR=1, which this invocation doesn't set) —
+# that is now the CORRECT value, not a gap. The only real invariant left to
+# check is that it's never advertised as living inside the worktree (which
+# would put it in the diff the next `git add -A` touches).
 log_path="$(printf '%s' "$CONTRACT" | jq -r '.log_path // ""' 2>/dev/null)"
 case "$log_path" in
-  "$WT"/*) assert "log-path-outside-worktree" 0 "$log_path is inside the worktree" ;;
-  "") assert "log-path-outside-worktree" 0 "log_path is null" ;;
-  *) assert "log-path-outside-worktree" 1 ;;
+  "$WT"/*) assert "log-path-not-inside-worktree" 0 "$log_path is inside the worktree" ;;
+  *) assert "log-path-not-inside-worktree" 1 ;;
 esac
 
 # --- 4. the commit ----------------------------------------------------------
@@ -170,6 +190,17 @@ assert "harness-made-a-commit" "$([ "$NOW_COMMITS" -gt "$BASE_COMMITS" ] && echo
   "commits before=$BASE_COMMITS after=$NOW_COMMITS"
 author="$(git -C "$WT" log -1 --format=%an)"
 assert "commit-authored-by-harness" "$([ "$author" = "imps-opencode" ] && echo 1 || echo 0)" "author=$author"
+
+# The most important check in this file: everything above confirms the
+# contract SAYS "pass" and that a commit exists — never that the worktree
+# actually satisfies the oracle. A harness bug that commits without a green
+# oracle (or a model that stages files without truly fixing the bug) would
+# sail through every assertion above undetected. Re-run the oracle
+# independently of the contract's own self-report.
+( cd "$WT" && eval "$ORACLE" ) >/dev/null 2>&1
+oracle_post_rc=$?
+assert "oracle-green-post-dispatch" "$([ "$oracle_post_rc" -eq 0 ] && echo 1 || echo 0)" \
+  "oracle exited $oracle_post_rc against the post-dispatch worktree"
 
 # The event-stream log must never end up in the diff.
 if git -C "$WT" ls-files | grep -q '\.jsonl$'; then

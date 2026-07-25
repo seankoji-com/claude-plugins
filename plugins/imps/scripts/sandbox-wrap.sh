@@ -27,8 +27,13 @@
 #                hooks/post-commit or core.fsmonitor into the shared git common
 #                dir gets that script executed at full, unsandboxed operator
 #                privilege the next time anyone touches this git dir. Verified
-#                as a real, working exploit during review — this is the
-#                boundary that matters most in this file.)
+#                as a real, working exploit during review. NOT sufficient
+#                alone, though: the worktree's own `.git` redirect file is
+#                necessarily writable and can point at a model-created fake
+#                gitdir instead — opencode-dispatch.sh's pre/post-dispatch
+#                byte-snapshot of that pointer chain (GITMETA_POINTER_BASELINE)
+#                is what actually closes this, this file's denies being
+#                defense in depth for the direct-write case.)
 #   network    : allowed — the model API is remote
 #
 # NEVER pass --enable=wide-read to safehouse: it grants read across / and would
@@ -135,15 +140,31 @@ GITMETA="$(canon "$GITMETA")"   || die "--gitmeta is not a directory: $GITMETA"
 DATADIR="$(canon "$DATADIR")"   || die "--datadir is not a directory: $DATADIR"
 HOME_CANON="$(canon "$HOME")" || die "HOME is not a directory: $HOME"
 
-# The deny rules are interpolated into SBPL string literals. A quote or
-# backslash in either path would break out of the literal; refuse rather than
+# The deny rules are interpolated into SBPL string literals via `sed`, and the
+# resulting paths are also joined with `:` into --add-dirs/--add-dirs-ro. A
+# quote or backslash would break out of the SBPL literal; refuse rather than
 # emit a policy that silently fails to parse (or, worse, parses differently
-# than intended).
+# than intended). `&` is the same class of bug but FAILS OPEN instead of
+# refusing: in a sed replacement string, `&` means "the whole match" — a HOME
+# containing it (e.g. "/Users/foo&bar") renders syntactically VALID SBPL that
+# denies a path which doesn't exist, leaving the real one unprotected, with no
+# parse error to catch it (demonstrated during review). `:` doesn't touch sed
+# at all, but corrupts the colon-joined --add-dirs/--add-dirs-ro arguments
+# below, mis-granting an unintended path. Reject all four rather than
+# interpolate them.
 case "$HOME_CANON" in
-  *'"'*|*'\'*) die "HOME contains a quote or backslash — cannot build a safe sandbox profile" ;;
+  *'"'*|*'\'*|*'&'*|*':'*) die "HOME contains a quote, backslash, ampersand, or colon — cannot build a safe sandbox profile" ;;
 esac
 case "$GITMETA" in
-  *'"'*|*'\'*) die "--gitmeta contains a quote or backslash — cannot build a safe sandbox profile" ;;
+  *'"'*|*'\'*|*'&'*|*':'*) die "--gitmeta contains a quote, backslash, ampersand, or colon — cannot build a safe sandbox profile" ;;
+esac
+# Not interpolated via sed, but still joined with `:` into --add-dirs below —
+# a colon in either would silently mis-grant a different path than intended.
+case "$WORKTREE" in
+  *':'*) die "--worktree contains a colon — cannot build a safe --add-dirs argument" ;;
+esac
+case "$DATADIR" in
+  *':'*) die "--datadir contains a colon — cannot build a safe --add-dirs argument" ;;
 esac
 
 # Rendered profile lives under $DATADIR — already granted read/write below, and

@@ -73,14 +73,20 @@ WT="$(mktemp -d "$TMP_CANON/imps-smoke-wt.XXXXXX")" || exit 2
 DATADIR="$(mktemp -d "$TMP_CANON/imps-smoke-data.XXXXXX")" || exit 2
 # A probe file we own, at a path the wrapper does NOT grant, so assertion 2 can
 # never be vacuous the way a missing credentials file would make assertion 7.
-HOME_READ_PROBE="$HOME_CANON/.imps-sandbox-read-probe.$$"
-HOME_WRITE_PROBE="$HOME_CANON/.imps-sandbox-write-probe.$$"
+# Scoped to a dedicated subdirectory rather than dropped directly in $HOME
+# root: probe files at $HOME's top level can trigger file watchers, sync
+# tools, and Spotlight indexing on every run of this script.
+HOME_PROBE_DIR="$HOME_CANON/.imps-smoke-probes"
+HOME_READ_PROBE="$HOME_PROBE_DIR/read-probe.$$"
+HOME_WRITE_PROBE="$HOME_PROBE_DIR/write-probe.$$"
+CREATED_HOME_PROBE_DIR=0
 # Created only if ~/.config/gh is absent, so the load-bearing gh-config-denied
 # assertion is never vacuous — see the header comment.
 GH_CONFIG_DIR="$HOME_CANON/.config/gh"
 CREATED_GH_CONFIG=0
 cleanup() {
   rm -rf "$WT" "$DATADIR" "$HOME_READ_PROBE" "$HOME_WRITE_PROBE"
+  [ "$CREATED_HOME_PROBE_DIR" = 1 ] && rmdir "$HOME_PROBE_DIR" 2>/dev/null
   [ "$CREATED_GH_CONFIG" = 1 ] && rmdir "$GH_CONFIG_DIR" 2>/dev/null
 }
 # EXIT alone can miss SIGINT/SIGTERM in some shells/states, and this cleanup's
@@ -118,6 +124,9 @@ if ! run /usr/bin/true; then
 fi
 # Same reasoning: a $HOME we cannot write to means something outside this script
 # is already confining us.
+if [ ! -d "$HOME_PROBE_DIR" ]; then
+  mkdir -p "$HOME_PROBE_DIR" 2>/dev/null && CREATED_HOME_PROBE_DIR=1
+fi
 if ! printf 'imps sandbox read probe\n' >"$HOME_READ_PROBE" 2>/dev/null; then
   echo "sandbox-smoke: cannot write $HOME_READ_PROBE — already running confined; skipping." >&2
   exit 77

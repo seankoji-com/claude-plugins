@@ -182,19 +182,47 @@ reached by a completely different path. **This was found independently by two
 reviewers during review, one of whom reproduced it as a working exploit** against
 a real linked worktree using exactly the flags the shipped code used at the time.
 
-Fixed two ways, deliberately redundant:
+Mitigated two ways at first — `deny-credentials.sbpl.in` denying writes to
+`<gitmeta>/hooks`, `<gitmeta>/config`, `<gitmeta>/config.worktree` and
+`<gitmeta>/info/exclude`, plus `-c core.hooksPath=/dev/null --no-verify` on the
+harness's own commit — but **that combination was itself an overclaim**: it
+guards the *static* config/hooks locations, not the *pointer* files git
+actually follows to find them. The worktree's own `.git` file is a plain-text
+redirect (`gitdir: <path>`) and is necessarily writable — it lives inside the
+granted worktree, not gitmeta. A model can rewrite it to point at a
+model-created fake gitdir, also inside the worktree, with its own `config`
+setting `core.fsmonitor` (or a `.gitattributes` clean/smudge filter) to an
+arbitrary command. `<gitmeta>/worktrees/<name>/commondir` is the other half of
+the same redirect chain and was likewise left writable. A third reviewer
+reproduced this as a working exploit against the "fixed" code, including the
+harness's own commit landing as a **root commit in the fake gitdir** —
+`status:"pass"` and all, while the real repo never received the work.
 
-1. `deny-credentials.sbpl.in` denies writes to `<gitmeta>/hooks`, `<gitmeta>/config`,
-   `<gitmeta>/config.worktree` and `<gitmeta>/info/exclude` specifically — the rest
-   of gitmeta (index, objects, refs) stays writable, so legitimate sandboxed git
-   operations are unaffected. `sandbox-smoke.sh`'s `gitmeta-hooks-write-denied` and
-   `gitmeta-config-write-denied` assertions exist specifically to keep this
-   verified, not just asserted in prose.
-2. The harness's own (unsandboxed) commit adds `-c core.hooksPath=/dev/null
-   --no-verify` — defense in depth in case a hook exists for a reason unrelated
-   to this attack (a pre-existing hook in the target repo, not model-planted);
-   it must not fire from a script whose whole point is running untrusted model
-   output.
+Actually closed by verifying the pointer files themselves haven't moved,
+rather than trying to enumerate every config surface they could redirect to:
+
+1. `opencode-dispatch.sh` snapshots `$WT/.git` and (for a linked worktree) the
+   per-worktree gitdir's `commondir`, `gitdir`, and `HEAD` files *before* the
+   model ever runs (`GITMETA_POINTER_BASELINE`), and refuses to commit —
+   `abort_reason:"gitmeta_tampered"` — if any byte of any of them differs
+   afterward. This is the check that actually decides whether the boundary
+   holds; everything else here is defense in depth around it.
+2. `deny-credentials.sbpl.in` still denies writes to `<gitmeta>/hooks`,
+   `<gitmeta>/config`, `<gitmeta>/config.worktree` and `<gitmeta>/info/exclude`
+   directly — the rest of gitmeta (index, objects, refs) stays writable, so
+   legitimate sandboxed git operations are unaffected. `sandbox-smoke.sh`'s
+   `gitmeta-hooks-write-denied` and `gitmeta-config-write-denied` assertions
+   keep this verified, not just asserted in prose.
+3. The harness's own (unsandboxed) `git add`/`commit` add both
+   `-c core.hooksPath=/dev/null --no-verify` and `-c core.fsmonitor=false` —
+   defense in depth in case a hook or fsmonitor setting exists for a reason
+   unrelated to this attack (pre-existing in the target repo, not
+   model-planted); it must not fire from a script whose whole point is
+   running untrusted model output.
+4. After a successful commit, `git merge-base --is-ancestor "$BASE_SHA" HEAD`
+   confirms the new commit actually descends from the pre-dispatch HEAD —
+   catching a root commit in a redirected gitdir even if the byte-snapshot
+   above somehow missed the redirect.
 
 ### Seatbelt does not nest
 
@@ -287,18 +315,19 @@ coding agents and are deliberately overridden here.
 ### The commit is deliberately unsigned
 
 ```sh
-git -C "$WT" add -A -- ':(exclude)opencode.json'
+git -C "$WT" -c core.fsmonitor=false add -A -- ':(exclude)opencode.json'
 git -C "$WT" -c user.name=imps-opencode -c user.email=imps@local \
-    -c core.hooksPath=/dev/null \
+    -c core.hooksPath=/dev/null -c core.fsmonitor=false \
     commit -q -m "opencode: <prompt> (attempt N)" --no-gpg-sign --no-verify
 ```
 
 This operator's global `~/.gitconfig` signs commits via an SSH key served by the
 1Password desktop-app agent, which is — correctly — unreachable from inside the
 sandbox. Granting it would mean handing a cheap `--auto` model live signing
-credentials, defeating the isolation entirely. `-c core.hooksPath=/dev/null
---no-verify` is the defense-in-depth half of the gitmeta-hooks fix above — see
-that section for why hooks must not fire from this specific commit.
+credentials, defeating the isolation entirely. The `-c` flags are the
+defense-in-depth half of the gitmeta-pointer fix above — see that section for
+why hooks/fsmonitor must not fire from this specific commit, and for the
+byte-snapshot check that's actually load-bearing rather than these flags.
 
 This is a **narrow, deliberate exception, not a general precedent**: a synthetic
 bot commit in an ephemeral, throwaway worktree, not final shared history. Any real
