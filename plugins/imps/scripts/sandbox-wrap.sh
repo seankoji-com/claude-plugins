@@ -10,12 +10,25 @@
 #   sandbox-wrap.sh --check          # backend availability probe; no command run
 #
 # Grants (see plugins/imps/references/opencode-harness.md, contract §A):
-#   read/write : <worktree>, <gitmeta>, <datadir>, $TMPDIR, /dev/null
+#   read/write : <worktree>, <gitmeta> (minus hooks/config — see below), <datadir>,
+#                /dev/null. Note: no wholesale $TMPDIR grant — the caller
+#                redirects TMPDIR to a subdirectory of <datadir> before invoking
+#                this wrapper, so the sandboxed process's own scratch usage
+#                stays inside a path already granted via <datadir>, without
+#                exposing every other process's temp files on the host.
 #   read-only  : the system roots the backend grants by default, plus
 #                ~/.gitconfig, ~/.gitignore_global and ~/.opencode/bin
 #   denied     : everything else, explicitly including ~/.local/share/opencode,
-#                ~/.ssh, ~/.aws, ~/.config/gh and ~/.claude/.credentials.json
-#                (sandbox/deny-credentials.sbpl.in, appended last)
+#                ~/.ssh, ~/.aws, ~/.config/gh, ~/.claude/.credentials.json, and
+#                <gitmeta>/hooks + config + config.worktree + info/exclude
+#                (sandbox/deny-credentials.sbpl.in, appended last — the gitmeta
+#                denies exist because opencode-dispatch.sh's own commit runs
+#                OUTSIDE the sandbox with hooks live; a model that can write
+#                hooks/post-commit or core.fsmonitor into the shared git common
+#                dir gets that script executed at full, unsandboxed operator
+#                privilege the next time anyone touches this git dir. Verified
+#                as a real, working exploit during review — this is the
+#                boundary that matters most in this file.)
 #   network    : allowed — the model API is remote
 #
 # NEVER pass --enable=wide-read to safehouse: it grants read across / and would
@@ -120,22 +133,27 @@ esac
 WORKTREE="$(canon "$WORKTREE")" || die "--worktree is not a directory: $WORKTREE"
 GITMETA="$(canon "$GITMETA")"   || die "--gitmeta is not a directory: $GITMETA"
 DATADIR="$(canon "$DATADIR")"   || die "--datadir is not a directory: $DATADIR"
-TMP_CANON="$(canon "${TMPDIR:-/tmp}")" || die "TMPDIR is not a directory: ${TMPDIR:-/tmp}"
 HOME_CANON="$(canon "$HOME")" || die "HOME is not a directory: $HOME"
 
-# The deny rules are interpolated into an SBPL string literal. A quote or
-# backslash in $HOME would break out of it; refuse rather than emit a policy
-# that silently fails to parse (or, worse, parses differently than intended).
+# The deny rules are interpolated into SBPL string literals. A quote or
+# backslash in either path would break out of the literal; refuse rather than
+# emit a policy that silently fails to parse (or, worse, parses differently
+# than intended).
 case "$HOME_CANON" in
   *'"'*|*'\'*) die "HOME contains a quote or backslash — cannot build a safe sandbox profile" ;;
 esac
+case "$GITMETA" in
+  *'"'*|*'\'*) die "--gitmeta contains a quote or backslash — cannot build a safe sandbox profile" ;;
+esac
 
-# Rendered profile lives in $TMPDIR (already granted, so redirection into it is
-# safe — see the reference doc's note on output paths outside the grant set).
-# safehouse adds its own terminal `deny file-write*` for every --append-profile
-# path, so the sandboxed process cannot rewrite its own policy.
-DENY_PROFILE="$(mktemp "$TMP_CANON/imps-deny-profile.XXXXXX")" || die "cannot create deny profile in $TMP_CANON"
-sed "s|@HOME@|$HOME_CANON|g" "$DENY_TEMPLATE" >"$DENY_PROFILE" || die "cannot render deny profile"
+# Rendered profile lives under $DATADIR — already granted read/write below, and
+# already cleaned up by the caller as part of its own datadir lifecycle (no
+# separate cleanup needed here). safehouse adds its own terminal
+# `deny file-write*` for every --append-profile path, so the sandboxed process
+# cannot rewrite its own policy.
+DENY_PROFILE="$(mktemp "$DATADIR/imps-deny-profile.XXXXXX")" || die "cannot create deny profile in $DATADIR"
+sed -e "s|@HOME@|$HOME_CANON|g" -e "s|@GITMETA@|$GITMETA|g" "$DENY_TEMPLATE" >"$DENY_PROFILE" \
+  || die "cannot render deny profile"
 
 # Read-only extras. Without .gitconfig/.gitignore_global, git inside the sandbox
 # fails outright with "fatal: unable to access '<home>/.gitconfig': Operation not
@@ -149,7 +167,11 @@ done
 
 # safehouse sanitizes the environment by default, so anything the wrapped
 # command needs must be named here or it silently vanishes. TERM is included
-# because Bun's own error paths crash confusingly without it.
+# because Bun's own error paths crash confusingly without it. TMPDIR is passed
+# through too — the caller (opencode-dispatch.sh) is expected to have already
+# overridden its own $TMPDIR to a subdirectory of --datadir before invoking
+# this wrapper, so the value that reaches the sandboxed process is scoped, not
+# the real host tmpdir.
 ENV_PASS="TERM,TMPDIR,\
 OPENCODE_DISABLE_LSP_DOWNLOAD,OPENCODE_DISABLE_MODELS_FETCH,OPENCODE_DISABLE_AUTOCOMPACT,\
 OPENCODE_DISABLE_PRUNE,OPENCODE_DISABLE_DEFAULT_PLUGINS,OPENCODE_DISABLE_SHARE,\
@@ -158,14 +180,12 @@ XDG_DATA_HOME,XDG_STATE_HOME,XDG_CONFIG_HOME,XDG_CACHE_HOME"
 
 sh_args=(
   --workdir "$WORKTREE"
-  --add-dirs "$GITMETA:$DATADIR:$TMP_CANON"
+  --add-dirs "$GITMETA:$DATADIR"
   --append-profile "$DENY_PROFILE"
   --env-pass "$ENV_PASS"
 )
 [ -n "$RO_PATHS" ] && sh_args+=(--add-dirs-ro "$RO_PATHS")
 [ "${IMPS_SANDBOX_EXPLAIN:-}" = "1" ] && sh_args+=(--explain)
 
-# exec: the wrapped command's exit status passes through unaltered. The rendered
-# profile is left behind in $TMPDIR (exec means no trap can fire); it is inert
-# and reaped with the rest of $TMPDIR.
+# exec: the wrapped command's exit status passes through unaltered.
 exec "$SAFEHOUSE_BIN" "${sh_args[@]}" -- "$@"

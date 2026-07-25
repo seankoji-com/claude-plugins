@@ -88,9 +88,8 @@ for f in "$FIXTURE"/*; do
   cp "$f" "$WT/"
 done
 
-git -C "$WT" -c user.name=imps-fixture -c user.email=imps@local -c commit.gpgsign=false \
-  add -A
-git -C "$WT" -c user.name=imps-fixture -c user.email=imps@local -c commit.gpgsign=false \
+git -C "$WT" -c user.name=imps-fixture -c user.email=imps@local add -A
+git -C "$WT" -c user.name=imps-fixture -c user.email=imps@local \
   commit -q -m "fixture: $FIXTURE_NAME baseline" --no-gpg-sign
 BASE_COMMITS="$(git -C "$WT" rev-list --count HEAD)"
 
@@ -105,12 +104,24 @@ assert "fixture-starts-red" "$([ "$baseline_rc" -ne 0 ] && echo 1 || echo 0)" "o
 # --- 3. dispatch ------------------------------------------------------------
 echo "== dispatch (model=$MODEL, fixture=$FIXTURE_NAME) =="
 err="$(mktemp "$TMP_CANON/imps-e2e-err.XXXXXX")"
-out="$(bash "$DISPATCH" \
+# AUDIT_LOG_FILE redirected to a scratch file, not the real ~/.claude/audit.jsonl:
+# every E2E run — trivial fixtures, deliberately fast first-pass — would
+# otherwise land in the same log the measurement protocol reads to decide
+# /imps:go, with no marker distinguishing a fixture run from a real hand-routed
+# task. Confirmed as a real, already-present pollution source during review,
+# not a hypothetical one.
+# --oracle-guard '*test*' matches every bundled fixture's own test-file naming
+# convention (fx_*_test.py, fx-*-test.sh) — demonstrates oracle_files_modified
+# staying null on a genuine fix, not just documents the flag exists.
+out="$(AUDIT_LOG_FILE="$TMP_CANON/imps-e2e-audit.jsonl" bash "$DISPATCH" \
         --worktree "$WT" \
         --prompt-file "$FIXTURE/fx-prompt.md" \
         --oracle "$ORACLE" \
         --model "$MODEL" \
-        --max-attempts "${IMPS_OPENCODE_E2E_ATTEMPTS:-3}" 2>"$err")"
+        --max-attempts "${IMPS_OPENCODE_E2E_ATTEMPTS:-3}" \
+        --attempt-timeout "${IMPS_OPENCODE_E2E_ATTEMPT_TIMEOUT:-90}" \
+        --oracle-timeout "${IMPS_OPENCODE_E2E_ORACLE_TIMEOUT:-60}" \
+        --oracle-guard '*test*' 2>"$err")"
 dispatch_rc=$?
 sed 's/^/  | /' "$err" >&2
 rm -f "$err"
@@ -126,7 +137,8 @@ fi
 
 has_keys="$(printf '%s' "$CONTRACT" | jq -r '
   [has("status"), has("attempts"), has("session_id"), has("cost_usd"),
-   has("oracle_exit"), has("log_path"), has("abort_reason")] | all' 2>/dev/null)"
+   has("oracle_exit"), has("log_path"), has("abort_reason"),
+   has("oracle_files_modified")] | all' 2>/dev/null)"
 assert "contract-has-all-keys" "$([ "$has_keys" = "true" ] && echo 1 || echo 0)" "$CONTRACT"
 
 # Exactly one contract line, always — a second would break every consumer.
@@ -137,6 +149,13 @@ status="$(printf '%s' "$CONTRACT" | jq -r '.status // ""' 2>/dev/null)"
 assert "status-pass" "$([ "$status" = "pass" ] && echo 1 || echo 0)" "status=$status (exit $dispatch_rc)"
 
 assert "exit-zero-on-pass" "$([ "$dispatch_rc" -eq 0 ] && echo 1 || echo 0)" "dispatch exited $dispatch_rc"
+
+# A genuine fix should never need to touch the fixture's own test file — if it
+# did, oracle_files_modified would be non-null here, which would mean the
+# model gamed its own oracle rather than fixing the code. This assertion is
+# specifically about the measurement-integrity claim, not the sandbox.
+guard_hit="$(printf '%s' "$CONTRACT" | jq -r '.oracle_files_modified // empty' 2>/dev/null)"
+assert "oracle-guard-not-triggered" "$([ -z "$guard_hit" ] && echo 1 || echo 0)" "oracle_files_modified=$guard_hit — the model edited its own test file"
 
 log_path="$(printf '%s' "$CONTRACT" | jq -r '.log_path // ""' 2>/dev/null)"
 case "$log_path" in

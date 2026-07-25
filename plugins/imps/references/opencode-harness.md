@@ -56,29 +56,44 @@ bash plugins/imps/scripts/sandbox-wrap.sh --check   # exit 0 = usable, 2 = not
 
 ```bash
 bash plugins/imps/scripts/opencode-dispatch.sh \
-  --worktree     /abs/path/to/worktree \
-  --prompt-file  /abs/path/to/task-prompt.md \
-  --oracle       'python3 -m pytest tests/test_thing.py -q' \
-  --model        opencode-go/qwen3.7-max \
-  --max-attempts 3
+  --worktree        /abs/path/to/worktree \
+  --prompt-file     /abs/path/to/task-prompt.md \
+  --oracle          'python3 -m pytest tests/test_thing.py -q' \
+  --model           opencode-go/qwen3.7-max \
+  --max-attempts    3 \
+  --attempt-timeout 300 \
+  --oracle-timeout  120 \
+  --oracle-guard    'tests/test_thing.py'
 ```
+
+`--attempt-timeout`/`--oracle-timeout` (seconds, default 300/120) bound the
+model run and the oracle run respectively — without them a stalled provider or
+a hung test suite blocks forever with no contract line at all until someone
+notices and kills the process. `--oracle-guard` (optional pathspec, e.g. a
+test file) checks whether the model's own edits touched it; see
+`oracle_files_modified` below.
 
 The **final line of stdout is always** exactly one JSON object, on every exit
 path — success, oracle exhaustion, failed preflight, rejected model:
 
 ```json
 {"status":"pass","attempts":2,"session_id":"ses_…","cost_usd":0.0087,
- "oracle_exit":0,"log_path":"/abs/path.jsonl","abort_reason":null}
+ "oracle_exit":0,"log_path":"/abs/path.jsonl","abort_reason":null,
+ "oracle_files_modified":null}
 ```
 
-`session_id`, `cost_usd`, `oracle_exit` and `log_path` are nullable.
-`abort_reason` is `null` on normal paths (including a clean oracle exhaustion),
-else one of `preflight_smoke_failed`, `model_rejected`, `config_missing`,
-`bad_arguments`, `auth_missing`, `opencode_missing`, `sandbox_bypass_refused`,
-`dispatch_dir_failed`, `log_path_failed`, `jq_missing`, `unexpected_exit`. Exit
-code is still non-zero on failure. All progress goes to stderr.
+`session_id`, `cost_usd`, `oracle_exit`, `log_path` and `oracle_files_modified`
+are nullable. `oracle_files_modified` is a JSON array of paths (or `null`) —
+non-null means the model's own edits touched a file matching `--oracle-guard`,
+which a `status:"pass"` alone cannot distinguish from a genuine fix. `abort_reason`
+is `null` on normal paths (including a clean oracle exhaustion), else one of
+`preflight_smoke_failed`, `model_rejected`, `config_missing`, `bad_arguments`,
+`auth_missing`, `opencode_missing`, `sandbox_bypass_refused`, `dispatch_dir_failed`,
+`log_path_failed`, `jq_missing`, `unexpected_exit`, `oracle_timeout`,
+`oracle_sandbox_failed`, `commit_failed`. Exit code is still non-zero on failure.
+All progress goes to stderr.
 
-`log_path` deliberately lives under `$TMPDIR`, never in the worktree: the harness
+`log_path` lives under the dispatch dir, never in the worktree: the harness
 runs `git add -A`, so an event-stream log written inside would be committed and
 the "a commit exists" assertion would still pass — with a multi-MB JSONL in the
 diff.
@@ -106,10 +121,20 @@ unaltered.
 
 | | |
 | --- | --- |
-| read/write | the worktree, the gitmeta dir, the dispatch data dir, `$TMPDIR`, `/dev/null` |
+| read/write | the worktree, the gitmeta dir (minus hooks/config — see below), the dispatch data dir, `/dev/null` |
 | read-only | the backend's default system roots, plus `~/.gitconfig`, `~/.gitignore_global`, `~/.opencode/bin` |
-| denied | everything else — explicitly `~/.local/share/opencode`, `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.claude/.credentials.json` |
+| denied | everything else — explicitly `~/.local/share/opencode`, `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.claude/.credentials.json`, and `<gitmeta>/hooks`, `<gitmeta>/config`, `<gitmeta>/config.worktree`, `<gitmeta>/info/exclude` |
 | network | allowed (the model API is remote) |
+
+**No wholesale `$TMPDIR` grant.** Earlier versions granted `$TMPDIR` broadly so the
+dispatch log and the rendered deny-profile had somewhere to live — but neither
+actually needed sandbox access at all (both are written by processes *outside*
+the sandbox boundary), and the real reason a sandboxed model needs some writable
+tmp path is its own runtime scratch usage (Bun/opencode internals). `opencode-dispatch.sh`
+now overrides its own `TMPDIR` to a subdirectory of the dispatch data dir before
+invoking the sandbox, so that scratch usage stays inside the already-granted
+`--datadir` path — a sandboxed process can no longer read or write every other
+process's temp files on the host.
 
 Two things that look like details and are not:
 
@@ -136,6 +161,40 @@ behind a Claude Code permission entry that already disables Claude Code's own Ba
 sandbox, so an unsandboxed run would have no boundary at any layer. The debug
 bypass requires `IMPS_SANDBOX_DANGEROUSLY_DISABLE=i-accept-full-privilege`, and
 `opencode-dispatch.sh` refuses to run at all when that variable is set.
+
+### The git common dir is not fully writable — this is the boundary that matters most
+
+`opencode-dispatch.sh`'s own commit runs **outside** the sandbox (see "The commit
+is deliberately unsigned" below) — deliberately, since it needs to run after the
+sandboxed model has finished editing. For a real dispatch (a linked worktree,
+which is how this harness is actually used), the gitmeta dir granted to the
+sandbox is the *shared* git common directory — the same one the main checkout and
+every other worktree of that repo use.
+
+Put those two facts together and a model with write access to gitmeta the
+straightforward way (needed for its own sandboxed `git add`/`git status`/index
+operations to work at all) could write `hooks/post-commit` or set
+`core.fsmonitor` in `config`, and have that script executed at full, unsandboxed
+operator privilege the moment the harness's own commit runs — reaching
+`~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.claude/.credentials.json`, and the
+1Password agent socket: everything `deny-credentials.sbpl.in` exists to deny,
+reached by a completely different path. **This was found independently by two
+reviewers during review, one of whom reproduced it as a working exploit** against
+a real linked worktree using exactly the flags the shipped code used at the time.
+
+Fixed two ways, deliberately redundant:
+
+1. `deny-credentials.sbpl.in` denies writes to `<gitmeta>/hooks`, `<gitmeta>/config`,
+   `<gitmeta>/config.worktree` and `<gitmeta>/info/exclude` specifically — the rest
+   of gitmeta (index, objects, refs) stays writable, so legitimate sandboxed git
+   operations are unaffected. `sandbox-smoke.sh`'s `gitmeta-hooks-write-denied` and
+   `gitmeta-config-write-denied` assertions exist specifically to keep this
+   verified, not just asserted in prose.
+2. The harness's own (unsandboxed) commit adds `-c core.hooksPath=/dev/null
+   --no-verify` — defense in depth in case a hook exists for a reason unrelated
+   to this attack (a pre-existing hook in the target repo, not model-planted);
+   it must not fire from a script whose whole point is running untrusted model
+   output.
 
 ### Seatbelt does not nest
 
@@ -171,9 +230,14 @@ Both halves are required. Redirecting writes alone does not help, because the re
    via `--append-profile`. safehouse emits appended profiles *after* its generated
    rules and Seatbelt is last-match-wins, so a trailing deny is authoritative.
 
-`sandbox-smoke.sh`'s `auth-json-denied` assertion is the *only* thing behind this
-claim; if the file is absent on the host, the script says so rather than counting
-a vacuous check as a pass.
+`sandbox-smoke.sh`'s `gh-config-denied` assertion is the load-bearing one behind
+this claim — safehouse grants `~/.config/gh` by default, so it is the only probe
+that actually exercises the `--append-profile` override (the others are already
+denied by safehouse's own defaults and would stay green even if the override
+silently broke). The script creates a placeholder `~/.config/gh` when one is
+absent, specifically so this assertion is never silently skipped on a host that
+happens not to have `gh` installed — exactly the host where a regression here
+would otherwise go undetected. It never touches a real `~/.config/gh`.
 
 **Bonus, discovered rather than designed:** redirecting `XDG_CONFIG_HOME` means the
 real `~/.config/opencode/opencode.json` is never found or merged, so the
@@ -223,37 +287,50 @@ coding agents and are deliberately overridden here.
 ### The commit is deliberately unsigned
 
 ```sh
-git -C "$WT" add -A
-git -C "$WT" -c user.name=imps-opencode -c user.email=imps@local -c commit.gpgsign=false \
-    commit -q -m "opencode: <prompt> (attempt N)" --no-gpg-sign
+git -C "$WT" add -A -- ':(exclude)opencode.json'
+git -C "$WT" -c user.name=imps-opencode -c user.email=imps@local \
+    -c core.hooksPath=/dev/null \
+    commit -q -m "opencode: <prompt> (attempt N)" --no-gpg-sign --no-verify
 ```
 
 This operator's global `~/.gitconfig` signs commits via an SSH key served by the
 1Password desktop-app agent, which is — correctly — unreachable from inside the
 sandbox. Granting it would mean handing a cheap `--auto` model live signing
-credentials, defeating the isolation entirely.
+credentials, defeating the isolation entirely. `-c core.hooksPath=/dev/null
+--no-verify` is the defense-in-depth half of the gitmeta-hooks fix above — see
+that section for why hooks must not fire from this specific commit.
 
 This is a **narrow, deliberate exception, not a general precedent**: a synthetic
 bot commit in an ephemeral, throwaway worktree, not final shared history. Any real
 promotion of this work into a shared branch goes through the normal reviewed,
 signed flow (out of v1 scope).
 
-### Known limitation: the oracle is not tamper-proof
+Commit failure is **not** silently treated as success: if `git commit` fails for
+any reason (nothing staged, disk full), the dispatch reports `status:"fail"` with
+`abort_reason:"commit_failed"` rather than a phantom `"pass"` — an oracle that
+went green with no surviving commit is not distinguishable from a broken harness
+any other way.
 
-`$TMPDIR` is granted read/write wholesale, and the model can edit anything in the
-worktree — including the test file the oracle runs. The retry prompt tells it not
-to, and the fixtures are trivial enough that gaming them is more work than solving
-them, but v1 does not *enforce* this. Read the diff before promoting anything.
+### Known limitation: the oracle is not fully tamper-proof
+
+The model can edit anything in the worktree, including the file(s) the oracle
+depends on. The retry prompt tells it not to, and the fixtures are trivial enough
+that gaming them is more work than solving them, but v1 does not *enforce* this
+by default — it makes it **visible**: pass `--oracle-guard <pathspec>` (the
+fixtures pass `'*test*'`) and a model edit that touches a guarded file surfaces as
+a non-null `oracle_files_modified` in the contract, distinct from a genuine pass,
+instead of being indistinguishable from one. Still not enforcement — read the
+diff before promoting anything — but the measurement protocol below can now tell
+the two apart instead of silently counting a gamed pass as a real one.
 
 ### Known limitation: the bash denylist is a typo-guard, not egress control
 
 `templates/opencode.sandbox.json`'s bash denylist (`rm -rf *`, `git push *`, `sudo *`,
 `curl *` denied, everything else allowed) only blocks opencode's own permission layer —
 it does nothing at the OS level. `/usr/bin/curl`, `wget`, `nc`, or
-`python3 -c 'import urllib...'` all match the wildcard allow and run fine; the sandbox
-grants network egress and `$TMPDIR` wholesale (including the redirected `auth.json` copy
-and every other dispatch's scratch dir). Egress is unrestricted by design in v1 — the
-denylist exists to stop an *accidental* `rm -rf *`/`git push`, not a deliberate one.
+`python3 -c 'import urllib...'` all match the wildcard allow and run fine, and the
+sandbox grants network egress by design. Egress is unrestricted in v1 — the denylist
+exists to stop an *accidental* `rm -rf *`/`git push`, not a deliberate one.
 
 ---
 
@@ -339,7 +416,15 @@ existing test suite, a lint-clean-up with a linter as the oracle.
 
 For each: `opencode-go/qwen3.7-max` unless cost matters, in which case
 `opencode-go/deepseek-v4-flash`. Record from the contract line and from
-`~/.claude/audit.jsonl` (`tier: "opencode"`, `attempts`):
+`~/.claude/audit.jsonl` (`tier: "opencode"`, `attempts`).
+
+**`~/.claude/audit.jsonl` is the real measurement log — never redirect it for a
+real hand-routed task.** `e2e.sh` does redirect it (`AUDIT_LOG_FILE=<scratch>`),
+specifically so fixture runs never land here: they are deliberately trivial and
+pass first-try, and would inflate the first-pass rate this protocol exists to
+measure honestly. If you ever need to test the harness itself against a real
+task-shaped prompt without it counting toward the go/no-go number, redirect
+`AUDIT_LOG_FILE` the same way.
 
 | # | Task | Model | First-pass? | Attempts | Cost (USD) | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
