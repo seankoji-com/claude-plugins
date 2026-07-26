@@ -213,14 +213,22 @@ expect_deny "gitmeta-gitdir-write-denied"    "echo x > '$GITMETA/gitdir'"
 LINKED_WT="$(mktemp -d "$TMP_CANON/imps-smoke-linked.XXXXXX")" && rmdir "$LINKED_WT"
 SIBLING_WT="$(mktemp -d "$TMP_CANON/imps-smoke-sibling.XXXXXX")" && rmdir "$SIBLING_WT"
 setup_errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
-if { git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
+# -c core.fsmonitor=false on every one of these, matching the posture every
+# unsandboxed git command in opencode-dispatch.sh carries. $WT is a repo this
+# script created seconds ago from `git init`, so there is nothing planted to
+# fire here — this is purely so the pattern a future maintainer copies out of
+# this file is the safe one, not the one that happens to be safe in context.
+# The branch names are fixed rather than PID-suffixed on purpose: $WT is a
+# fresh `mktemp -d` + `git init` on every run (see the top of this file), so
+# there is no repo in which a previous run's branch could survive to collide.
+if { git -C "$WT" -c core.fsmonitor=false -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
        commit -q --allow-empty -m "imps-smoke root commit"
-     git -C "$WT" worktree add -q "$LINKED_WT" -b imps-smoke-linked
-     git -C "$WT" worktree add -q "$SIBLING_WT" -b imps-smoke-sibling
+     git -C "$WT" -c core.fsmonitor=false worktree add -q "$LINKED_WT" -b imps-smoke-linked
+     git -C "$WT" -c core.fsmonitor=false worktree add -q "$SIBLING_WT" -b imps-smoke-sibling
    } >/dev/null 2>"$setup_errfile"; then
-  LINKED_GITDIR="$(git -C "$LINKED_WT" rev-parse --git-dir)"
+  LINKED_GITDIR="$(git -C "$LINKED_WT" -c core.fsmonitor=false rev-parse --git-dir)"
   case "$LINKED_GITDIR" in /*) : ;; *) LINKED_GITDIR="$LINKED_WT/$LINKED_GITDIR" ;; esac
-  SIBLING_GITDIR="$(git -C "$SIBLING_WT" rev-parse --git-dir)"
+  SIBLING_GITDIR="$(git -C "$SIBLING_WT" -c core.fsmonitor=false rev-parse --git-dir)"
   case "$SIBLING_GITDIR" in /*) : ;; *) SIBLING_GITDIR="$SIBLING_WT/$SIBLING_GITDIR" ;; esac
 
   # Positive control in the SAME sandboxed invocation as the denied write: a
@@ -348,9 +356,13 @@ else
   # a defect in the script, not evidence the target is absent, so each
   # assertion it would have driven counts as failed (with the actual error
   # surfaced) rather than a silent skip that would let them go vacuously
-  # missing.
+  # missing. Every assertion the `if` branch drives must appear here, in the
+  # same set — one omitted (gitmeta-own-gitdir-modules-denied was, for a
+  # round) neither passes nor fails, it just vanishes from the output, which
+  # is the silent-skip outcome this whole branch exists to prevent.
   assert "gitmeta-linked-worktree-config-denied" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
   assert "gitmeta-sibling-worktree-config-denied" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
+  assert "gitmeta-own-gitdir-modules-denied" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
   assert "gitmeta-dotgit-redirect-does-not-grant-target" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
   assert "gitmeta-own-worktree-commit-still-allowed" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
   rm -rf "$LINKED_WT" "$SIBLING_WT"

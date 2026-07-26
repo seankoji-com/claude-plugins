@@ -35,6 +35,17 @@
 #       expected exact expected stdout
 set -uo pipefail
 
+# This harness (not the scripts it tests) needs bash 4+ for `shopt -s
+# globstar`, which drives the fixture discovery below. Stock macOS ships bash
+# 3.2, where globstar is silently a no-op and `**/` degrades to `*/` — every
+# fixture below the first level would just stop being discovered, and the run
+# would report a green, much smaller pass count. Say so outright instead.
+# The plugin scripts themselves are deliberately 3.2-clean: they have to run
+# on the system bash of the macOS hosts this harness's Seatbelt tests target.
+case "${BASH_VERSINFO[0]:-0}" in
+  0|1|2|3) echo "tests/run.sh needs bash 4+ (found ${BASH_VERSION:-unknown}); on macOS: brew install bash" >&2; exit 2 ;;
+esac
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STUBS="$ROOT/tests/lib/stubs"
 pass=0
@@ -59,8 +70,16 @@ run_exec_case() {
   target="$ROOT/plugins/$plugin/scripts/$script"
   name="exec/$rel"
 
-  local args=()
-  [ -f "$case_dir/args" ] && mapfile -t args <"$case_dir/args"
+  # A read loop, not `mapfile`: that builtin is bash 4.0+, and stock macOS —
+  # the platform this repo's Seatbelt-dependent tests must run on — still
+  # ships bash 3.2, where it fails with `command not found` and silently
+  # leaves args empty.
+  local args=() line
+  if [ -f "$case_dir/args" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      args[${#args[@]}]="$line"
+    done <"$case_dir/args"
+  fi
 
   local test_home out err exit_code ok=1 detail=""
   test_home="$(mktemp -d)"
@@ -156,6 +175,55 @@ ${other#"$ROOT"/} differs from ${first#"$ROOT"/}"
   done
   report "consistency/audit-log.sh" "$consistent" "$detail"
 fi
+
+# Seatbelt is last-match-wins, so deny-credentials.sbpl.in's worktrees/modules
+# chain is ordered, not just present: deny the subtrees, re-allow only this
+# dispatch's own gitdir, then re-deny the pointer files inside that reallow.
+# Reordering any of it silently reopens an RCE — verified live that moving the
+# reallow after the re-denies makes those paths writable again. The template
+# carried a "each line must stay in exactly this sequence" comment and nothing
+# that enforced it: sandbox-smoke.sh exercises the RENDERED profile's effects,
+# so a reordered template that still happens to deny the smoke test's specific
+# probes passes it. This asserts the sequence itself, on the source template,
+# on every platform (no sandbox needed).
+sbpl_order_check() {
+  local tpl="$ROOT/plugins/imps/sandbox/deny-credentials.sbpl.in"
+  if [ ! -f "$tpl" ]; then
+    report "imps/sbpl-rule-order" 0 "missing $tpl"
+    return
+  fi
+  # Rule lines only — the file's own comments quote these same forms.
+  local rules ok=1 detail=""
+  rules="$(grep -vE '^[[:space:]]*;' "$tpl")"
+  line_of() { printf '%s\n' "$rules" | grep -nF -- "$1" | head -n 1 | cut -d: -f1; }
+  local l_hooks l_modules l_worktrees l_allow l_redeny
+  l_hooks="$(line_of '(subpath "@GITMETA@/hooks")')"
+  l_modules="$(line_of '(subpath "@GITMETA@/modules")')"
+  l_worktrees="$(line_of '(subpath "@GITMETA@/worktrees")')"
+  l_allow="$(line_of '(allow file-write* (subpath "@REAL_GITDIR@"))')"
+  l_redeny="$(line_of '(subpath "@REAL_GITDIR@/modules")')"
+  local want
+  for want in l_hooks l_modules l_worktrees l_allow l_redeny; do
+    if [ -z "${!want}" ]; then
+      ok=0; detail="$detail
+missing expected rule for $want"
+    fi
+  done
+  if [ "$ok" = 1 ]; then
+    # Every broad deny must precede the reallow; the reallow must precede its
+    # own re-denies. Anything else and last-match-wins silently inverts.
+    [ "$l_hooks"     -lt "$l_allow" ] || { ok=0; detail="$detail
+@GITMETA@/hooks deny (line $l_hooks) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"; }
+    [ "$l_modules"   -lt "$l_allow" ] || { ok=0; detail="$detail
+@GITMETA@/modules deny (line $l_modules) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"; }
+    [ "$l_worktrees" -lt "$l_allow" ] || { ok=0; detail="$detail
+@GITMETA@/worktrees deny (line $l_worktrees) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"; }
+    [ "$l_allow"     -lt "$l_redeny" ] || { ok=0; detail="$detail
+the @REAL_GITDIR@ reallow (line $l_allow) must come BEFORE its own re-denies (line $l_redeny)"; }
+  fi
+  report "imps/sbpl-rule-order" "$ok" "$detail"
+}
+sbpl_order_check
 
 # opencode execute-tier harness (plugins/imps). Two extra checks that cannot be
 # fixture-driven: they need a real macOS sandbox, and the E2E additionally needs

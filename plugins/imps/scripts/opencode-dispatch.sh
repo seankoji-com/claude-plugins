@@ -247,6 +247,14 @@ run_with_timeout() {
   # on timeout, and the caller must check non-empty (-s), not existence (-f).
   local timed_out_flag=""
   timed_out_flag="$(mktemp "${TMPDIR:-/tmp}/imps-timeout-flag.XXXXXX" 2>/dev/null)" || timed_out_flag=""
+  # The watchdog records WHICH signal it just sent, not a constant '1', so the
+  # check below can compare against 128+that signal rather than hardcoding
+  # 143/137. Signal numbers are not fixed by POSIX; ask the shell for them
+  # (`kill -l TERM` -> 15) and only fall back to the conventional values if
+  # that ever returns something non-numeric.
+  local term_signum kill_signum
+  term_signum="$(kill -l TERM 2>/dev/null)"; case "$term_signum" in ''|*[!0-9]*) term_signum=15 ;; esac
+  kill_signum="$(kill -l KILL 2>/dev/null)"; case "$kill_signum" in ''|*[!0-9]*) kill_signum=9  ;; esac
   (
     sleep "$secs" 2>/dev/null
     # Sentinel BEFORE the kill, not after: written after, the killed process can
@@ -255,9 +263,10 @@ run_with_timeout() {
     # lands, sees an empty flag, and returns the raw 143 instead of the 124
     # sentinel. Downstream that turns a timed-out oracle into an ordinary oracle
     # failure: no `oracle_timeout` abort, and another paid attempt.
-    [ -n "$timed_out_flag" ] && printf '1' >"$timed_out_flag"
+    [ -n "$timed_out_flag" ] && printf '%s' "$term_signum" >"$timed_out_flag"
     kill -TERM "-$pid" 2>/dev/null
     sleep 10
+    [ -n "$timed_out_flag" ] && printf '%s' "$kill_signum" >"$timed_out_flag"
     kill -KILL "-$pid" 2>/dev/null
   ) </dev/null >/dev/null 2>&1 &
   local watchdog=$!
@@ -289,15 +298,21 @@ run_with_timeout() {
   # That case is the damaging one: a real oracle failure reported as
   # oracle_timeout is terminal (no retry), where a real rc=1 would correctly
   # retry with the failure fed back to the model. What `rc` CAN tell us,
-  # unambiguously, is whether the process died BY SIGNAL: a natural exit
-  # (whatever its code) is never 128+n for the TERM/KILL this watchdog sends,
-  # so gate on the specific signal-death codes instead of any nonzero rc.
-  if [ -n "$timed_out_flag" ] && [ -s "$timed_out_flag" ] \
-     && { [ "$rc" -eq 143 ] || [ "$rc" -eq 137 ]; }; then
+  # unambiguously, is whether the process died BY THE SIGNAL THIS WATCHDOG
+  # SENT: a natural exit (whatever its code) is never 128+n for that signal.
+  # The sentinel carries the signal number the watchdog actually sent, so this
+  # compares rc against 128+that rather than against hardcoded 143/137 — the
+  # numbers now come from the same `kill -l` the watchdog used, on whatever
+  # platform this is running.
+  local timed_out_signum=""
+  if [ -n "$timed_out_flag" ]; then
+    [ -s "$timed_out_flag" ] && timed_out_signum="$(cat "$timed_out_flag" 2>/dev/null)"
     rm -f "$timed_out_flag"
-    return 124
   fi
-  [ -n "$timed_out_flag" ] && rm -f "$timed_out_flag"
+  case "$timed_out_signum" in
+    ''|*[!0-9]*) ;;
+    *) [ "$rc" -eq "$((128 + timed_out_signum))" ] && return 124 ;;
+  esac
   return "$rc"
 }
 
@@ -311,11 +326,25 @@ run_with_timeout() {
 # any spaces or quote characters it contains. Fixture `arg` files are one
 # argument per line accordingly (see tests/fixtures/unit/imps/
 # opencode-dispatch.sh/run_with_timeout_probe/*/arg).
+#
+# Split with a newline IFS and `read`, not `mapfile`: `mapfile` is bash 4.0+,
+# and stock macOS still ships bash 3.2 (the last GPLv2 release). Since this
+# whole harness exists to drive the macOS-only Seatbelt sandbox, "works on the
+# system bash" is not optional here — under 3.2 `mapfile` fails with
+# `command not found`, leaving args empty and the probe silently measuring
+# nothing.
+# A here-string (`<<<`, bash 2.05b+) rather than an unquoted heredoc: the
+# heredoc form would re-expand `$` and `\` in the fixture content, reopening
+# exactly the shell re-parsing the `eval` this replaced was removed for.
 run_with_timeout_probe() {
   local -a args
-  mapfile -t args <<<"$1"
-  run_with_timeout "${args[@]}"
-  echo $?
+  local line
+  args=()
+  while IFS= read -r line; do
+    args[${#args[@]}]="$line"
+  done <<<"$1"
+  run_with_timeout "${args[@]+"${args[@]}"}"
+  echo "$?"
 }
 if [ -n "${__SOURCED__:-}" ]; then
   # Unlike audit-log.sh's own __SOURCED__ guard (registers no traps before
@@ -706,7 +735,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     # means nothing if the model instead redirected $WT/.git to a fake gitdir
     # of its own — this snapshot comparison is what actually closes that.
     if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
-      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect; note this can also fire benignly if something else ran git config against this repo's shared gitmeta concurrently with this dispatch)"
+      abort gitmeta_tampered "SANDBOX ESCAPE SUSPECTED: worktree/gitmeta pointer files changed during dispatch — refused to commit. Inspect $WT/.git and $GITMETA before running any git command against this repo."
     fi
 
     # Surface, don't silently swallow: did the model's own edits touch the
@@ -799,18 +828,27 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
         if [ "$ign_dir" = "." ]; then
           IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f"
         else
+          # `case STRING in PATTERN)` — STRING is the value being tested, so
+          # the two directions read as: "is GUARD_DIR under ign_dir?" (the
+          # .gitignore is an ANCESTOR of the guard, its rules cascade down)
+          # then "is ign_dir under GUARD_DIR?" (it sits INSIDE the guard).
+          # Both quoted, so a literal `*` in either value stays literal rather
+          # than becoming an active glob in the pattern.
           case "$GUARD_DIR/" in
-            "$ign_dir/"*) IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f" ;;
+            "$ign_dir/"*) IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f" ;;  # ancestor
             *) case "$ign_dir/" in
-                 "$GUARD_DIR/"*) IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f" ;;
+                 "$GUARD_DIR/"*) IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f" ;;  # descendant
                esac ;;
           esac
         fi
-      done <<EOF_IGN
-$( { git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" 2>/dev/null
-     git -C "$WT" -c core.fsmonitor=false ls-files --others 2>/dev/null
-   } | grep -E '(^|/)\.gitignore$' | sort -u)
-EOF_IGN
+      # Process substitution, not a heredoc wrapping a command substitution:
+      # the loop body has to assign IGNORE_FILES_CHANGED in THIS shell (a pipe
+      # would put it in a subshell and lose it), and `< <(...)` gets that
+      # without the heredoc's quoting hazards — no delimiter a git-reported
+      # path could collide with, and the git output is never re-parsed.
+      done < <( { git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" 2>/dev/null
+                  git -C "$WT" -c core.fsmonitor=false ls-files --others 2>/dev/null
+                } | grep -E '(^|/)\.gitignore$' | sort -u )
       if [ -n "$IGNORE_FILES_CHANGED" ]; then
         abort oracle_guard_violated "model modified or added .gitignore file(s) during dispatch, not counted as a pass: $IGNORE_FILES_CHANGED"
       fi
@@ -832,7 +870,7 @@ EOF_IGN
     # Narrower, not zero: doesn't shrink to zero, since add/commit below are
     # themselves further unsandboxed git commands after this point.
     if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
-      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect; note this can also fire benignly if something else ran git config against this repo's shared gitmeta concurrently with this dispatch)"
+      abort gitmeta_tampered "SANDBOX ESCAPE SUSPECTED: worktree/gitmeta pointer files changed during dispatch — refused to commit. Inspect $WT/.git and $GITMETA before running any git command against this repo."
     fi
 
     # Commit deterministically — never delegate this to the model, which is
