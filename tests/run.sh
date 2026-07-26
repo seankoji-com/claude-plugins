@@ -176,6 +176,55 @@ ${other#"$ROOT"/} differs from ${first#"$ROOT"/}"
   report "consistency/audit-log.sh" "$consistent" "$detail"
 fi
 
+# Recon skills cross-contract consistency: recon-verify, recon-execute, and recon-spec
+# define specific literal outputs (status: PASS, status: FAIL, status: SKIPPED, grader: independent)
+# that each skill gates on. If any literal drifts (e.g. typo'd as "status: PASSED"), the
+# gates silently no-op and the skills break. This check verifies every contract literal is
+# still in place across all three files. Literals appear inline in prose (5 of 6) or in
+# fenced code blocks (1 of 6), so anchoring must match both forms.
+recon_literals_check() {
+  local verify="$ROOT/plugins/recon/skills/recon-verify/SKILL.md"
+  local execute="$ROOT/plugins/recon/skills/recon-execute/SKILL.md"
+  local spec="$ROOT/plugins/recon/skills/recon-spec/SKILL.md"
+  local ok=1 detail=""
+
+  # All three files must exist
+  for file in "$verify" "$execute" "$spec"; do
+    if [ ! -f "$file" ]; then
+      ok=0
+      detail="$detail
+missing $file"
+    fi
+  done
+
+  if [ "$ok" = 1 ]; then
+    # Check each literal contract. Anchoring pattern: '(^|`)literal(`|$)'
+    # matches both fenced code blocks (on their own line) and inline code spans.
+
+    # recon-verify: status: PASS, status: FAIL, grader: independent
+    grep -qE '(^|`)status: PASS(`|$)' "$verify" || { ok=0; detail="$detail
+${verify#"$ROOT"/}: missing status: PASS"; }
+    grep -qE '(^|`)status: FAIL(`|$)' "$verify" || { ok=0; detail="$detail
+${verify#"$ROOT"/}: missing status: FAIL"; }
+    grep -qE '(^|`)grader: independent(`|$)' "$verify" || { ok=0; detail="$detail
+${verify#"$ROOT"/}: missing grader: independent"; }
+
+    # recon-execute: status: PASS (gate check), grader: independent
+    grep -qE '(^|`)status: PASS(`|$)' "$execute" || { ok=0; detail="$detail
+${execute#"$ROOT"/}: missing status: PASS"; }
+    grep -qE '(^|`)grader: independent(`|$)' "$execute" || { ok=0; detail="$detail
+${execute#"$ROOT"/}: missing grader: independent"; }
+
+    # recon-spec: status: SKIPPED
+    grep -qE '(^|`)status: SKIPPED(`|$)' "$spec" || { ok=0; detail="$detail
+${spec#"$ROOT"/}: missing status: SKIPPED"; }
+  fi
+
+  report "consistency/recon-literals" "$ok" "$detail"
+}
+
+recon_literals_check
+
 # Seatbelt is last-match-wins, so deny-credentials.sbpl.in's worktrees/modules
 # chain is ordered, not just present: deny the subtrees, re-allow only this
 # dispatch's own gitdir, then re-deny the pointer files inside that reallow.
