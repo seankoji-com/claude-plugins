@@ -205,6 +205,23 @@ else
   skip "imps/tests/e2e.sh" "missing or not executable: $imps_e2e"
 fi
 
+# Unlike sandbox-smoke.sh/e2e.sh, this one needs no macOS sandbox, no
+# credentials, and spends nothing — it's pure git plumbing, so it runs
+# unconditionally (including on ubuntu-latest CI) rather than through the
+# skip-gated pattern above.
+imps_worktree_shape="$ROOT/plugins/imps/tests/worktree-shape.sh"
+if [ -x "$imps_worktree_shape" ]; then
+  worktree_shape_out="$(bash "$imps_worktree_shape" 2>&1)"
+  worktree_shape_rc=$?
+  if [ "$worktree_shape_rc" -eq 0 ]; then
+    report "imps/tests/worktree-shape.sh" 1
+  else
+    report "imps/tests/worktree-shape.sh" 0 "$worktree_shape_out"
+  fi
+else
+  skip "imps/tests/worktree-shape.sh" "missing or not executable: $imps_worktree_shape"
+fi
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

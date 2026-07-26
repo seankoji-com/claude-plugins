@@ -23,10 +23,19 @@
 #      sandbox). Verified as a real, working exploit during review.
 #   9. info/attributes and objects/info/alternates are unwritable too (same
 #      filter/attribute or object-redirect risk as assertion 8), and — set up
-#      via an actual `git worktree add`, since this is the shape every real
+#      via two actual `git worktree add`s, since this is the shape every real
 #      dispatch uses — the PER-WORKTREE config.worktree under
-#      worktrees/<name>/ is unwritable, not just the non-worktree literal path
-#      assertion 8 already covers.
+#      worktrees/<name>/ is unwritable both for THIS dispatch's own linked
+#      worktree and, separately, for an unrelated SIBLING worktree of the same
+#      repo (the cross-dispatch case a wholesale $GITMETA read-write grant
+#      otherwise leaves open — verified live as a full RCE against the
+#      harness's own unsandboxed commit before this rule existed), while an
+#      ordinary commit inside the dispatch's own worktree still succeeds
+#      (the reallow this needs isn't so narrow it breaks normal use). Each of
+#      these three checks carries its own positive control in the same
+#      sandboxed invocation as the denied write, so a wrapper-level failure
+#      (not the SBPL rule) can't silently report the assertion green for the
+#      wrong reason.
 #
 # Assertion group 7 is what backs the credential-isolation claim: the sandbox
 # gets a redirected XDG_DATA_HOME holding a copy of auth.json, and the original
@@ -176,39 +185,98 @@ expect_deny "gitmeta-objects-alternates-write-denied" "echo x >> '$GITMETA/objec
 
 # A real dispatch is always a linked worktree, where git reads config.worktree
 # from the PER-WORKTREE gitdir (worktrees/<name>/config.worktree), not the
-# plain literal path above — set one up to prove the regex deny actually
-# covers that shape, not just the non-worktree case the rest of this script
-# uses for everything else.
+# plain literal path above — set two up (this dispatch's own, and a sibling,
+# modeling /imps running several imps in sibling worktrees off one repo) to
+# prove the subtree-deny/reallow/redeny in deny-credentials.sbpl.in covers
+# both: its own gitdir's config.worktree, AND a completely different sibling
+# worktree's, which a wholesale per-worktree "$REAL_GITDIR only" deny (an
+# earlier version of this fix) verified live to miss entirely.
 LINKED_WT="$(mktemp -d "$TMP_CANON/imps-smoke-linked.XXXXXX")" && rmdir "$LINKED_WT"
+SIBLING_WT="$(mktemp -d "$TMP_CANON/imps-smoke-sibling.XXXXXX")" && rmdir "$SIBLING_WT"
 setup_errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
 if { git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
        commit -q --allow-empty -m "imps-smoke root commit"
      git -C "$WT" worktree add -q "$LINKED_WT" -b imps-smoke-linked
+     git -C "$WT" worktree add -q "$SIBLING_WT" -b imps-smoke-sibling
    } >/dev/null 2>"$setup_errfile"; then
   LINKED_GITDIR="$(git -C "$LINKED_WT" rev-parse --git-dir)"
-  case "$LINKED_GITDIR" in
-    /*) : ;;
-    *) LINKED_GITDIR="$LINKED_WT/$LINKED_GITDIR" ;;
-  esac
+  case "$LINKED_GITDIR" in /*) : ;; *) LINKED_GITDIR="$LINKED_WT/$LINKED_GITDIR" ;; esac
+  SIBLING_GITDIR="$(git -C "$SIBLING_WT" rev-parse --git-dir)"
+  case "$SIBLING_GITDIR" in /*) : ;; *) SIBLING_GITDIR="$SIBLING_WT/$SIBLING_GITDIR" ;; esac
+
+  # Positive control in the SAME sandboxed invocation as the denied write: a
+  # command that only reports "denied" because of a wrapper-level failure
+  # (a die() from the new REAL_GITDIR resolution, a profile-render error, a
+  # mktemp failure) rather than the SBPL rule actually firing would otherwise
+  # report this assertion green for the wrong reason — exactly the class of
+  # bug that made an earlier round's fail-open regex invisible to this script.
   errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
+  marker="$LINKED_WT/.smoke-ok.$$"
   if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --datadir "$DATADIR" \
-       -- /bin/sh -c "echo x > '$LINKED_GITDIR/config.worktree'" >/dev/null 2>"$errfile"; then
+       -- /bin/sh -c "touch '$marker' && echo x > '$LINKED_GITDIR/config.worktree'" \
+       >/dev/null 2>"$errfile"; then
     assert "gitmeta-linked-worktree-config-denied" 0 "expected denial, command succeeded"
-  else
+  elif [ -e "$marker" ]; then
     assert "gitmeta-linked-worktree-config-denied" 1
+  else
+    assert "gitmeta-linked-worktree-config-denied" 0 "sandbox-wrap failed before reaching the probe (marker never created): $(cat "$errfile")"
   fi
+  rm -f "$marker"
+
+  # Same positive-control shape, against a SIBLING worktree's config.worktree
+  # — the actual RCE this round closed. --worktree stays LINKED_WT throughout;
+  # only the target path (SIBLING_GITDIR, not LINKED_GITDIR) changes.
+  sibling_marker="$LINKED_WT/.smoke-ok-sibling.$$"
+  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --datadir "$DATADIR" \
+       -- /bin/sh -c "touch '$sibling_marker' && echo x > '$SIBLING_GITDIR/config.worktree'" \
+       >/dev/null 2>"$errfile"; then
+    assert "gitmeta-sibling-worktree-config-denied" 0 "expected denial, command succeeded"
+  elif [ -e "$sibling_marker" ]; then
+    assert "gitmeta-sibling-worktree-config-denied" 1
+  else
+    assert "gitmeta-sibling-worktree-config-denied" 0 "sandbox-wrap failed before reaching the probe (marker never created): $(cat "$errfile")"
+  fi
+  rm -f "$sibling_marker"
+
+  # The subtree-deny/reallow must not break ORDINARY use of this dispatch's
+  # own gitdir — prove a ubiquitous, legitimate write (an index update via a
+  # real commit) still succeeds inside it. A dedicated invocation, not the
+  # shared expect_allow/run_capture helpers above: those hardcode
+  # --worktree "$WT" (the outer, non-linked main worktree used by every
+  # other assertion in this file), so reusing them here would sandbox the
+  # command against the WRONG worktree entirely rather than $LINKED_WT.
+  # -c commit.gpgsign=false: this sandboxed probe commit has nothing to do
+  # with the operator's real signing setup, and the sandbox correctly has no
+  # access to the SSH-signing agent socket — without this override the
+  # commit would fail on that, not on anything this assertion is testing.
+  own_errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
+  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --datadir "$DATADIR" \
+       -- /bin/sh -c "cd '$LINKED_WT' && echo x > probe.txt \
+         && git -c core.fsmonitor=false add probe.txt \
+         && git -c user.email=a@b -c user.name=a -c core.fsmonitor=false -c commit.gpgsign=false commit -q -m probe" \
+       >/dev/null 2>"$own_errfile"; then
+    assert "gitmeta-own-worktree-commit-still-allowed" 1
+  else
+    assert "gitmeta-own-worktree-commit-still-allowed" 0 "$(cat "$own_errfile")"
+  fi
+  rm -f "$own_errfile"
+
   rm -f "$errfile"
   git -C "$WT" worktree remove --force "$LINKED_WT" >/dev/null 2>&1
-  rm -rf "$LINKED_WT"
+  git -C "$WT" worktree remove --force "$SIBLING_WT" >/dev/null 2>&1
+  rm -rf "$LINKED_WT" "$SIBLING_WT"
 else
   # Unlike the credential-path skips below, this setup (an empty commit and a
-  # `git worktree add`, both against a repo this script just created) is
-  # entirely under this script's own control — a failure here is a defect in
-  # the script, not evidence the target is absent, so it counts as a failed
-  # assertion (with the actual error surfaced) rather than a silent skip that
-  # would otherwise let the whole assertion go vacuously missing.
-  assert "gitmeta-linked-worktree-config-denied" 0 "could not set up a linked worktree: $(cat "$setup_errfile")"
-  rm -rf "$LINKED_WT"
+  # couple of `git worktree add`s, all against a repo this script just
+  # created) is entirely under this script's own control — a failure here is
+  # a defect in the script, not evidence the target is absent, so each
+  # assertion it would have driven counts as failed (with the actual error
+  # surfaced) rather than a silent skip that would let them go vacuously
+  # missing.
+  assert "gitmeta-linked-worktree-config-denied" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
+  assert "gitmeta-sibling-worktree-config-denied" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
+  assert "gitmeta-own-worktree-commit-still-allowed" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
+  rm -rf "$LINKED_WT" "$SIBLING_WT"
 fi
 rm -f "$setup_errfile"
 

@@ -173,7 +173,14 @@ esac
 # `literal` rule for the one exact path this dispatch actually uses has no
 # such failure mode: no regex semantics, nothing to escape, nothing for a
 # second sed pass to corrupt.
-REAL_GITDIR="$(git -C "$WORKTREE" rev-parse --git-dir 2>/dev/null)" || REAL_GITDIR=""
+# -c core.fsmonitor=false and a scrubbed GIT_DIR/GIT_COMMON_DIR: this runs
+# OUTSIDE the sandbox (like every other unsandboxed git command in this
+# harness) against a worktree the model has already had a turn in on attempt
+# 2+, so it gets the same defensive posture as those, even though `rev-parse
+# --git-dir` specifically was verified live not to trigger core.fsmonitor
+# today (unlike `git status`, which does, twice, in the same repo) — belt and
+# braces against that changing, not a response to a demonstrated exploit here.
+REAL_GITDIR="$(env -u GIT_DIR -u GIT_COMMON_DIR git -C "$WORKTREE" -c core.fsmonitor=false rev-parse --git-dir 2>/dev/null)" || REAL_GITDIR=""
 if [ -n "$REAL_GITDIR" ]; then
   case "$REAL_GITDIR" in /*) ;; *) REAL_GITDIR="$WORKTREE/$REAL_GITDIR" ;; esac
   REAL_GITDIR="$(canon "$REAL_GITDIR")" || REAL_GITDIR=""
@@ -181,10 +188,38 @@ fi
 case "$REAL_GITDIR" in
   *'"'*|*'\'*|*'&'*|*':'*) die "resolved worktree gitdir contains a quote, backslash, ampersand, or colon — cannot build a safe sandbox profile" ;;
 esac
-# Empty (couldn't resolve, e.g. --worktree isn't actually a git worktree by
-# the time this runs) renders as a literal "@REAL_GITDIR@/config.worktree" in
-# the profile — a path that can never exist on a real filesystem, so the rule
-# becomes an inert no-op rather than an accidental match on something real.
+# A linked-worktree gitmeta (one with a worktrees/ subtree) gets that whole
+# subtree denied below, with only THIS dispatch's own REAL_GITDIR re-allowed —
+# so an unresolved REAL_GITDIR here would deny every worktrees/*/ path,
+# including the one this very dispatch needs to operate (ordinary index
+# writes, HEAD updates, etc.), for a linked-worktree gitmeta that plainly has
+# one. Fail closed instead of silently degrading a real dispatch to a broken
+# one: die rather than fall through to the inert placeholder in that specific
+# case. A non-worktree $GITMETA (no worktrees/ subtree — the plain-gitdir
+# shape sandbox-smoke.sh itself uses) has no such subtree to deny in the
+# first place, so the placeholder stays safe there.
+if [ -z "$REAL_GITDIR" ] && [ -d "$GITMETA/worktrees" ]; then
+  die "cannot resolve --worktree's gitdir, but $GITMETA/worktrees exists — refusing to run with the whole linked-worktree subtree denied"
+fi
+# A MAIN worktree's gitdir equals $GITMETA exactly — there's no separate
+# per-worktree gitdir to re-allow, and reallowing "$GITMETA" itself would
+# reopen the whole tree the specific-file denies above just closed: the
+# profile's `(allow file-write* (subpath @REAL_GITDIR@))` rule is a later,
+# broader match than those, so under last-match-wins it would silently
+# override every one of them — verified live (hooks/config/info/attributes/
+# alternates all reported writable again with this left unguarded). Treat
+# "resolved to exactly $GITMETA" the same as unresolved so that reallow
+# becomes inert instead: nothing here needs it, since $GITMETA's own root is
+# already covered by the base --add-dirs grant.
+if [ "$REAL_GITDIR" = "$GITMETA" ]; then
+  REAL_GITDIR=""
+fi
+# Empty (couldn't resolve, or resolved to $GITMETA itself — see above; either
+# way $GITMETA/worktrees not existing means there's nothing the subtree deny
+# below needs re-allowing) renders as a literal "@REAL_GITDIR@/config.worktree"
+# etc. in the profile — a path that cannot be reached by a relative write from
+# inside the sandboxed workdir, so these rules become inert rather than an
+# accidental match on something real.
 [ -n "$REAL_GITDIR" ] || REAL_GITDIR="@REAL_GITDIR@"
 # Not interpolated via sed, but still joined with `:` into --add-dirs below —
 # a colon in either would silently mis-grant a different path than intended.

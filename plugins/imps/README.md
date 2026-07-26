@@ -215,6 +215,7 @@ protocol itself lives in `references/persona-posting.md`, shared by this panel a
 | opencode execute-tier dispatcher | `${CLAUDE_PLUGIN_ROOT}/scripts/opencode-dispatch.sh` — hand-invocable; see `${CLAUDE_PLUGIN_ROOT}/references/opencode-harness.md` |
 | OS sandbox wrapper (macOS) | `${CLAUDE_PLUGIN_ROOT}/scripts/sandbox-wrap.sh` |
 | Sandbox containment assertions | `${CLAUDE_PLUGIN_ROOT}/scripts/sandbox-smoke.sh` |
+| `--worktree` linked-worktree-shape assertions | `${CLAUDE_PLUGIN_ROOT}/tests/worktree-shape.sh` |
 
 No manual setup needed for any of these — the plugin installs them at
 `${CLAUDE_PLUGIN_ROOT}` and the commands resolve them at runtime. The bundled

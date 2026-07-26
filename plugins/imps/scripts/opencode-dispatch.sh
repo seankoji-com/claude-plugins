@@ -295,6 +295,25 @@ run_with_timeout() {
   return "$rc"
 }
 
+# Test-only entry point, same convention as audit-log.sh's pure helpers above
+# its own __SOURCED__ guard: the unit-test harness (tests/run.sh) sources this
+# script with __SOURCED__=1 and calls exactly one function with exactly one
+# positional arg. run_with_timeout itself takes multiple positional args
+# (<seconds> <cmd...>), so this thin wrapper `eval`s a single, fixture-authored
+# command line (always repo-checked-in test content, never external input) and
+# reports the resulting exit code on stdout, fitting that one-arg convention
+# without changing run_with_timeout's own real call sites or signature.
+run_with_timeout_probe() { eval "run_with_timeout $1"; echo $?; }
+if [ -n "${__SOURCED__:-}" ]; then
+  # Unlike audit-log.sh's own __SOURCED__ guard (registers no traps before
+  # its guard line), `trap on_exit EXIT` above already ran by the time
+  # sourcing reaches here — left alone, it fires on the SOURCING shell's own
+  # exit and prints a stray contract-JSON line after the probe's real output,
+  # breaking an exact-match test comparison. Clear it before returning.
+  trap - EXIT HUP INT TERM
+  return 0
+fi
+
 # ---------------------------------------------------------------------------
 # Arguments
 # ---------------------------------------------------------------------------
@@ -356,8 +375,12 @@ git -C "$WT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || abort bad_argume
 # well, but for it $REAL_GITDIR == $GITMETA exactly (not a subpath), so the
 # case match below that populates GITMETA_POINTER_PATHS never fires and the
 # snapshot degenerates to a single constant "MISSING" line for the whole run —
-# verified live. Refuse that shape outright rather than silently run with the
-# load-bearing check disabled.
+# verified live. Cheap early-exit for the common case; this alone is NOT the
+# real invariant (see the strict subpath assertion once REAL_GITDIR is
+# resolved below — a `git init --separate-git-dir` main worktree and a
+# submodule's working dir BOTH have a '.git' FILE and pass this, yet their
+# gitdir still equals $GITMETA exactly rather than living under it, verified
+# live to slip past this alone).
 [ -f "$WT/.git" ] || abort bad_arguments \
   "--worktree must be a LINKED worktree (a '.git' FILE pointing at the shared gitdir, not a main worktree's '.git' directory): $WT"
 
@@ -404,6 +427,20 @@ fi
 # itself inside the sandbox to find a colliding rewrite. This snapshot is the
 # load-bearing check for the whole boundary; a real hash removes that class.
 REAL_GITDIR="$(resolve_gitpath --git-dir)" || abort bad_arguments "cannot resolve --git-dir for $WT"
+# The actual invariant every pointer-snapshot path below depends on: REAL_GITDIR
+# must be a STRICT subpath of GITMETA (the per-worktree gitdir living under the
+# common dir's worktrees/ subtree), not merely equal to it. The `-f "$WT/.git"`
+# check above is only a cheap proxy and is NOT sufficient on its own — verified
+# live that both a `git init --separate-git-dir` main worktree and a
+# submodule's working directory have a '.git' FILE (satisfying that check) yet
+# resolve REAL_GITDIR == GITMETA exactly, silently degenerating the snapshot
+# below to a single "$WT/.git: MISSING" line for the whole run. Assert the real
+# invariant here, where GITMETA is actually known, rather than trust the proxy.
+case "$REAL_GITDIR" in
+  "$GITMETA"/*) ;;
+  *) abort bad_arguments \
+       "--worktree's gitdir ($REAL_GITDIR) is not a subdirectory of the shared common dir ($GITMETA) — got a main worktree, a --separate-git-dir repo, or a submodule, not a linked worktree of a normal repo" ;;
+esac
 GITMETA_POINTER_PATHS=("$WT/.git")
 # config.worktree in the PER-WORKTREE gitdir, not just the common dir.
 # deny-credentials.sbpl.in denies (literal "@GITMETA@/config.worktree"), but
@@ -422,12 +459,12 @@ GITMETA_POINTER_PATHS=("$WT/.git")
 # verified live — so it isn't snapshotted. "$GITMETA/config" (the COMMON dir's
 # config, the file git actually reads and the one deny-credentials.sbpl.in's
 # own header calls the load-bearing risk) was missing from this list entirely;
-# it's now included alongside the per-worktree config.worktree.
-case "$REAL_GITDIR" in
-  "$GITMETA"/*) GITMETA_POINTER_PATHS+=("$REAL_GITDIR/commondir" "$REAL_GITDIR/gitdir" "$REAL_GITDIR/HEAD" \
-                                        "$REAL_GITDIR/config.worktree" \
-                                        "$GITMETA/config" "$GITMETA/config.worktree") ;;
-esac
+# it's now included alongside the per-worktree config.worktree. No `case` guard
+# needed here — the assertion above already refused to reach this line unless
+# REAL_GITDIR is confirmed under GITMETA.
+GITMETA_POINTER_PATHS+=("$REAL_GITDIR/commondir" "$REAL_GITDIR/gitdir" "$REAL_GITDIR/HEAD" \
+                        "$REAL_GITDIR/config.worktree" \
+                        "$GITMETA/config" "$GITMETA/config.worktree")
 snapshot_gitmeta_pointers() {
   local p
   for p in "${GITMETA_POINTER_PATHS[@]}"; do
