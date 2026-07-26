@@ -217,7 +217,10 @@ abort() { # abort <slug> <message...>
 # sandbox-wrap.sh's own `exec "$SAFEHOUSE_BIN" ...` preserves that PID across
 # the exec, so a TERM sent here reaches the actual process, not an
 # already-gone wrapper shell.
-run_with_timeout() { # run_with_timeout <seconds> -- <cmd...>
+# run_with_timeout <seconds> <cmd...> — the doc'd "-- <cmd...>" form was never
+# actually implemented (neither call site below passes "--", and this
+# function never checks for or strips one); corrected to match reality.
+run_with_timeout() {
   local secs="$1"; shift
   # `kill -TERM "$pid"` alone reaches only that one process — demonstrated:
   # the oracle's/model's own child processes (opencode's shell children, a
@@ -244,11 +247,26 @@ run_with_timeout() { # run_with_timeout <seconds> -- <cmd...>
   # on timeout, and the caller must check non-empty (-s), not existence (-f).
   local timed_out_flag=""
   timed_out_flag="$(mktemp "${TMPDIR:-/tmp}/imps-timeout-flag.XXXXXX" 2>/dev/null)" || timed_out_flag=""
+  # The watchdog records WHICH signal it just sent, not a constant '1', so the
+  # check below can compare against 128+that signal rather than hardcoding
+  # 143/137. Signal numbers are not fixed by POSIX; ask the shell for them
+  # (`kill -l TERM` -> 15) and only fall back to the conventional values if
+  # that ever returns something non-numeric.
+  local term_signum kill_signum
+  term_signum="$(kill -l TERM 2>/dev/null)"; case "$term_signum" in ''|*[!0-9]*) term_signum=15 ;; esac
+  kill_signum="$(kill -l KILL 2>/dev/null)"; case "$kill_signum" in ''|*[!0-9]*) kill_signum=9  ;; esac
   (
     sleep "$secs" 2>/dev/null
+    # Sentinel BEFORE the kill, not after: written after, the killed process can
+    # reap and the `wait` below return while this subshell is still between the
+    # two statements — the main shell then kills this watchdog before the write
+    # lands, sees an empty flag, and returns the raw 143 instead of the 124
+    # sentinel. Downstream that turns a timed-out oracle into an ordinary oracle
+    # failure: no `oracle_timeout` abort, and another paid attempt.
+    [ -n "$timed_out_flag" ] && printf '%s' "$term_signum" >"$timed_out_flag"
     kill -TERM "-$pid" 2>/dev/null
-    [ -n "$timed_out_flag" ] && printf '1' >"$timed_out_flag"
     sleep 10
+    [ -n "$timed_out_flag" ] && printf '%s' "$kill_signum" >"$timed_out_flag"
     kill -KILL "-$pid" 2>/dev/null
   ) </dev/null >/dev/null 2>&1 &
   local watchdog=$!
@@ -256,13 +274,87 @@ run_with_timeout() { # run_with_timeout <seconds> -- <cmd...>
   wait "$pid" 2>/dev/null || rc=$?
   kill "$watchdog" 2>/dev/null
   wait "$watchdog" 2>/dev/null
-  if [ -n "$timed_out_flag" ] && [ -s "$timed_out_flag" ]; then
+  # Best-effort cleanup, not a closed guarantee: force-kill anything still
+  # alive in the same process group now that `wait` has returned, narrowing
+  # (not eliminating — a descendant that detached into its own session, per
+  # the comment above, is outside this process group entirely and untouched
+  # by either this or the TERM above) the window before the caller's next
+  # unsandboxed git command runs. `kill -0` first: PGIDs are reused by the
+  # kernel, so an unconditional `kill -KILL "-$pid"` here — well after `wait`
+  # returned, unlike the watchdog's own use of this same pattern immediately
+  # after sending TERM — has more time to land on a since-recycled, unrelated
+  # process group. The check-then-kill has its own inherent TOCTOU gap (a
+  # PGID could still be recycled between the two), but narrows the same class
+  # of risk this whole line is already just narrowing, not closing.
+  kill -0 "-$pid" 2>/dev/null && kill -KILL "-$pid" 2>/dev/null
+  # The sentinel alone can't distinguish "the watchdog fired" from "the
+  # watchdog's kill is why the process died" — a child that exits on its own
+  # at ~T=secs races the watchdog's own sleep(secs) waking at the same instant.
+  # `rc != 0` alone is NOT enough: verified live, it still misreports 124 on a
+  # child whose OWN unrelated non-zero exit (e.g. a real oracle failure, rc=1)
+  # happens to land near the same boundary — and reordering the sentinel
+  # before the kill (above) made this MORE likely, not less, because the flag
+  # now gets written before the watchdog's kill has to actually race anything.
+  # That case is the damaging one: a real oracle failure reported as
+  # oracle_timeout is terminal (no retry), where a real rc=1 would correctly
+  # retry with the failure fed back to the model. What `rc` CAN tell us,
+  # unambiguously, is whether the process died BY THE SIGNAL THIS WATCHDOG
+  # SENT: a natural exit (whatever its code) is never 128+n for that signal.
+  # The sentinel carries the signal number the watchdog actually sent, so this
+  # compares rc against 128+that rather than against hardcoded 143/137 — the
+  # numbers now come from the same `kill -l` the watchdog used, on whatever
+  # platform this is running.
+  local timed_out_signum=""
+  if [ -n "$timed_out_flag" ]; then
+    [ -s "$timed_out_flag" ] && timed_out_signum="$(cat "$timed_out_flag" 2>/dev/null)"
     rm -f "$timed_out_flag"
-    return 124
   fi
-  [ -n "$timed_out_flag" ] && rm -f "$timed_out_flag"
+  case "$timed_out_signum" in
+    ''|*[!0-9]*) ;;
+    *) [ "$rc" -eq "$((128 + timed_out_signum))" ] && return 124 ;;
+  esac
   return "$rc"
 }
+
+# Test-only entry point, same convention as audit-log.sh's pure helpers above
+# its own __SOURCED__ guard: the unit-test harness (tests/run.sh) sources this
+# script with __SOURCED__=1 and calls exactly one function with exactly one
+# positional arg. run_with_timeout itself takes multiple positional args
+# (<seconds> <cmd...>), so this thin wrapper splits that one positional arg on
+# newlines into an array and passes it through as-is — no `eval`, no shell
+# re-parsing of fixture content, each line an opaque argument regardless of
+# any spaces or quote characters it contains. Fixture `arg` files are one
+# argument per line accordingly (see tests/fixtures/unit/imps/
+# opencode-dispatch.sh/run_with_timeout_probe/*/arg).
+#
+# Split with a newline IFS and `read`, not `mapfile`: `mapfile` is bash 4.0+,
+# and stock macOS still ships bash 3.2 (the last GPLv2 release). Since this
+# whole harness exists to drive the macOS-only Seatbelt sandbox, "works on the
+# system bash" is not optional here — under 3.2 `mapfile` fails with
+# `command not found`, leaving args empty and the probe silently measuring
+# nothing.
+# A here-string (`<<<`, bash 2.05b+) rather than an unquoted heredoc: the
+# heredoc form would re-expand `$` and `\` in the fixture content, reopening
+# exactly the shell re-parsing the `eval` this replaced was removed for.
+run_with_timeout_probe() {
+  local -a args
+  local line
+  args=()
+  while IFS= read -r line; do
+    args[${#args[@]}]="$line"
+  done <<<"$1"
+  run_with_timeout "${args[@]+"${args[@]}"}"
+  echo "$?"
+}
+if [ -n "${__SOURCED__:-}" ]; then
+  # Unlike audit-log.sh's own __SOURCED__ guard (registers no traps before
+  # its guard line), `trap on_exit EXIT` above already ran by the time
+  # sourcing reaches here — left alone, it fires on the SOURCING shell's own
+  # exit and prints a stray contract-JSON line after the probe's real output,
+  # breaking an exact-match test comparison. Clear it before returning.
+  trap - EXIT HUP INT TERM
+  return 0
+fi
 
 # ---------------------------------------------------------------------------
 # Arguments
@@ -317,6 +409,22 @@ OPENCODE_BIN="$(command -v opencode 2>/dev/null)"
 
 WT="$(cd "$WT" 2>/dev/null && pwd -P)" || abort bad_arguments "--worktree is not a directory"
 git -C "$WT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || abort bad_arguments "--worktree is not a git worktree: $WT"
+# Every contract this harness relies on (the gitmeta-pointer snapshot below,
+# the sandbox's own worktrees/*/config.worktree deny) is written against a
+# LINKED worktree specifically — "the shape every real dispatch uses" — and
+# was never actually enforced: a MAIN worktree (.git is a directory, not the
+# linked-worktree redirect file) satisfies --is-inside-work-tree above just as
+# well, but for it $REAL_GITDIR == $GITMETA exactly (not a subpath), so the
+# case match below that populates GITMETA_POINTER_PATHS never fires and the
+# snapshot degenerates to a single constant "MISSING" line for the whole run —
+# verified live. Cheap early-exit for the common case; this alone is NOT the
+# real invariant (see the strict subpath assertion once REAL_GITDIR is
+# resolved below — a `git init --separate-git-dir` main worktree and a
+# submodule's working dir BOTH have a '.git' FILE and pass this, yet their
+# gitdir still equals $GITMETA exactly rather than living under it, verified
+# live to slip past this alone).
+[ -f "$WT/.git" ] || abort bad_arguments \
+  "--worktree must be a LINKED worktree (a '.git' FILE pointing at the shared gitdir, not a main worktree's '.git' directory): $WT"
 
 resolve_gitpath() { # resolve_gitpath <git rev-parse flag>
   local p
@@ -337,7 +445,15 @@ BASE_SHA="$(git -C "$WT" rev-parse HEAD 2>/dev/null)" || abort bad_arguments "ca
 # by misattributing already-dirty guarded files to the model. This v1's whole
 # purpose is an uncontaminated measurement — refuse rather than silently mix
 # pre-existing changes into the reported result.
-if [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
+#
+# -c core.fsmonitor=false: this is the one unsandboxed, index-reading git
+# command in this file that ran without it before this line was added — every
+# other one carries it as belt-and-braces (see the pointer-snapshot comment
+# below). This runs before THIS dispatch's own model turn, but $GITMETA is
+# shared and long-lived: an earlier dispatch, a sibling imp, or a stale
+# planted config from before this file's own denies existed could still fire
+# it at operator privilege here first.
+if [ -n "$(git -C "$WT" -c core.fsmonitor=false status --porcelain 2>/dev/null)" ]; then
   abort worktree_dirty "worktree has uncommitted changes before dispatch — commit or stash them first: $WT"
 fi
 
@@ -361,10 +477,53 @@ fi
 # itself inside the sandbox to find a colliding rewrite. This snapshot is the
 # load-bearing check for the whole boundary; a real hash removes that class.
 REAL_GITDIR="$(resolve_gitpath --git-dir)" || abort bad_arguments "cannot resolve --git-dir for $WT"
-GITMETA_POINTER_PATHS=("$WT/.git")
+# The actual invariant every pointer-snapshot path below depends on: REAL_GITDIR
+# must be a STRICT subpath of GITMETA (the per-worktree gitdir living under the
+# common dir's worktrees/ subtree), not merely equal to it. The `-f "$WT/.git"`
+# check above is only a cheap proxy and is NOT sufficient on its own — verified
+# live that both a `git init --separate-git-dir` main worktree and a
+# submodule's working directory have a '.git' FILE (satisfying that check) yet
+# resolve REAL_GITDIR == GITMETA exactly, silently degenerating the snapshot
+# below to a single "$WT/.git: MISSING" line for the whole run. Assert the real
+# invariant here, where GITMETA is actually known, rather than trust the proxy.
 case "$REAL_GITDIR" in
-  "$GITMETA"/*) GITMETA_POINTER_PATHS+=("$REAL_GITDIR/commondir" "$REAL_GITDIR/gitdir" "$REAL_GITDIR/HEAD") ;;
+  "$GITMETA"/*) : ;;  # OK — genuinely a linked worktree's own gitdir
+  *) abort bad_arguments \
+       "--worktree's gitdir ($REAL_GITDIR) is not a subdirectory of the shared common dir ($GITMETA) — got a main worktree, a --separate-git-dir repo, or a submodule, not a linked worktree of a normal repo" ;;
 esac
+GITMETA_POINTER_PATHS=("$WT/.git")
+# config.worktree in the PER-WORKTREE gitdir, not just the common dir.
+# deny-credentials.sbpl.in denies (literal "@GITMETA@/config.worktree"), but
+# @GITMETA@ is the git COMMON dir, and for a linked worktree — the shape every
+# real dispatch uses — git reads $GIT_DIR/config.worktree, i.e.
+# <gitmeta>/worktrees/<name>/config.worktree (verified live). That path sits
+# inside the read-write --add-dirs "$GITMETA" grant and is not denied, so a
+# model can drop a `[filter "x"] clean = <cmd>` there (plus a .gitattributes in
+# the worktree) and the harness's own UNSANDBOXED `git add -A` below executes
+# <cmd> at operator privilege — `-c core.fsmonitor=false` covers fsmonitor, not
+# filters. Snapshotting these bytes catches it regardless of
+# extensions.worktreeConfig, which is the only reason the deny list's gap is
+# not already exploitable everywhere.
+# NOTE: "$REAL_GITDIR/config" (the per-worktree gitdir's own "config" file) is
+# never consulted by git for a linked worktree in either worktreeConfig mode —
+# verified live — so it isn't snapshotted. "$GITMETA/config" (the COMMON dir's
+# config, the file git actually reads and the one deny-credentials.sbpl.in's
+# own header calls the load-bearing risk) was missing from this list entirely;
+# it's now included alongside the per-worktree config.worktree. No `case` guard
+# needed here — the assertion above already refused to reach this line unless
+# REAL_GITDIR is confirmed under GITMETA.
+# "$GITMETA/commondir" (and "$GITMETA/gitdir" beside it): git reads
+# <gitdir>/commondir from ANY gitdir, so the COMMON dir's own commondir
+# repoints $GIT_COMMON_DIR for the main checkout — verified live as arbitrary
+# execution at operator privilege on the operator's own next `git status`,
+# since every command this harness runs uses -C "$WT" and resolves
+# "$REAL_GITDIR/commondir" instead, never noticing. Denied outright in
+# deny-credentials.sbpl.in; snapshotted here too because the deny list is one
+# rendered profile away from a regression and this check is cheap.
+GITMETA_POINTER_PATHS+=("$REAL_GITDIR/commondir" "$REAL_GITDIR/gitdir" "$REAL_GITDIR/HEAD" \
+                        "$REAL_GITDIR/config.worktree" \
+                        "$GITMETA/config" "$GITMETA/config.worktree" \
+                        "$GITMETA/commondir" "$GITMETA/gitdir")
 snapshot_gitmeta_pointers() {
   local p
   for p in "${GITMETA_POINTER_PATHS[@]}"; do
@@ -482,8 +641,21 @@ extract_cost() {
 
 # Direct invocation, not through a shell-function wrapper: run_with_timeout
 # needs $! to be the PID that execs into the real sandboxed process.
+#
+# --real-gitdir "$REAL_GITDIR": this is the value computed and validated ONCE,
+# above, before the model has ever run — never re-derived here from $WT/.git,
+# which is necessarily writable and gets rewritten by the model on attempt
+# 1 for every subsequent sandboxed call this function makes (the oracle run,
+# every retry's model turn). sandbox-wrap.sh re-resolving its own REAL_GITDIR
+# from $WT/.git on each call was verified live to be a full RCE: a model that
+# redirects .git to a sibling worktree's gitdir (or an unrelated repo
+# entirely) before the oracle run gets that gitdir's write access granted
+# INSIDE the sandbox on this very call, since sandbox-wrap.sh has no way to
+# know a redirect happened. Passing the pre-dispatch value explicitly on
+# every call closes that regardless of what $WT/.git says by the time this
+# runs.
 run_sandboxed_direct() {
-  bash "$WRAP" --worktree "$WT" --gitmeta "$GITMETA" --datadir "$DISPATCH_DIR" -- "$@"
+  bash "$WRAP" --worktree "$WT" --gitmeta "$GITMETA" --real-gitdir "$REAL_GITDIR" --datadir "$DISPATCH_DIR" -- "$@"
 }
 
 # Kept separately from $prompt so a retry can always re-supply full task
@@ -563,7 +735,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     # means nothing if the model instead redirected $WT/.git to a fake gitdir
     # of its own — this snapshot comparison is what actually closes that.
     if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
-      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect)"
+      abort gitmeta_tampered "SANDBOX ESCAPE SUSPECTED: worktree/gitmeta pointer files changed during dispatch — refused to commit. Inspect $WT/.git and $GITMETA before running any git command against this repo."
     fi
 
     # Surface, don't silently swallow: did the model's own edits touch the
@@ -578,11 +750,127 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     # depth as the commit below — the gitmeta_tampered check above is what
     # actually closes the hole, this is belt and braces.
     if [ -n "$ORACLE_GUARD" ]; then
-      ORACLE_FILES_MODIFIED="$(git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" -- "$ORACLE_GUARD" 2>/dev/null | tr '\n' ' ')"
+      # `git diff` alone sees only TRACKED changes — verified: a brand-new file
+      # under the guarded pathspec is invisible to it. That is the cheapest way
+      # to game the oracle without tripping this guard: with --oracle-guard
+      # 'tests/*' and an oracle of `pytest -q`, a model that creates a NEW
+      # tests/conftest.py emptying the collected item list turns the oracle
+      # green while this diff stays empty, and the run is reported as a clean
+      # pass. `ls-files --others` is the untracked half of the same question.
+      #
+      # A prior version of this fix dropped `--exclude-standard` on the theory
+      # that ignore rules are unconditionally attacker-controlled, replacing it
+      # with a fixed junk-name filter — that traded the bypass for a WORSE one
+      # (verified live): the filter is itself an allowlist for the attacker
+      # (e.g. a crafted tests/node_modules/<pkg>/... shadowing the module under
+      # test via ordinary Node resolution, stripped by the node_modules/ filter
+      # entry) and it only recognises Python/Node byproducts, false-positiving
+      # this guard on ordinary ignored artifacts in any other stack (Rust, Go,
+      # even a stray macOS .DS_Store) that were never touched during dispatch.
+      #
+      # The actual distinction that matters isn't "does an ignore rule exist"
+      # (pre-existing rules the operator wrote are trustworthy — they're what
+      # `worktree_dirty` above already verified the tree against) but "did the
+      # MODEL change what's ignored during this dispatch". That's cheap to
+      # check directly: refuse if any .gitignore, tracked or newly-created
+      # untracked, differs from $BASE_SHA. $GITMETA/info/exclude is already
+      # sandbox-denied and core.excludesFile lives in the read-only
+      # ~/.gitconfig, so once .gitignore itself is verified unchanged, every
+      # remaining ignore-rule source is outside the model's reach and
+      # `--exclude-standard` is trustworthy again.
+      #
+      # Scoped to .gitignore files that could actually affect $ORACLE_GUARD's
+      # own pathspec — its own directory, every ancestor (parent .gitignore
+      # rules cascade down), everything beneath it, and the repo root (rules
+      # apply everywhere) — rather than every .gitignore anywhere in the
+      # repo. This is git's own directory-scoped .gitignore semantics, not an
+      # attacker-gameable allowlist: a .gitignore inside an unrelated sibling
+      # directory (e.g. node_modules/<pkg>/.gitignore, an ordinary dependency
+      # -install byproduct with no relation to this operator-chosen guard
+      # pathspec) structurally cannot affect files under a guard elsewhere in
+      # the tree, so flagging it would only ever be a false positive, never a
+      # missed attack. Only applied when $ORACLE_GUARD has an explicit
+      # directory prefix (the documented usage, e.g. 'tests/*') — a bare
+      # pattern with no "/" can match at any depth under git's own pathspec
+      # rules, which this scoping can't safely narrow, so it falls back to
+      # checking every .gitignore in that case (the original, safe behavior).
+      # An empty GUARD_DIR means "unscoped" — flag every changed .gitignore in
+      # the repo. That is the SAFE direction (over-flagging, never missing),
+      # so every form this scoping cannot reason about normalizes to it.
+      # './tests/*' is a pathspec git accepts, but `git diff --name-only` and
+      # `ls-files --others` both report repo-relative paths ('tests/.gitignore'),
+      # so a raw './tests' prefix matches neither direction of the comparison
+      # below and silently disables the check entirely — the exact attack it
+      # exists to catch (a tests/.gitignore hiding a new tests/conftest.py from
+      # --exclude-standard) would sail through as a clean pass. Strip the
+      # leading './' so it compares against what git actually prints, and treat
+      # leading pathspec magic (':(glob)', ':!', ...) as unscopable.
+      case "$ORACLE_GUARD" in
+        :*)  GUARD_DIR="" ;;
+        */*) GUARD_DIR="${ORACLE_GUARD%/*}"
+             while [ "$GUARD_DIR" != "${GUARD_DIR#./}" ]; do GUARD_DIR="${GUARD_DIR#./}"; done
+             [ "$GUARD_DIR" = "." ] && GUARD_DIR=""
+             ;;
+        *)   GUARD_DIR="" ;;
+      esac
+      IGNORE_FILES_CHANGED=""
+      while IFS= read -r ign_f; do
+        [ -n "$ign_f" ] || continue
+        if [ -z "$GUARD_DIR" ]; then
+          IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f"
+          continue
+        fi
+        case "$ign_f" in
+          */.gitignore) ign_dir="${ign_f%/.gitignore}" ;;
+          .gitignore)   ign_dir="." ;;
+          *)            continue ;;
+        esac
+        if [ "$ign_dir" = "." ]; then
+          IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f"
+        else
+          # `case STRING in PATTERN)` — STRING is the value being tested, so
+          # the two directions read as: "is GUARD_DIR under ign_dir?" (the
+          # .gitignore is an ANCESTOR of the guard, its rules cascade down)
+          # then "is ign_dir under GUARD_DIR?" (it sits INSIDE the guard).
+          # Both quoted, so a literal `*` in either value stays literal rather
+          # than becoming an active glob in the pattern.
+          case "$GUARD_DIR/" in
+            "$ign_dir/"*) IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f" ;;  # ancestor
+            *) case "$ign_dir/" in
+                 "$GUARD_DIR/"*) IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f" ;;  # descendant
+               esac ;;
+          esac
+        fi
+      # Process substitution, not a heredoc wrapping a command substitution:
+      # the loop body has to assign IGNORE_FILES_CHANGED in THIS shell (a pipe
+      # would put it in a subshell and lose it), and `< <(...)` gets that
+      # without the heredoc's quoting hazards — no delimiter a git-reported
+      # path could collide with, and the git output is never re-parsed.
+      done < <( { git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" 2>/dev/null
+                  git -C "$WT" -c core.fsmonitor=false ls-files --others 2>/dev/null
+                } | grep -E '(^|/)\.gitignore$' | sort -u )
+      if [ -n "$IGNORE_FILES_CHANGED" ]; then
+        abort oracle_guard_violated "model modified or added .gitignore file(s) during dispatch, not counted as a pass: $IGNORE_FILES_CHANGED"
+      fi
+      ORACLE_FILES_MODIFIED="$( { git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" -- "$ORACLE_GUARD" 2>/dev/null
+                                  git -C "$WT" -c core.fsmonitor=false ls-files --others --exclude-standard -- "$ORACLE_GUARD" 2>/dev/null
+                                } | sort -u | tr '\n' ' ')"
       ORACLE_FILES_MODIFIED="${ORACLE_FILES_MODIFIED% }"
       if [ -n "$ORACLE_FILES_MODIFIED" ]; then
         abort oracle_guard_violated "model modified guarded oracle file(s), not counted as a pass: $ORACLE_FILES_MODIFIED"
       fi
+    fi
+
+    # Re-check the pointer snapshot immediately before the add/commit below,
+    # not just once at the top of this block: the oracle-guard diff just above
+    # is itself an unsandboxed, index-reading git command, and the comment at
+    # the top of run_with_timeout concedes `kill -TERM -"$pid"` can miss a
+    # descendant that detached into its own session — such a process has the
+    # whole span from the first snapshot check to here to land a redirect.
+    # Narrower, not zero: doesn't shrink to zero, since add/commit below are
+    # themselves further unsandboxed git commands after this point.
+    if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
+      abort gitmeta_tampered "SANDBOX ESCAPE SUSPECTED: worktree/gitmeta pointer files changed during dispatch — refused to commit. Inspect $WT/.git and $GITMETA before running any git command against this repo."
     fi
 
     # Commit deterministically — never delegate this to the model, which is
