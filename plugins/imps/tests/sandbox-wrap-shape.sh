@@ -114,7 +114,7 @@ run_wrap() { # run_wrap <HOME_DIR> <PATH_VALUE> -- <args to sandbox-wrap.sh...>
   err_f="$(mktemp)"
   env -u IMPS_SANDBOX_EXPLAIN -u IMPS_SAFEHOUSE_BIN -u SANDBOX_MODE -u IMPS_SANDBOX_DANGEROUSLY_DISABLE \
       CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" HOME="$home_dir" PATH="$path_val" \
-      "${EXTRA_ENV[@]}" \
+      "${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}" \
       "$BASH_BIN" "$WRAP" "$@" >"$out_f" 2>"$err_f"
   RC=$?
   OUT="$(cat "$out_f")"
@@ -433,13 +433,27 @@ assert_eq "safehouse-bin-nonexec-no-fallthrough/message" "$ERR" \
 # in here. HOMEBREW_PREFIX is also overridden to a nonexistent path so
 # resolve_safehouse's own hardcoded Homebrew-keg-only fallback locations
 # can't find a real install either, for the same reason.
-EXTRA_ENV=(HOMEBREW_PREFIX="$SCRATCH/no-homebrew")
-run_wrap "$HOME_EMPTY" "$STUB_BIN_NO_SAFEHOUSE:/usr/bin:/bin" -- \
-  --worktree "$WT_PLAIN" --gitmeta "$GITMETA_PLAIN" --datadir "$DATADIR_PLAIN" -- true
-EXTRA_ENV=()
-assert_eq "safehouse-plain-not-found/exit" "$RC" "2" "stderr=$ERR"
-assert_eq "safehouse-plain-not-found/message" "$ERR" \
-  "sandbox-wrap: safehouse not found (brew install agent-safehouse, or set IMPS_SAFEHOUSE_BIN)"
+# HOMEBREW_PREFIX only neutralizes resolve_safehouse's two ${HOMEBREW_PREFIX}-
+# relative fallbacks (sandbox-wrap.sh:105-106) — its THIRD fallback,
+# /usr/local/opt/agent-safehouse/bin/safehouse, is a separate hardcoded
+# literal (sandbox-wrap.sh:107) with no env override at all. On an Intel Mac
+# that actually has agent-safehouse installed there, resolve_safehouse
+# succeeds via that literal path regardless of HOMEBREW_PREFIX, and both
+# assertions below would fail for the wrong reason (a real backend was
+# found, not "sandbox-wrap.sh has a bug"). Skip rather than assert in that
+# case — this is a real, uncontrollable host fact, not something the test's
+# own env-pinning can neutralize.
+if [ -x /usr/local/opt/agent-safehouse/bin/safehouse ]; then
+  echo "skip safehouse-plain-not-found: real agent-safehouse present at the hardcoded Intel fallback path"
+else
+  EXTRA_ENV=(HOMEBREW_PREFIX="$SCRATCH/no-homebrew")
+  run_wrap "$HOME_EMPTY" "$STUB_BIN_NO_SAFEHOUSE:/usr/bin:/bin" -- \
+    --worktree "$WT_PLAIN" --gitmeta "$GITMETA_PLAIN" --datadir "$DATADIR_PLAIN" -- true
+  EXTRA_ENV=()
+  assert_eq "safehouse-plain-not-found/exit" "$RC" "2" "stderr=$ERR"
+  assert_eq "safehouse-plain-not-found/message" "$ERR" \
+    "sandbox-wrap: safehouse not found (brew install agent-safehouse, or set IMPS_SAFEHOUSE_BIN)"
+fi
 
 # ==============================================================================
 echo "---"
