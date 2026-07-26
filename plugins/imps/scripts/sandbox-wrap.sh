@@ -207,6 +207,26 @@ case "$REAL_GITDIR" in
   *'"'*|*'\'*|*'&'*|*':'*|*'|'*) die "resolved worktree gitdir contains a quote, backslash, ampersand, colon, or pipe — cannot build a safe sandbox profile" ;;
   *[$'\n']*) die "resolved worktree gitdir contains a newline — cannot build a safe sandbox profile" ;;
 esac
+# A MAIN worktree's gitdir equals $GITMETA exactly — there's no separate
+# per-worktree gitdir to re-allow, and reallowing "$GITMETA" itself would
+# reopen the whole tree the specific-file denies above just closed: the
+# profile's `(allow file-write* (subpath @REAL_GITDIR@))` rule is a later,
+# broader match than those, so under last-match-wins it would silently
+# override every one of them — verified live (hooks/config/info/attributes/
+# alternates all reported writable again with this left unguarded). Treat
+# "resolved to exactly $GITMETA" the same as unresolved so that reallow
+# becomes inert instead: nothing here needs it, since $GITMETA's own root is
+# already covered by the base --add-dirs grant.
+#
+# This normalization runs BEFORE the fail-closed check below, not after: the
+# two collapse to the same state (an empty REAL_GITDIR, hence an inert
+# reallow), so with the old ordering `--real-gitdir "$GITMETA"` against a
+# gitmeta that HAS a worktrees/ subtree slipped past the guard and ran with
+# that whole subtree denied and nothing re-allowed — verified live to exit 0 —
+# which is precisely the broken-dispatch outcome the comment below refuses.
+if [ "$REAL_GITDIR" = "$GITMETA" ]; then
+  REAL_GITDIR=""
+fi
 # A linked-worktree gitmeta (one with a worktrees/ subtree) gets that whole
 # subtree denied below, with only THIS dispatch's own REAL_GITDIR re-allowed —
 # so an unresolved REAL_GITDIR here would deny every worktrees/*/ path,
@@ -219,19 +239,6 @@ esac
 # first place, so the placeholder stays safe there.
 if [ -z "$REAL_GITDIR" ] && [ -d "$GITMETA/worktrees" ]; then
   die "cannot resolve the worktree's gitdir, but $GITMETA/worktrees exists — refusing to run with the whole linked-worktree subtree denied"
-fi
-# A MAIN worktree's gitdir equals $GITMETA exactly — there's no separate
-# per-worktree gitdir to re-allow, and reallowing "$GITMETA" itself would
-# reopen the whole tree the specific-file denies above just closed: the
-# profile's `(allow file-write* (subpath @REAL_GITDIR@))` rule is a later,
-# broader match than those, so under last-match-wins it would silently
-# override every one of them — verified live (hooks/config/info/attributes/
-# alternates all reported writable again with this left unguarded). Treat
-# "resolved to exactly $GITMETA" the same as unresolved so that reallow
-# becomes inert instead: nothing here needs it, since $GITMETA's own root is
-# already covered by the base --add-dirs grant.
-if [ "$REAL_GITDIR" = "$GITMETA" ]; then
-  REAL_GITDIR=""
 fi
 # Structural containment check, regardless of source (explicit --real-gitdir
 # or the self-resolved fallback): REAL_GITDIR must be a worktrees/*/

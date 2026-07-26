@@ -183,6 +183,25 @@ mkdir -p "$GITMETA/info" "$GITMETA/objects/info" 2>/dev/null
 expect_deny "gitmeta-info-attributes-write-denied"   "echo x >> '$GITMETA/info/attributes'"
 expect_deny "gitmeta-objects-alternates-write-denied" "echo x >> '$GITMETA/objects/info/alternates'"
 
+# Every submodule's own gitdir (its config, its hooks/) lives under
+# $GITMETA/modules/<name>/, reachable through the wholesale read-write gitmeta
+# grant and covered by nothing above. The deny that closes it shipped one
+# round with NO probe at all: mutation-verified that deleting
+# `(deny file-write* (subpath "@GITMETA@/modules"))` from the profile left
+# this whole file green. Probe a NESTED path, not the container: the deny is a
+# subpath rule and the payload path is always modules/<name>/config.
+mkdir -p "$GITMETA/modules/imps-smoke-sub" 2>/dev/null
+expect_deny "gitmeta-modules-write-denied" "echo x > '$GITMETA/modules/imps-smoke-sub/config'"
+
+# $GITMETA is itself a gitdir, and git reads <gitdir>/commondir from ANY
+# gitdir — so writing this one file repoints $GIT_COMMON_DIR for the
+# OPERATOR's main checkout at a fake common dir carrying its own
+# core.fsmonitor, executed at full operator privilege on their next plain
+# `git status`. Nothing else catches it: every command the harness runs is
+# -C "$WT" and resolves the per-worktree commondir instead.
+expect_deny "gitmeta-commondir-write-denied" "echo x > '$GITMETA/commondir'"
+expect_deny "gitmeta-gitdir-write-denied"    "echo x > '$GITMETA/gitdir'"
+
 # A real dispatch is always a linked worktree, where git reads config.worktree
 # from the PER-WORKTREE gitdir (worktrees/<name>/config.worktree), not the
 # plain literal path above — set two up (this dispatch's own, and a sibling,
@@ -241,6 +260,26 @@ if { git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
     assert "gitmeta-sibling-worktree-config-denied" 0 "sandbox-wrap failed before reaching the probe (marker never created): $(cat "$errfile")"
   fi
   rm -f "$sibling_marker"
+
+  # $REAL_GITDIR is re-allowed wholesale as a subpath, so this dispatch's OWN
+  # nested modules/ (a worktree with an initialized submodule) is denied only
+  # by the re-deny line that follows the reallow — a completely separate rule
+  # from the $GITMETA/modules probe above, and likewise mutation-verified to
+  # have had no coverage at all. The directory is created OUT of the sandbox
+  # first so the write can only fail on the deny, never on ENOENT.
+  mkdir -p "$LINKED_GITDIR/modules/imps-smoke-sub" 2>/dev/null
+  modules_marker="$LINKED_WT/.smoke-ok-modules.$$"
+  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --real-gitdir "$LINKED_GITDIR" --datadir "$DATADIR" \
+       -- /bin/sh -c "touch '$modules_marker' && echo x > '$LINKED_GITDIR/modules/imps-smoke-sub/config'" \
+       >/dev/null 2>"$errfile"; then
+    assert "gitmeta-own-gitdir-modules-denied" 0 "expected denial, command succeeded"
+  elif [ -e "$modules_marker" ]; then
+    assert "gitmeta-own-gitdir-modules-denied" 1
+  else
+    assert "gitmeta-own-gitdir-modules-denied" 0 "sandbox-wrap failed before reaching the probe (marker never created): $(cat "$errfile")"
+  fi
+  rm -f "$modules_marker"
+  rm -rf "$LINKED_GITDIR/modules"
 
   # The actual attack this round found: rewrite LINKED_WT/.git itself (a
   # model-writable redirect file) to point at the SIBLING's gitdir instead —

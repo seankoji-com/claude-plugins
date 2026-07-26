@@ -483,9 +483,18 @@ GITMETA_POINTER_PATHS=("$WT/.git")
 # it's now included alongside the per-worktree config.worktree. No `case` guard
 # needed here — the assertion above already refused to reach this line unless
 # REAL_GITDIR is confirmed under GITMETA.
+# "$GITMETA/commondir" (and "$GITMETA/gitdir" beside it): git reads
+# <gitdir>/commondir from ANY gitdir, so the COMMON dir's own commondir
+# repoints $GIT_COMMON_DIR for the main checkout — verified live as arbitrary
+# execution at operator privilege on the operator's own next `git status`,
+# since every command this harness runs uses -C "$WT" and resolves
+# "$REAL_GITDIR/commondir" instead, never noticing. Denied outright in
+# deny-credentials.sbpl.in; snapshotted here too because the deny list is one
+# rendered profile away from a regression and this check is cheap.
 GITMETA_POINTER_PATHS+=("$REAL_GITDIR/commondir" "$REAL_GITDIR/gitdir" "$REAL_GITDIR/HEAD" \
                         "$REAL_GITDIR/config.worktree" \
-                        "$GITMETA/config" "$GITMETA/config.worktree")
+                        "$GITMETA/config" "$GITMETA/config.worktree" \
+                        "$GITMETA/commondir" "$GITMETA/gitdir")
 snapshot_gitmeta_pointers() {
   local p
   for p in "${GITMETA_POINTER_PATHS[@]}"; do
@@ -756,8 +765,23 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
       # pattern with no "/" can match at any depth under git's own pathspec
       # rules, which this scoping can't safely narrow, so it falls back to
       # checking every .gitignore in that case (the original, safe behavior).
+      # An empty GUARD_DIR means "unscoped" — flag every changed .gitignore in
+      # the repo. That is the SAFE direction (over-flagging, never missing),
+      # so every form this scoping cannot reason about normalizes to it.
+      # './tests/*' is a pathspec git accepts, but `git diff --name-only` and
+      # `ls-files --others` both report repo-relative paths ('tests/.gitignore'),
+      # so a raw './tests' prefix matches neither direction of the comparison
+      # below and silently disables the check entirely — the exact attack it
+      # exists to catch (a tests/.gitignore hiding a new tests/conftest.py from
+      # --exclude-standard) would sail through as a clean pass. Strip the
+      # leading './' so it compares against what git actually prints, and treat
+      # leading pathspec magic (':(glob)', ':!', ...) as unscopable.
       case "$ORACLE_GUARD" in
-        */*) GUARD_DIR="${ORACLE_GUARD%/*}" ;;
+        :*)  GUARD_DIR="" ;;
+        */*) GUARD_DIR="${ORACLE_GUARD%/*}"
+             while [ "$GUARD_DIR" != "${GUARD_DIR#./}" ]; do GUARD_DIR="${GUARD_DIR#./}"; done
+             [ "$GUARD_DIR" = "." ] && GUARD_DIR=""
+             ;;
         *)   GUARD_DIR="" ;;
       esac
       IGNORE_FILES_CHANGED=""
