@@ -176,6 +176,55 @@ ${other#"$ROOT"/} differs from ${first#"$ROOT"/}"
   report "consistency/audit-log.sh" "$consistent" "$detail"
 fi
 
+# Recon skills cross-contract consistency: recon-verify, recon-execute, and recon-spec
+# define specific literal outputs (status: PASS, status: FAIL, status: SKIPPED, grader: independent)
+# that each skill gates on. If any literal drifts (e.g. typo'd as "status: PASSED"), the
+# gates silently no-op and the skills break. This check verifies every contract literal is
+# still in place across all three files. Literals appear inline in prose (5 of 6) or in
+# fenced code blocks (1 of 6), so anchoring must match both forms.
+recon_literals_check() {
+  local verify="$ROOT/plugins/recon/skills/recon-verify/SKILL.md"
+  local execute="$ROOT/plugins/recon/skills/recon-execute/SKILL.md"
+  local spec="$ROOT/plugins/recon/skills/recon-spec/SKILL.md"
+  local ok=1 detail=""
+
+  # All three files must exist
+  for file in "$verify" "$execute" "$spec"; do
+    if [ ! -f "$file" ]; then
+      ok=0
+      detail="$detail
+missing $file"
+    fi
+  done
+
+  if [ "$ok" = 1 ]; then
+    # Check each literal contract. Anchoring pattern: '(^|`)literal(`|$)'
+    # matches both fenced code blocks (on their own line) and inline code spans.
+
+    # recon-verify: status: PASS, status: FAIL, grader: independent
+    grep -qE '(^|`)status: PASS(`|$)' "$verify" || { ok=0; detail="$detail
+${verify#"$ROOT"/}: missing status: PASS"; }
+    grep -qE '(^|`)status: FAIL(`|$)' "$verify" || { ok=0; detail="$detail
+${verify#"$ROOT"/}: missing status: FAIL"; }
+    grep -qE '(^|`)grader: independent(`|$)' "$verify" || { ok=0; detail="$detail
+${verify#"$ROOT"/}: missing grader: independent"; }
+
+    # recon-execute: status: PASS (gate check), grader: independent
+    grep -qE '(^|`)status: PASS(`|$)' "$execute" || { ok=0; detail="$detail
+${execute#"$ROOT"/}: missing status: PASS"; }
+    grep -qE '(^|`)grader: independent(`|$)' "$execute" || { ok=0; detail="$detail
+${execute#"$ROOT"/}: missing grader: independent"; }
+
+    # recon-spec: status: SKIPPED
+    grep -qE '(^|`)status: SKIPPED(`|$)' "$spec" || { ok=0; detail="$detail
+${spec#"$ROOT"/}: missing status: SKIPPED"; }
+  fi
+
+  report "consistency/recon-literals" "$ok" "$detail"
+}
+
+recon_literals_check
+
 # Seatbelt is last-match-wins, so deny-credentials.sbpl.in's worktrees/modules
 # chain is ordered, not just present: deny the subtrees, re-allow only this
 # dispatch's own gitdir, then re-deny the pointer files inside that reallow.
@@ -288,6 +337,24 @@ if [ -x "$imps_worktree_shape" ]; then
   fi
 else
   skip "imps/tests/worktree-shape.sh" "missing or not executable: $imps_worktree_shape"
+fi
+
+# Same visibility invariant, and the same "no macOS sandbox needed" shape as
+# worktree-shape.sh above: this exercises sandbox-wrap.sh's own pure logic
+# (SBPL render, ENV_PASS/sh_args construction, SANDBOX_MODE/bypass dispatch,
+# metachar rejection) via stubbed uname/safehouse, never a real sandbox
+# apply — runs unconditionally, including on ubuntu-latest CI.
+imps_sandbox_wrap_shape="$ROOT/plugins/imps/tests/sandbox-wrap-shape.sh"
+if [ -x "$imps_sandbox_wrap_shape" ]; then
+  sandbox_wrap_shape_out="$(bash "$imps_sandbox_wrap_shape" 2>&1)"
+  sandbox_wrap_shape_rc=$?
+  if [ "$sandbox_wrap_shape_rc" -eq 0 ]; then
+    report "imps/tests/sandbox-wrap-shape.sh" 1
+  else
+    report "imps/tests/sandbox-wrap-shape.sh" 0 "$sandbox_wrap_shape_out"
+  fi
+else
+  skip "imps/tests/sandbox-wrap-shape.sh" "missing or not executable: $imps_sandbox_wrap_shape"
 fi
 
 echo "---"
