@@ -180,9 +180,11 @@ expect_deny "gitmeta-objects-alternates-write-denied" "echo x >> '$GITMETA/objec
 # covers that shape, not just the non-worktree case the rest of this script
 # uses for everything else.
 LINKED_WT="$(mktemp -d "$TMP_CANON/imps-smoke-linked.XXXXXX")" && rmdir "$LINKED_WT"
-if git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
-     commit -q --allow-empty -m "imps-smoke root commit" >/dev/null 2>&1 \
-   && git -C "$WT" worktree add -q "$LINKED_WT" -b imps-smoke-linked >/dev/null 2>&1; then
+setup_errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
+if { git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
+       commit -q --allow-empty -m "imps-smoke root commit"
+     git -C "$WT" worktree add -q "$LINKED_WT" -b imps-smoke-linked
+   } >/dev/null 2>"$setup_errfile"; then
   LINKED_GITDIR="$(git -C "$LINKED_WT" rev-parse --git-dir)"
   case "$LINKED_GITDIR" in
     /*) : ;;
@@ -199,9 +201,16 @@ if git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
   git -C "$WT" worktree remove --force "$LINKED_WT" >/dev/null 2>&1
   rm -rf "$LINKED_WT"
 else
-  note "gitmeta-linked-worktree-config-denied: could not set up a linked worktree — skipped, NOT counted as a pass"
+  # Unlike the credential-path skips below, this setup (an empty commit and a
+  # `git worktree add`, both against a repo this script just created) is
+  # entirely under this script's own control — a failure here is a defect in
+  # the script, not evidence the target is absent, so it counts as a failed
+  # assertion (with the actual error surfaced) rather than a silent skip that
+  # would otherwise let the whole assertion go vacuously missing.
+  assert "gitmeta-linked-worktree-config-denied" 0 "could not set up a linked worktree: $(cat "$setup_errfile")"
   rm -rf "$LINKED_WT"
 fi
+rm -f "$setup_errfile"
 
 # One probe per path denied by sandbox/deny-credentials.sbpl.in. `cat || ls` is
 # the union of "content readable" and "metadata readable" — the profile denies

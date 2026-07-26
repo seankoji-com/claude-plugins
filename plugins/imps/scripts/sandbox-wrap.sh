@@ -158,6 +158,34 @@ esac
 case "$GITMETA" in
   *'"'*|*'\'*|*'&'*|*':'*) die "--gitmeta contains a quote, backslash, ampersand, or colon — cannot build a safe sandbox profile" ;;
 esac
+
+# For a linked worktree — the shape every real dispatch uses — git reads
+# config.worktree from the PER-WORKTREE gitdir (<gitmeta>/worktrees/<name>/),
+# not from $GITMETA's own root; deny-credentials.sbpl.in's literal rule for
+# $GITMETA/config.worktree never covers it. Computed here (not passed in by
+# the caller) since $WORKTREE already resolves it via plain git plumbing.
+# A first attempt at covering this used an SBPL `(regex ...)` rule with the
+# path ERE-escaped in bash first — verified live to fail open: escaping with
+# one `sed` and then interpolating that already-escaped, backslash-laden
+# value through ANOTHER `sed` substitution below stripped the backslashes
+# right back out again (BSD sed's replacement-text handling), silently
+# re-unescaping metacharacters like `+`, `(`, `)` in the rendered profile. A
+# `literal` rule for the one exact path this dispatch actually uses has no
+# such failure mode: no regex semantics, nothing to escape, nothing for a
+# second sed pass to corrupt.
+REAL_GITDIR="$(git -C "$WORKTREE" rev-parse --git-dir 2>/dev/null)" || REAL_GITDIR=""
+if [ -n "$REAL_GITDIR" ]; then
+  case "$REAL_GITDIR" in /*) ;; *) REAL_GITDIR="$WORKTREE/$REAL_GITDIR" ;; esac
+  REAL_GITDIR="$(canon "$REAL_GITDIR")" || REAL_GITDIR=""
+fi
+case "$REAL_GITDIR" in
+  *'"'*|*'\'*|*'&'*|*':'*) die "resolved worktree gitdir contains a quote, backslash, ampersand, or colon — cannot build a safe sandbox profile" ;;
+esac
+# Empty (couldn't resolve, e.g. --worktree isn't actually a git worktree by
+# the time this runs) renders as a literal "@REAL_GITDIR@/config.worktree" in
+# the profile — a path that can never exist on a real filesystem, so the rule
+# becomes an inert no-op rather than an accidental match on something real.
+[ -n "$REAL_GITDIR" ] || REAL_GITDIR="@REAL_GITDIR@"
 # Not interpolated via sed, but still joined with `:` into --add-dirs below —
 # a colon in either would silently mis-grant a different path than intended.
 case "$WORKTREE" in
@@ -173,7 +201,8 @@ esac
 # `deny file-write*` for every --append-profile path, so the sandboxed process
 # cannot rewrite its own policy.
 DENY_PROFILE="$(mktemp "$DATADIR/imps-deny-profile.XXXXXX")" || die "cannot create deny profile in $DATADIR"
-sed -e "s|@HOME@|$HOME_CANON|g" -e "s|@GITMETA@|$GITMETA|g" "$DENY_TEMPLATE" >"$DENY_PROFILE" \
+sed -e "s|@HOME@|$HOME_CANON|g" -e "s|@GITMETA@|$GITMETA|g" -e "s|@REAL_GITDIR@|$REAL_GITDIR|g" \
+  "$DENY_TEMPLATE" >"$DENY_PROFILE" \
   || die "cannot render deny profile"
 
 # Read-only extras. Without .gitconfig/.gitignore_global, git inside the sandbox

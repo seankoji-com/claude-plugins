@@ -217,7 +217,10 @@ abort() { # abort <slug> <message...>
 # sandbox-wrap.sh's own `exec "$SAFEHOUSE_BIN" ...` preserves that PID across
 # the exec, so a TERM sent here reaches the actual process, not an
 # already-gone wrapper shell.
-run_with_timeout() { # run_with_timeout <seconds> -- <cmd...>
+# run_with_timeout <seconds> <cmd...> — the doc'd "-- <cmd...>" form was never
+# actually implemented (neither call site below passes "--", and this
+# function never checks for or strips one); corrected to match reality.
+run_with_timeout() {
   local secs="$1"; shift
   # `kill -TERM "$pid"` alone reaches only that one process — demonstrated:
   # the oracle's/model's own child processes (opencode's shell children, a
@@ -269,13 +272,22 @@ run_with_timeout() { # run_with_timeout <seconds> -- <cmd...>
   # by either this or the TERM above) the window before the caller's next
   # unsandboxed git command runs.
   kill -KILL "-$pid" 2>/dev/null
-  # The sentinel now means "the watchdog decided to kill", not "the watchdog's
-  # kill is why the process died": a child that exits 0 at exactly $secs can
-  # have the watchdog write the sentinel (now the first statement) before its
-  # own `kill -TERM` no-ops on an already-dead pid. Require rc != 0 too, or a
-  # clean on-time exit gets reported as a false 124 (oracle_timeout on a green
-  # oracle: no commit, no retry, work discarded).
-  if [ "$rc" -ne 0 ] && [ -n "$timed_out_flag" ] && [ -s "$timed_out_flag" ]; then
+  # The sentinel alone can't distinguish "the watchdog fired" from "the
+  # watchdog's kill is why the process died" — a child that exits on its own
+  # at ~T=secs races the watchdog's own sleep(secs) waking at the same instant.
+  # `rc != 0` alone is NOT enough: verified live, it still misreports 124 on a
+  # child whose OWN unrelated non-zero exit (e.g. a real oracle failure, rc=1)
+  # happens to land near the same boundary — and reordering the sentinel
+  # before the kill (above) made this MORE likely, not less, because the flag
+  # now gets written before the watchdog's kill has to actually race anything.
+  # That case is the damaging one: a real oracle failure reported as
+  # oracle_timeout is terminal (no retry), where a real rc=1 would correctly
+  # retry with the failure fed back to the model. What `rc` CAN tell us,
+  # unambiguously, is whether the process died BY SIGNAL: a natural exit
+  # (whatever its code) is never 128+n for the TERM/KILL this watchdog sends,
+  # so gate on the specific signal-death codes instead of any nonzero rc.
+  if [ -n "$timed_out_flag" ] && [ -s "$timed_out_flag" ] \
+     && { [ "$rc" -eq 143 ] || [ "$rc" -eq 137 ]; }; then
     rm -f "$timed_out_flag"
     return 124
   fi
@@ -336,6 +348,18 @@ OPENCODE_BIN="$(command -v opencode 2>/dev/null)"
 
 WT="$(cd "$WT" 2>/dev/null && pwd -P)" || abort bad_arguments "--worktree is not a directory"
 git -C "$WT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || abort bad_arguments "--worktree is not a git worktree: $WT"
+# Every contract this harness relies on (the gitmeta-pointer snapshot below,
+# the sandbox's own worktrees/*/config.worktree deny) is written against a
+# LINKED worktree specifically — "the shape every real dispatch uses" — and
+# was never actually enforced: a MAIN worktree (.git is a directory, not the
+# linked-worktree redirect file) satisfies --is-inside-work-tree above just as
+# well, but for it $REAL_GITDIR == $GITMETA exactly (not a subpath), so the
+# case match below that populates GITMETA_POINTER_PATHS never fires and the
+# snapshot degenerates to a single constant "MISSING" line for the whole run —
+# verified live. Refuse that shape outright rather than silently run with the
+# load-bearing check disabled.
+[ -f "$WT/.git" ] || abort bad_arguments \
+  "--worktree must be a LINKED worktree (a '.git' FILE pointing at the shared gitdir, not a main worktree's '.git' directory): $WT"
 
 resolve_gitpath() { # resolve_gitpath <git rev-parse flag>
   local p
@@ -602,7 +626,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     # means nothing if the model instead redirected $WT/.git to a fake gitdir
     # of its own — this snapshot comparison is what actually closes that.
     if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
-      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect)"
+      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect; note this can also fire benignly if something else ran git config against this repo's shared gitmeta concurrently with this dispatch)"
     fi
 
     # Surface, don't silently swallow: did the model's own edits touch the
@@ -624,18 +648,37 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
       # tests/conftest.py emptying the collected item list turns the oracle
       # green while this diff stays empty, and the run is reported as a clean
       # pass. `ls-files --others` is the untracked half of the same question.
-      # NOT `--exclude-standard`: ignore rules (.gitignore et al.) are
-      # attacker-controlled input inside the model's own worktree — verified
-      # live that a 2-file attack (write tests/conftest.py, then add its name
-      # to the repo-root .gitignore) makes `ls-files --others --exclude-standard`
-      # report nothing, defeating this exact guard. A fixed, harness-owned
-      # junk filter instead — narrow enough that it also stops ordinary pytest
-      # byproducts (__pycache__/*.pyc) from false-positiving this guard on any
-      # machine without a global ignore covering them.
+      #
+      # A prior version of this fix dropped `--exclude-standard` on the theory
+      # that ignore rules are unconditionally attacker-controlled, replacing it
+      # with a fixed junk-name filter — that traded the bypass for a WORSE one
+      # (verified live): the filter is itself an allowlist for the attacker
+      # (e.g. a crafted tests/node_modules/<pkg>/... shadowing the module under
+      # test via ordinary Node resolution, stripped by the node_modules/ filter
+      # entry) and it only recognises Python/Node byproducts, false-positiving
+      # this guard on ordinary ignored artifacts in any other stack (Rust, Go,
+      # even a stray macOS .DS_Store) that were never touched during dispatch.
+      #
+      # The actual distinction that matters isn't "does an ignore rule exist"
+      # (pre-existing rules the operator wrote are trustworthy — they're what
+      # `worktree_dirty` above already verified the tree against) but "did the
+      # MODEL change what's ignored during this dispatch". That's cheap to
+      # check directly: refuse if any .gitignore, tracked or newly-created
+      # untracked, differs from $BASE_SHA. $GITMETA/info/exclude is already
+      # sandbox-denied and core.excludesFile lives in the read-only
+      # ~/.gitconfig, so once .gitignore itself is verified unchanged, every
+      # remaining ignore-rule source is outside the model's reach and
+      # `--exclude-standard` is trustworthy again.
+      IGNORE_FILES_CHANGED="$( { git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" 2>/dev/null
+                                  git -C "$WT" -c core.fsmonitor=false ls-files --others 2>/dev/null
+                                } | grep -E '(^|/)\.gitignore$' | sort -u | tr '\n' ' ')"
+      IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED% }"
+      if [ -n "$IGNORE_FILES_CHANGED" ]; then
+        abort oracle_guard_violated "model modified or added .gitignore file(s) during dispatch, not counted as a pass: $IGNORE_FILES_CHANGED"
+      fi
       ORACLE_FILES_MODIFIED="$( { git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" -- "$ORACLE_GUARD" 2>/dev/null
-                                  git -C "$WT" -c core.fsmonitor=false ls-files --others -- "$ORACLE_GUARD" 2>/dev/null
-                                } | grep -Ev '(^|/)(__pycache__|\.pytest_cache|\.mypy_cache|node_modules)/|\.pyc$' \
-                                  | sort -u | tr '\n' ' ')"
+                                  git -C "$WT" -c core.fsmonitor=false ls-files --others --exclude-standard -- "$ORACLE_GUARD" 2>/dev/null
+                                } | sort -u | tr '\n' ' ')"
       ORACLE_FILES_MODIFIED="${ORACLE_FILES_MODIFIED% }"
       if [ -n "$ORACLE_FILES_MODIFIED" ]; then
         abort oracle_guard_violated "model modified guarded oracle file(s), not counted as a pass: $ORACLE_FILES_MODIFIED"
@@ -651,7 +694,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     # Narrower, not zero: doesn't shrink to zero, since add/commit below are
     # themselves further unsandboxed git commands after this point.
     if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
-      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect)"
+      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect; note this can also fire benignly if something else ran git config against this repo's shared gitmeta concurrently with this dispatch)"
     fi
 
     # Commit deterministically — never delegate this to the model, which is
