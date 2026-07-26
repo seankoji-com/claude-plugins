@@ -33,16 +33,17 @@ assert() { # assert <name> <ok:0|1> [detail]
     fails=$((fails + 1))
   fi
 }
-assert_reason() { # assert_reason <name> <actual reason> <want reason> <raw output>
+assert_reason() { # assert_reason <name> <actual reason> <want reason> <raw output> <stderr>
   if [ "$2" = "$3" ]; then
     assert "$1" 1
   else
-    assert "$1" 0 "abort_reason=$2 (want $3) raw=$4"
+    assert "$1" 0 "abort_reason=$2 (want $3) raw=$4 stderr=$5"
   fi
 }
 
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT HUP INT TERM
+DISPATCH_ERR="$SCRATCH/dispatch-stderr"
 
 # A stub `opencode` on PATH so the script's own `command -v opencode` check
 # (which runs BEFORE the --worktree checks this script targets) doesn't abort
@@ -61,8 +62,14 @@ PROMPT_FILE="$SCRATCH/prompt.txt"
 echo "prompt" >"$PROMPT_FILE"
 
 run_dispatch() { # run_dispatch <worktree>
+  # stderr captured to a file (read by assert_reason on failure), not
+  # discarded: the JSON contract on stdout only carries `abort_reason`, a
+  # short slug — the actual message (via `log()`, which writes to stderr)
+  # is what's actually diagnosable when a case fails unexpectedly, e.g. a
+  # missing dependency or a syntax error the script never even reaches its
+  # own contract-emitting exit path for.
   PATH="$STUB_BIN:$PATH" HOME="$SCRATCH/home-$$" \
-    bash "$DISPATCH" --worktree "$1" --prompt-file "$PROMPT_FILE" --oracle true 2>/dev/null
+    bash "$DISPATCH" --worktree "$1" --prompt-file "$PROMPT_FILE" --oracle true 2>"$DISPATCH_ERR"
 }
 
 # --- Shape 1: a MAIN worktree (.git is a directory) ---------------------
@@ -71,7 +78,7 @@ git init -q "$main_wt"
 git -C "$main_wt" -c user.email=a@b -c user.name=a commit -q --allow-empty -m init
 out="$(run_dispatch "$main_wt")"
 reason="$(printf '%s' "$out" | jq -r '.abort_reason // "null"' 2>/dev/null)"
-assert_reason "main-worktree-rejected" "$reason" "bad_arguments" "$out"
+assert_reason "main-worktree-rejected" "$reason" "bad_arguments" "$out" "$(cat "$DISPATCH_ERR" 2>/dev/null)"
 
 # --- Shape 2: `git init --separate-git-dir` (a .git FILE, but its gitdir
 #     equals the common dir exactly — not a subpath — same as shape 1's
@@ -82,7 +89,7 @@ git init -q --separate-git-dir="$sgd_meta" "$sgd_wt"
 git -C "$sgd_wt" -c user.email=a@b -c user.name=a commit -q --allow-empty -m init
 out="$(run_dispatch "$sgd_wt")"
 reason="$(printf '%s' "$out" | jq -r '.abort_reason // "null"' 2>/dev/null)"
-assert_reason "separate-git-dir-rejected" "$reason" "bad_arguments" "$out"
+assert_reason "separate-git-dir-rejected" "$reason" "bad_arguments" "$out" "$(cat "$DISPATCH_ERR" 2>/dev/null)"
 
 # --- Shape 3: a submodule's working directory (also a .git FILE whose
 #     gitdir equals its own common dir, under the PARENT's .git/modules/) ---
@@ -96,7 +103,7 @@ git -C "$sub_parent" -c protocol.file.allow=always -c user.email=a@b -c user.nam
 git -C "$sub_parent" -c user.email=a@b -c user.name=a commit -q -m "add submodule" >/dev/null 2>&1
 out="$(run_dispatch "$sub_parent/kid")"
 reason="$(printf '%s' "$out" | jq -r '.abort_reason // "null"' 2>/dev/null)"
-assert_reason "submodule-rejected" "$reason" "bad_arguments" "$out"
+assert_reason "submodule-rejected" "$reason" "bad_arguments" "$out" "$(cat "$DISPATCH_ERR" 2>/dev/null)"
 
 # --- Positive control: a GENUINE linked worktree must clear this gate ------
 # (and then fail downstream for an entirely different, expected reason —
@@ -110,7 +117,7 @@ git -C "$lw_base" -c user.email=a@b -c user.name=a commit -q --allow-empty -m in
 git -C "$lw_base" worktree add -q "$lw_linked" -b worktree-shape-linked >/dev/null 2>&1
 out="$(run_dispatch "$lw_linked")"
 reason="$(printf '%s' "$out" | jq -r '.abort_reason // "null"' 2>/dev/null)"
-assert_reason "linked-worktree-passes-gate" "$reason" "auth_missing" "$out"
+assert_reason "linked-worktree-passes-gate" "$reason" "auth_missing" "$out" "$(cat "$DISPATCH_ERR" 2>/dev/null)"
 
 echo "---"
 if [ "$fails" -ne 0 ]; then

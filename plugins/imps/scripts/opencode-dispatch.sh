@@ -270,8 +270,14 @@ run_with_timeout() {
   # (not eliminating — a descendant that detached into its own session, per
   # the comment above, is outside this process group entirely and untouched
   # by either this or the TERM above) the window before the caller's next
-  # unsandboxed git command runs.
-  kill -KILL "-$pid" 2>/dev/null
+  # unsandboxed git command runs. `kill -0` first: PGIDs are reused by the
+  # kernel, so an unconditional `kill -KILL "-$pid"` here — well after `wait`
+  # returned, unlike the watchdog's own use of this same pattern immediately
+  # after sending TERM — has more time to land on a since-recycled, unrelated
+  # process group. The check-then-kill has its own inherent TOCTOU gap (a
+  # PGID could still be recycled between the two), but narrows the same class
+  # of risk this whole line is already just narrowing, not closing.
+  kill -0 "-$pid" 2>/dev/null && kill -KILL "-$pid" 2>/dev/null
   # The sentinel alone can't distinguish "the watchdog fired" from "the
   # watchdog's kill is why the process died" — a child that exits on its own
   # at ~T=secs races the watchdog's own sleep(secs) waking at the same instant.
@@ -299,11 +305,18 @@ run_with_timeout() {
 # its own __SOURCED__ guard: the unit-test harness (tests/run.sh) sources this
 # script with __SOURCED__=1 and calls exactly one function with exactly one
 # positional arg. run_with_timeout itself takes multiple positional args
-# (<seconds> <cmd...>), so this thin wrapper `eval`s a single, fixture-authored
-# command line (always repo-checked-in test content, never external input) and
-# reports the resulting exit code on stdout, fitting that one-arg convention
-# without changing run_with_timeout's own real call sites or signature.
-run_with_timeout_probe() { eval "run_with_timeout $1"; echo $?; }
+# (<seconds> <cmd...>), so this thin wrapper splits that one positional arg on
+# newlines into an array and passes it through as-is — no `eval`, no shell
+# re-parsing of fixture content, each line an opaque argument regardless of
+# any spaces or quote characters it contains. Fixture `arg` files are one
+# argument per line accordingly (see tests/fixtures/unit/imps/
+# opencode-dispatch.sh/run_with_timeout_probe/*/arg).
+run_with_timeout_probe() {
+  local -a args
+  mapfile -t args <<<"$1"
+  run_with_timeout "${args[@]}"
+  echo $?
+}
 if [ -n "${__SOURCED__:-}" ]; then
   # Unlike audit-log.sh's own __SOURCED__ guard (registers no traps before
   # its guard line), `trap on_exit EXIT` above already ran by the time
@@ -403,7 +416,15 @@ BASE_SHA="$(git -C "$WT" rev-parse HEAD 2>/dev/null)" || abort bad_arguments "ca
 # by misattributing already-dirty guarded files to the model. This v1's whole
 # purpose is an uncontaminated measurement — refuse rather than silently mix
 # pre-existing changes into the reported result.
-if [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
+#
+# -c core.fsmonitor=false: this is the one unsandboxed, index-reading git
+# command in this file that ran without it before this line was added — every
+# other one carries it as belt-and-braces (see the pointer-snapshot comment
+# below). This runs before THIS dispatch's own model turn, but $GITMETA is
+# shared and long-lived: an earlier dispatch, a sibling imp, or a stale
+# planted config from before this file's own denies existed could still fire
+# it at operator privilege here first.
+if [ -n "$(git -C "$WT" -c core.fsmonitor=false status --porcelain 2>/dev/null)" ]; then
   abort worktree_dirty "worktree has uncommitted changes before dispatch — commit or stash them first: $WT"
 fi
 
@@ -437,7 +458,7 @@ REAL_GITDIR="$(resolve_gitpath --git-dir)" || abort bad_arguments "cannot resolv
 # below to a single "$WT/.git: MISSING" line for the whole run. Assert the real
 # invariant here, where GITMETA is actually known, rather than trust the proxy.
 case "$REAL_GITDIR" in
-  "$GITMETA"/*) ;;
+  "$GITMETA"/*) : ;;  # OK — genuinely a linked worktree's own gitdir
   *) abort bad_arguments \
        "--worktree's gitdir ($REAL_GITDIR) is not a subdirectory of the shared common dir ($GITMETA) — got a main worktree, a --separate-git-dir repo, or a submodule, not a linked worktree of a normal repo" ;;
 esac
@@ -582,8 +603,21 @@ extract_cost() {
 
 # Direct invocation, not through a shell-function wrapper: run_with_timeout
 # needs $! to be the PID that execs into the real sandboxed process.
+#
+# --real-gitdir "$REAL_GITDIR": this is the value computed and validated ONCE,
+# above, before the model has ever run — never re-derived here from $WT/.git,
+# which is necessarily writable and gets rewritten by the model on attempt
+# 1 for every subsequent sandboxed call this function makes (the oracle run,
+# every retry's model turn). sandbox-wrap.sh re-resolving its own REAL_GITDIR
+# from $WT/.git on each call was verified live to be a full RCE: a model that
+# redirects .git to a sibling worktree's gitdir (or an unrelated repo
+# entirely) before the oracle run gets that gitdir's write access granted
+# INSIDE the sandbox on this very call, since sandbox-wrap.sh has no way to
+# know a redirect happened. Passing the pre-dispatch value explicitly on
+# every call closes that regardless of what $WT/.git says by the time this
+# runs.
 run_sandboxed_direct() {
-  bash "$WRAP" --worktree "$WT" --gitmeta "$GITMETA" --datadir "$DISPATCH_DIR" -- "$@"
+  bash "$WRAP" --worktree "$WT" --gitmeta "$GITMETA" --real-gitdir "$REAL_GITDIR" --datadir "$DISPATCH_DIR" -- "$@"
 }
 
 # Kept separately from $prompt so a retry can always re-supply full task
@@ -706,10 +740,53 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
       # ~/.gitconfig, so once .gitignore itself is verified unchanged, every
       # remaining ignore-rule source is outside the model's reach and
       # `--exclude-standard` is trustworthy again.
-      IGNORE_FILES_CHANGED="$( { git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" 2>/dev/null
-                                  git -C "$WT" -c core.fsmonitor=false ls-files --others 2>/dev/null
-                                } | grep -E '(^|/)\.gitignore$' | sort -u | tr '\n' ' ')"
-      IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED% }"
+      #
+      # Scoped to .gitignore files that could actually affect $ORACLE_GUARD's
+      # own pathspec — its own directory, every ancestor (parent .gitignore
+      # rules cascade down), everything beneath it, and the repo root (rules
+      # apply everywhere) — rather than every .gitignore anywhere in the
+      # repo. This is git's own directory-scoped .gitignore semantics, not an
+      # attacker-gameable allowlist: a .gitignore inside an unrelated sibling
+      # directory (e.g. node_modules/<pkg>/.gitignore, an ordinary dependency
+      # -install byproduct with no relation to this operator-chosen guard
+      # pathspec) structurally cannot affect files under a guard elsewhere in
+      # the tree, so flagging it would only ever be a false positive, never a
+      # missed attack. Only applied when $ORACLE_GUARD has an explicit
+      # directory prefix (the documented usage, e.g. 'tests/*') — a bare
+      # pattern with no "/" can match at any depth under git's own pathspec
+      # rules, which this scoping can't safely narrow, so it falls back to
+      # checking every .gitignore in that case (the original, safe behavior).
+      case "$ORACLE_GUARD" in
+        */*) GUARD_DIR="${ORACLE_GUARD%/*}" ;;
+        *)   GUARD_DIR="" ;;
+      esac
+      IGNORE_FILES_CHANGED=""
+      while IFS= read -r ign_f; do
+        [ -n "$ign_f" ] || continue
+        if [ -z "$GUARD_DIR" ]; then
+          IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f"
+          continue
+        fi
+        case "$ign_f" in
+          */.gitignore) ign_dir="${ign_f%/.gitignore}" ;;
+          .gitignore)   ign_dir="." ;;
+          *)            continue ;;
+        esac
+        if [ "$ign_dir" = "." ]; then
+          IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f"
+        else
+          case "$GUARD_DIR/" in
+            "$ign_dir/"*) IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f" ;;
+            *) case "$ign_dir/" in
+                 "$GUARD_DIR/"*) IGNORE_FILES_CHANGED="${IGNORE_FILES_CHANGED:+$IGNORE_FILES_CHANGED }$ign_f" ;;
+               esac ;;
+          esac
+        fi
+      done <<EOF_IGN
+$( { git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" 2>/dev/null
+     git -C "$WT" -c core.fsmonitor=false ls-files --others 2>/dev/null
+   } | grep -E '(^|/)\.gitignore$' | sort -u)
+EOF_IGN
       if [ -n "$IGNORE_FILES_CHANGED" ]; then
         abort oracle_guard_violated "model modified or added .gitignore file(s) during dispatch, not counted as a pass: $IGNORE_FILES_CHANGED"
       fi

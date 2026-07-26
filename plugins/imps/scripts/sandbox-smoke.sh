@@ -210,9 +210,13 @@ if { git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
   # mktemp failure) rather than the SBPL rule actually firing would otherwise
   # report this assertion green for the wrong reason — exactly the class of
   # bug that made an earlier round's fail-open regex invisible to this script.
+  # --real-gitdir "$LINKED_GITDIR": matches how opencode-dispatch.sh actually
+  # invokes sandbox-wrap.sh for a real dispatch (the pre-computed, trusted
+  # value, never re-derived from --worktree's own .git file — see
+  # sandbox-wrap.sh's own comment on REAL_GITDIR_ARG).
   errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
   marker="$LINKED_WT/.smoke-ok.$$"
-  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --datadir "$DATADIR" \
+  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --real-gitdir "$LINKED_GITDIR" --datadir "$DATADIR" \
        -- /bin/sh -c "touch '$marker' && echo x > '$LINKED_GITDIR/config.worktree'" \
        >/dev/null 2>"$errfile"; then
     assert "gitmeta-linked-worktree-config-denied" 0 "expected denial, command succeeded"
@@ -227,7 +231,7 @@ if { git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
   # — the actual RCE this round closed. --worktree stays LINKED_WT throughout;
   # only the target path (SIBLING_GITDIR, not LINKED_GITDIR) changes.
   sibling_marker="$LINKED_WT/.smoke-ok-sibling.$$"
-  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --datadir "$DATADIR" \
+  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --real-gitdir "$LINKED_GITDIR" --datadir "$DATADIR" \
        -- /bin/sh -c "touch '$sibling_marker' && echo x > '$SIBLING_GITDIR/config.worktree'" \
        >/dev/null 2>"$errfile"; then
     assert "gitmeta-sibling-worktree-config-denied" 0 "expected denial, command succeeded"
@@ -237,6 +241,39 @@ if { git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
     assert "gitmeta-sibling-worktree-config-denied" 0 "sandbox-wrap failed before reaching the probe (marker never created): $(cat "$errfile")"
   fi
   rm -f "$sibling_marker"
+
+  # The actual attack this round found: rewrite LINKED_WT/.git itself (a
+  # model-writable redirect file) to point at the SIBLING's gitdir instead —
+  # simulating a model doing this between the dispatch's own model-turn call
+  # and its next sandboxed call (the oracle run) — and prove that with
+  # --real-gitdir carrying the ORIGINAL, pre-redirect trusted value (exactly
+  # what opencode-dispatch.sh always passes, computed once before the model
+  # ever runs), the corrupted .git file is never consulted for this at all.
+  # Probes an ARBITRARY new filename in the sibling's gitdir root, not
+  # config.worktree specifically — verified live that config.worktree alone
+  # does NOT distinguish this fix from the prior self-deriving version, since
+  # the re-deny rule tracks whatever REAL_GITDIR resolves to either way
+  # (both the reallow and the re-deny would shift onto the sibling together
+  # if self-derivation followed the redirect, leaving config.worktree
+  # coincidentally still covered). An arbitrary filename has no such re-deny
+  # regardless of which gitdir it's under, so it isolates exactly what
+  # --real-gitdir changes: whether the ALLOW's scope can be moved by a
+  # model-written redirect at all. Verified live: identical probe against
+  # sandbox-wrap.sh WITHOUT --real-gitdir (self-derivation) succeeds.
+  real_git_backup="$(cat "$LINKED_WT/.git")"
+  printf 'gitdir: %s\n' "$SIBLING_GITDIR" >"$LINKED_WT/.git"
+  redirect_marker="$TMP_CANON/imps-smoke-redirect-ok.$$"
+  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --real-gitdir "$LINKED_GITDIR" --datadir "$DATADIR" \
+       -- /bin/sh -c "touch '$redirect_marker' && echo x > '$SIBLING_GITDIR/imps-smoke-arbitrary-probe'" \
+       >/dev/null 2>"$errfile"; then
+    assert "gitmeta-dotgit-redirect-does-not-grant-target" 0 "expected denial, command succeeded"
+  elif [ -e "$redirect_marker" ]; then
+    assert "gitmeta-dotgit-redirect-does-not-grant-target" 1
+  else
+    assert "gitmeta-dotgit-redirect-does-not-grant-target" 0 "sandbox-wrap failed before reaching the probe (marker never created): $(cat "$errfile")"
+  fi
+  rm -f "$redirect_marker" "$SIBLING_GITDIR/imps-smoke-arbitrary-probe"
+  printf '%s\n' "$real_git_backup" >"$LINKED_WT/.git"
 
   # The subtree-deny/reallow must not break ORDINARY use of this dispatch's
   # own gitdir — prove a ubiquitous, legitimate write (an index update via a
@@ -250,7 +287,7 @@ if { git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
   # access to the SSH-signing agent socket — without this override the
   # commit would fail on that, not on anything this assertion is testing.
   own_errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
-  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --datadir "$DATADIR" \
+  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --real-gitdir "$LINKED_GITDIR" --datadir "$DATADIR" \
        -- /bin/sh -c "cd '$LINKED_WT' && echo x > probe.txt \
          && git -c core.fsmonitor=false add probe.txt \
          && git -c user.email=a@b -c user.name=a -c core.fsmonitor=false -c commit.gpgsign=false commit -q -m probe" \
@@ -275,6 +312,7 @@ else
   # missing.
   assert "gitmeta-linked-worktree-config-denied" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
   assert "gitmeta-sibling-worktree-config-denied" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
+  assert "gitmeta-dotgit-redirect-does-not-grant-target" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
   assert "gitmeta-own-worktree-commit-still-allowed" 0 "could not set up linked worktrees: $(cat "$setup_errfile")"
   rm -rf "$LINKED_WT" "$SIBLING_WT"
 fi
