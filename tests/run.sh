@@ -290,6 +290,24 @@ else
   skip "imps/tests/worktree-shape.sh" "missing or not executable: $imps_worktree_shape"
 fi
 
+# Same visibility invariant, and the same "no macOS sandbox needed" shape as
+# worktree-shape.sh above: this exercises sandbox-wrap.sh's own pure logic
+# (SBPL render, ENV_PASS/sh_args construction, SANDBOX_MODE/bypass dispatch,
+# metachar rejection) via stubbed uname/safehouse, never a real sandbox
+# apply — runs unconditionally, including on ubuntu-latest CI.
+imps_sandbox_wrap_shape="$ROOT/plugins/imps/tests/sandbox-wrap-shape.sh"
+if [ -x "$imps_sandbox_wrap_shape" ]; then
+  sandbox_wrap_shape_out="$(bash "$imps_sandbox_wrap_shape" 2>&1)"
+  sandbox_wrap_shape_rc=$?
+  if [ "$sandbox_wrap_shape_rc" -eq 0 ]; then
+    report "imps/tests/sandbox-wrap-shape.sh" 1
+  else
+    report "imps/tests/sandbox-wrap-shape.sh" 0 "$sandbox_wrap_shape_out"
+  fi
+else
+  skip "imps/tests/sandbox-wrap-shape.sh" "missing or not executable: $imps_sandbox_wrap_shape"
+fi
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
