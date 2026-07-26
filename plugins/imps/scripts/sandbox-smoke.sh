@@ -21,6 +21,12 @@
 #      script executed at full, unsandboxed operator privilege the moment the
 #      harness's own commit runs (that commit is deliberately outside the
 #      sandbox). Verified as a real, working exploit during review.
+#   9. info/attributes and objects/info/alternates are unwritable too (same
+#      filter/attribute or object-redirect risk as assertion 8), and — set up
+#      via an actual `git worktree add`, since this is the shape every real
+#      dispatch uses — the PER-WORKTREE config.worktree under
+#      worktrees/<name>/ is unwritable, not just the non-worktree literal path
+#      assertion 8 already covers.
 #
 # Assertion group 7 is what backs the credential-isolation claim: the sandbox
 # gets a redirected XDG_DATA_HOME holding a copy of auth.json, and the original
@@ -164,6 +170,38 @@ expect_allow "git-status-ok"          "cd '$WT' && git status --porcelain"
 # the harness's own (deliberately unsandboxed) commit.
 expect_deny "gitmeta-hooks-write-denied"  "echo x > '$GITMETA/hooks/imps-probe'"
 expect_deny "gitmeta-config-write-denied" "echo x >> '$GITMETA/config'"
+mkdir -p "$GITMETA/info" "$GITMETA/objects/info" 2>/dev/null
+expect_deny "gitmeta-info-attributes-write-denied"   "echo x >> '$GITMETA/info/attributes'"
+expect_deny "gitmeta-objects-alternates-write-denied" "echo x >> '$GITMETA/objects/info/alternates'"
+
+# A real dispatch is always a linked worktree, where git reads config.worktree
+# from the PER-WORKTREE gitdir (worktrees/<name>/config.worktree), not the
+# plain literal path above — set one up to prove the regex deny actually
+# covers that shape, not just the non-worktree case the rest of this script
+# uses for everything else.
+LINKED_WT="$(mktemp -d "$TMP_CANON/imps-smoke-linked.XXXXXX")" && rmdir "$LINKED_WT"
+if git -C "$WT" -c user.email=imps-smoke@example.com -c user.name=imps-smoke \
+     commit -q --allow-empty -m "imps-smoke root commit" >/dev/null 2>&1 \
+   && git -C "$WT" worktree add -q "$LINKED_WT" -b imps-smoke-linked >/dev/null 2>&1; then
+  LINKED_GITDIR="$(git -C "$LINKED_WT" rev-parse --git-dir)"
+  case "$LINKED_GITDIR" in
+    /*) : ;;
+    *) LINKED_GITDIR="$LINKED_WT/$LINKED_GITDIR" ;;
+  esac
+  errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
+  if bash "$WRAP" --worktree "$LINKED_WT" --gitmeta "$GITMETA" --datadir "$DATADIR" \
+       -- /bin/sh -c "echo x > '$LINKED_GITDIR/config.worktree'" >/dev/null 2>"$errfile"; then
+    assert "gitmeta-linked-worktree-config-denied" 0 "expected denial, command succeeded"
+  else
+    assert "gitmeta-linked-worktree-config-denied" 1
+  fi
+  rm -f "$errfile"
+  git -C "$WT" worktree remove --force "$LINKED_WT" >/dev/null 2>&1
+  rm -rf "$LINKED_WT"
+else
+  note "gitmeta-linked-worktree-config-denied: could not set up a linked worktree — skipped, NOT counted as a pass"
+  rm -rf "$LINKED_WT"
+fi
 
 # One probe per path denied by sandbox/deny-credentials.sbpl.in. `cat || ls` is
 # the union of "content readable" and "metadata readable" — the profile denies

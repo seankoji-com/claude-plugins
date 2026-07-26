@@ -262,7 +262,20 @@ run_with_timeout() { # run_with_timeout <seconds> -- <cmd...>
   wait "$pid" 2>/dev/null || rc=$?
   kill "$watchdog" 2>/dev/null
   wait "$watchdog" 2>/dev/null
-  if [ -n "$timed_out_flag" ] && [ -s "$timed_out_flag" ]; then
+  # Best-effort cleanup, not a closed guarantee: force-kill anything still
+  # alive in the same process group now that `wait` has returned, narrowing
+  # (not eliminating — a descendant that detached into its own session, per
+  # the comment above, is outside this process group entirely and untouched
+  # by either this or the TERM above) the window before the caller's next
+  # unsandboxed git command runs.
+  kill -KILL "-$pid" 2>/dev/null
+  # The sentinel now means "the watchdog decided to kill", not "the watchdog's
+  # kill is why the process died": a child that exits 0 at exactly $secs can
+  # have the watchdog write the sentinel (now the first statement) before its
+  # own `kill -TERM` no-ops on an already-dead pid. Require rc != 0 too, or a
+  # clean on-time exit gets reported as a false 124 (oracle_timeout on a green
+  # oracle: no commit, no retry, work discarded).
+  if [ "$rc" -ne 0 ] && [ -n "$timed_out_flag" ] && [ -s "$timed_out_flag" ]; then
     rm -f "$timed_out_flag"
     return 124
   fi
@@ -368,7 +381,7 @@ fi
 # load-bearing check for the whole boundary; a real hash removes that class.
 REAL_GITDIR="$(resolve_gitpath --git-dir)" || abort bad_arguments "cannot resolve --git-dir for $WT"
 GITMETA_POINTER_PATHS=("$WT/.git")
-# config.worktree/config in the PER-WORKTREE gitdir, not just the common dir.
+# config.worktree in the PER-WORKTREE gitdir, not just the common dir.
 # deny-credentials.sbpl.in denies (literal "@GITMETA@/config.worktree"), but
 # @GITMETA@ is the git COMMON dir, and for a linked worktree — the shape every
 # real dispatch uses — git reads $GIT_DIR/config.worktree, i.e.
@@ -380,9 +393,16 @@ GITMETA_POINTER_PATHS=("$WT/.git")
 # filters. Snapshotting these bytes catches it regardless of
 # extensions.worktreeConfig, which is the only reason the deny list's gap is
 # not already exploitable everywhere.
+# NOTE: "$REAL_GITDIR/config" (the per-worktree gitdir's own "config" file) is
+# never consulted by git for a linked worktree in either worktreeConfig mode —
+# verified live — so it isn't snapshotted. "$GITMETA/config" (the COMMON dir's
+# config, the file git actually reads and the one deny-credentials.sbpl.in's
+# own header calls the load-bearing risk) was missing from this list entirely;
+# it's now included alongside the per-worktree config.worktree.
 case "$REAL_GITDIR" in
   "$GITMETA"/*) GITMETA_POINTER_PATHS+=("$REAL_GITDIR/commondir" "$REAL_GITDIR/gitdir" "$REAL_GITDIR/HEAD" \
-                                        "$REAL_GITDIR/config.worktree" "$REAL_GITDIR/config") ;;
+                                        "$REAL_GITDIR/config.worktree" \
+                                        "$GITMETA/config" "$GITMETA/config.worktree") ;;
 esac
 snapshot_gitmeta_pointers() {
   local p
@@ -604,13 +624,34 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
       # tests/conftest.py emptying the collected item list turns the oracle
       # green while this diff stays empty, and the run is reported as a clean
       # pass. `ls-files --others` is the untracked half of the same question.
+      # NOT `--exclude-standard`: ignore rules (.gitignore et al.) are
+      # attacker-controlled input inside the model's own worktree — verified
+      # live that a 2-file attack (write tests/conftest.py, then add its name
+      # to the repo-root .gitignore) makes `ls-files --others --exclude-standard`
+      # report nothing, defeating this exact guard. A fixed, harness-owned
+      # junk filter instead — narrow enough that it also stops ordinary pytest
+      # byproducts (__pycache__/*.pyc) from false-positiving this guard on any
+      # machine without a global ignore covering them.
       ORACLE_FILES_MODIFIED="$( { git -C "$WT" -c core.fsmonitor=false diff --name-only "$BASE_SHA" -- "$ORACLE_GUARD" 2>/dev/null
-                                  git -C "$WT" -c core.fsmonitor=false ls-files --others --exclude-standard -- "$ORACLE_GUARD" 2>/dev/null
-                                } | sort -u | tr '\n' ' ')"
+                                  git -C "$WT" -c core.fsmonitor=false ls-files --others -- "$ORACLE_GUARD" 2>/dev/null
+                                } | grep -Ev '(^|/)(__pycache__|\.pytest_cache|\.mypy_cache|node_modules)/|\.pyc$' \
+                                  | sort -u | tr '\n' ' ')"
       ORACLE_FILES_MODIFIED="${ORACLE_FILES_MODIFIED% }"
       if [ -n "$ORACLE_FILES_MODIFIED" ]; then
         abort oracle_guard_violated "model modified guarded oracle file(s), not counted as a pass: $ORACLE_FILES_MODIFIED"
       fi
+    fi
+
+    # Re-check the pointer snapshot immediately before the add/commit below,
+    # not just once at the top of this block: the oracle-guard diff just above
+    # is itself an unsandboxed, index-reading git command, and the comment at
+    # the top of run_with_timeout concedes `kill -TERM -"$pid"` can miss a
+    # descendant that detached into its own session — such a process has the
+    # whole span from the first snapshot check to here to land a redirect.
+    # Narrower, not zero: doesn't shrink to zero, since add/commit below are
+    # themselves further unsandboxed git commands after this point.
+    if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
+      abort gitmeta_tampered "worktree/gitmeta pointer files changed during dispatch — refusing to commit (possible sandbox-escape attempt via a .git redirect)"
     fi
 
     # Commit deterministically — never delegate this to the model, which is
