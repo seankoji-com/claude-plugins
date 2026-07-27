@@ -346,6 +346,13 @@ run_with_timeout_probe() {
   run_with_timeout "${args[@]+"${args[@]}"}"
   echo "$?"
 }
+resolve_model_alias() {
+  case "$1" in
+    cheap)   echo "opencode-go/deepseek-v4-flash" ;;
+    default) echo "opencode-go/qwen3.7-max" ;;
+    *)       echo "$1" ;;
+  esac
+}
 if [ -n "${__SOURCED__:-}" ]; then
   # Unlike audit-log.sh's own __SOURCED__ guard (registers no traps before
   # its guard line), `trap on_exit EXIT` above already ran by the time
@@ -396,6 +403,7 @@ case "$ORACLE_TIMEOUT" in ''|0|*[!0-9]*) abort bad_arguments "--oracle-timeout m
 # openrouter/anthropic/claude-sonnet-4` sails past a prefix check and bills a
 # Claude model through opencode — the exact ToS anti-goal this tier exists to
 # avoid. Allowlist the known-good providers, then re-check the whole string.
+MODEL="$(resolve_model_alias "$MODEL")"
 case "$MODEL" in
   opencode-go/*|opencode/*) ;;
   *) abort model_rejected "model '$MODEL' is not on the provider allowlist (opencode-go/*, opencode/*)" ;;
@@ -675,8 +683,18 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   oc_args+=("$prompt")
 
   log "attempt $attempt/$MAX_ATTEMPTS — model=$MODEL (timeout ${ATTEMPT_TIMEOUT}s)"
-  run_with_timeout "$ATTEMPT_TIMEOUT" run_sandboxed_direct "${oc_args[@]}" | tee -a "$LOG_PATH" >&2
-  oc_rc="${PIPESTATUS[0]}"
+  # Append directly to a regular file, not `| tee`. Live-verified 2026-07-27:
+  # piping this call's stdout to `tee` makes it the write end of a pipe
+  # inherited across run_with_timeout's `set -m` + `&` backgrounding into the
+  # sandbox-exec boundary — and something about that specific fd's lineage
+  # makes Bun's internal color-detection code crash with `EPERM: operation
+  # not permitted, fstat` while formatting an unrelated startup error,
+  # intermittently but on 9+ consecutive real attempts in one session. The
+  # oracle call two blocks below already redirects straight to a file with no
+  # such failures; this now matches it. Trade-off: no more live echo to
+  # stderr while a dispatch runs — read $LOG_PATH (or tail -f it) instead.
+  run_with_timeout "$ATTEMPT_TIMEOUT" run_sandboxed_direct "${oc_args[@]}" >>"$LOG_PATH" 2>&1
+  oc_rc=$?
   if [ "$oc_rc" -eq 124 ]; then
     log "attempt $attempt timed out after ${ATTEMPT_TIMEOUT}s"
   fi
