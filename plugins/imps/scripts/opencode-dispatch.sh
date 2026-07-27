@@ -346,6 +346,13 @@ run_with_timeout_probe() {
   run_with_timeout "${args[@]+"${args[@]}"}"
   echo "$?"
 }
+resolve_model_alias() {
+  case "$1" in
+    cheap)   echo "opencode-go/deepseek-v4-flash" ;;
+    default) echo "opencode-go/qwen3.7-max" ;;
+    *)       echo "$1" ;;
+  esac
+}
 if [ -n "${__SOURCED__:-}" ]; then
   # Unlike audit-log.sh's own __SOURCED__ guard (registers no traps before
   # its guard line), `trap on_exit EXIT` above already ran by the time
@@ -396,6 +403,7 @@ case "$ORACLE_TIMEOUT" in ''|0|*[!0-9]*) abort bad_arguments "--oracle-timeout m
 # openrouter/anthropic/claude-sonnet-4` sails past a prefix check and bills a
 # Claude model through opencode — the exact ToS anti-goal this tier exists to
 # avoid. Allowlist the known-good providers, then re-check the whole string.
+MODEL="$(resolve_model_alias "$MODEL")"
 case "$MODEL" in
   opencode-go/*|opencode/*) ;;
   *) abort model_rejected "model '$MODEL' is not on the provider allowlist (opencode-go/*, opencode/*)" ;;
