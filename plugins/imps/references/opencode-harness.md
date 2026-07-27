@@ -468,11 +468,12 @@ task-shaped prompt without it counting toward the go/no-go number, redirect
 
 | # | Task | Model | First-pass? | Attempts | Cost (USD) | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | | | | | | |
-| 2 | | | | | | |
-| 3 | | | | | | |
-| 4 | | | | | | |
-| 5 | | | | | | |
+| 1 | Replace hand-rolled `.gitignore`-scope `case` matching in `opencode-dispatch.sh`'s `--oracle-guard` handling with `git check-ignore` (issue #98 item 2) | `opencode-go/qwen3.7-max` | No | 1 | 0.028324 | Model never edited the target file — spent the full 300s attempt-timeout reading an unrelated file, then the attempt timed out. Oracle trivially passed (nothing changed, so nothing regressed), but the harness's `commit_failed` path correctly refused to count it: nothing was staged, so nothing was committed. A pure-refactor oracle can't itself distinguish "did nothing" from "refactored correctly" — this is exactly why the harness treats an oracle-pass-with-no-commit as a fail rather than trusting the oracle alone. |
+| 2 | Move `run_with_timeout_probe` + its `__SOURCED__` test-only guard out of `opencode-dispatch.sh` into a new sourced helper file (issue #98 item 4) | `opencode-go/qwen3.7-max` | Yes | 1 | 0.020679875 | Genuine first-pass: model ran `tests/run.sh` itself mid-turn, saw 4 failures, diagnosed a real bash nested-`source`/`return` subtlety the task prompt hadn't spelled out (the guard has to exist in both the new helper file and the still-sourcing production script), fixed it, and reran clean before the harness's own oracle check ran. |
+
+Both routed from a clean `origin/master` worktree, `--oracle 'bash tests/run.sh'` (the repo's full behavioral+unit suite), `--oracle-guard 'tests/*'`. 2 of the required ≥5 — **short of the protocol's own sample-size floor, not a completed round.** No go/no-go verdict is drawn from 2 tasks; collect at least 3 more before applying the rule below.
+
+**Excluded from this table:** four earlier `tier:"opencode"` entries in `~/.claude/audit.jsonl` from 2026-07-25 (project `imps-headimp-fixes`, model `opencode-go/deepseek-v4-flash`, all within an 11-minute span: 3 failed, 1 passed first-try). Real dispatches, not `e2e.sh` fixture runs — but same project, same model, tightly clustered, with no record of them being 4 distinct hand-chosen mechanical tasks rather than harness-development testing during PR #95/#97. Also `deepseek-v4-flash` is the documented cost floor, not the protocol's default model. Left out of the rate calculation rather than silently folded in; if you can attribute them to real distinct tasks, they belong here too.
 
 **Go/no-go, stated plainly:**
 
@@ -480,4 +481,4 @@ task-shaped prompt without it counting toward the go/no-go number, redirect
 - **<40% → stop.** The tier is not worth the harness.
 - In between: collect more tasks before deciding.
 
-*No field data has been collected yet.*
+*2 real tasks recorded (2026-07-27), both on `qwen3.7-max`: 1/2 first-pass. Below the ≥5-task floor this protocol requires — collect at least 3 more real mechanical tasks before treating any percentage here as a decision.*
