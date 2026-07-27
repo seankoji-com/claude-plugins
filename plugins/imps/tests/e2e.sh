@@ -82,10 +82,27 @@ TMP_CANON="$(cd "${TMPDIR:-/tmp}" && pwd -P)" || exit 1
 WT="$(mktemp -d "$TMP_CANON/imps-e2e-wt.XXXXXX")" || exit 1
 rmdir "$WT" || exit 1
 BRANCH="imps-e2e-fixture-$$"
+RESULT_BRANCH="imps-e2e-result-$$"
+# Snapshot the durability namespace BEFORE dispatch. The harness now writes
+# refs/imps/dispatch/<ts>-<sha> unconditionally on every successful commit, so
+# without this the E2E leaks one permanent ref into the maintainer's real repo
+# per run. Diffing before/after is what makes cleanup exact — deleting the
+# whole namespace would destroy refs from real dispatches, which is precisely
+# the work this ref exists to protect.
+PRE_DISPATCH_REFS="$(git -C "$BASE" for-each-ref --format='%(refname)' 'refs/imps/dispatch/*' 2>/dev/null)"
 cleanup() {
   if [ "${IMPS_KEEP_E2E_WORKTREE:-}" = "1" ]; then return; fi
   git -C "$BASE" worktree remove --force "$WT" >/dev/null 2>&1
   git -C "$BASE" branch -D "$BRANCH" >/dev/null 2>&1
+  git -C "$BASE" branch -D "$RESULT_BRANCH" >/dev/null 2>&1
+  local ref
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    printf '%s\n' "$PRE_DISPATCH_REFS" | grep -qxF "$ref" && continue
+    git -C "$BASE" update-ref -d "$ref" >/dev/null 2>&1
+  done <<EOF
+$(git -C "$BASE" for-each-ref --format='%(refname)' 'refs/imps/dispatch/*' 2>/dev/null)
+EOF
 }
 trap cleanup EXIT
 
@@ -137,6 +154,8 @@ out="$(AUDIT_LOG_FILE="$TMP_CANON/imps-e2e-audit.jsonl" bash "$DISPATCH" \
         --max-attempts "${IMPS_OPENCODE_E2E_ATTEMPTS:-3}" \
         --attempt-timeout "${IMPS_OPENCODE_E2E_ATTEMPT_TIMEOUT:-90}" \
         --oracle-timeout "${IMPS_OPENCODE_E2E_ORACLE_TIMEOUT:-60}" \
+        --expect-oracle red \
+        --result-branch "$RESULT_BRANCH" \
         --oracle-guard '*test*' 2>"$err")"
 dispatch_rc=$?
 sed 's/^/  | /' "$err" >&2
@@ -154,7 +173,8 @@ fi
 has_keys="$(printf '%s' "$CONTRACT" | jq -r '
   [has("status"), has("attempts"), has("session_id"), has("cost_usd"),
    has("oracle_exit"), has("log_path"), has("abort_reason"),
-   has("oracle_files_modified")] | all' 2>/dev/null)"
+   has("oracle_files_modified"), has("commit_sha"),
+   has("oracle_start_state")] | all' 2>/dev/null)"
 assert "contract-has-all-keys" "$([ "$has_keys" = "true" ] && echo 1 || echo 0)" "$CONTRACT"
 
 # Exactly one contract line, always — a second would break every consumer.
@@ -165,6 +185,44 @@ status="$(printf '%s' "$CONTRACT" | jq -r '.status // ""' 2>/dev/null)"
 assert "status-pass" "$([ "$status" = "pass" ] && echo 1 || echo 0)" "status=$status (exit $dispatch_rc)"
 
 assert "exit-zero-on-pass" "$([ "$dispatch_rc" -eq 0 ] && echo 1 || echo 0)" "dispatch exited $dispatch_rc"
+
+# --- 3b. the two new trust/durability fields --------------------------------
+# `has()` above only proves the KEYS exist; a field that is null on every run
+# would satisfy it forever. These check the values, and only on a pass — on a
+# failure both are legitimately null.
+oracle_start_state="$(printf '%s' "$CONTRACT" | jq -r '.oracle_start_state // "null"' 2>/dev/null)"
+commit_sha="$(printf '%s' "$CONTRACT" | jq -r '.commit_sha // "null"' 2>/dev/null)"
+
+# Deliberately NOT a replacement for the independent `fixture-starts-red` probe
+# above: that one runs the oracle directly, this one reads what the harness
+# measured through its own sandboxed preflight. Two independent measurements of
+# one fact is the entire point — they can only agree if both are honest, and a
+# preflight that fabricated a state (e.g. classifying a timeout as red) shows up
+# here as a disagreement rather than as a plausible-looking value.
+if [ "$baseline_rc" -ne 0 ]; then
+  assert "oracle-start-state-agrees-with-independent-probe" \
+    "$([ "$oracle_start_state" = "red" ] && echo 1 || echo 0)" \
+    "independent probe says red (rc=$baseline_rc) but the harness reported oracle_start_state=$oracle_start_state"
+else
+  assert "oracle-start-state-agrees-with-independent-probe" \
+    "$([ "$oracle_start_state" = "green" ] && echo 1 || echo 0)" \
+    "independent probe says green but the harness reported oracle_start_state=$oracle_start_state"
+fi
+
+if [ "$status" = "pass" ]; then
+  assert "commit-sha-populated-on-pass" \
+    "$([ "$commit_sha" != "null" ] && [ -n "$commit_sha" ] && echo 1 || echo 0)" \
+    "commit_sha=$commit_sha on a status:\"pass\" run"
+  # The durability claim, end to end: the ref the harness minted must exist in
+  # the real repo and point at the commit it reported.
+  auto_ref="$(git -C "$BASE" for-each-ref --format='%(refname) %(objectname)' 'refs/imps/dispatch/*' 2>/dev/null \
+              | grep -F " $commit_sha" | head -n 1 | cut -d' ' -f1)"
+  assert "durable-auto-ref-created" "$([ -n "$auto_ref" ] && echo 1 || echo 0)" \
+    "no refs/imps/dispatch/* ref points at $commit_sha"
+  assert "result-branch-created" \
+    "$([ "$(git -C "$BASE" rev-parse --verify -q "refs/heads/$RESULT_BRANCH" 2>/dev/null)" = "$commit_sha" ] && echo 1 || echo 0)" \
+    "refs/heads/$RESULT_BRANCH does not point at $commit_sha"
+fi
 
 # A genuine fix should never need to touch the fixture's own test file — if it
 # did, oracle_files_modified would be non-null here, which would mean the
