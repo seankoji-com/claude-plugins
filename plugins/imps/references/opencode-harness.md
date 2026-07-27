@@ -372,7 +372,67 @@ it does nothing at the OS level. `/usr/bin/curl`, `wget`, `nc`, or
 sandbox grants network egress by design. Egress is unrestricted in v1 — the denylist
 exists to stop an *accidental* `rm -rf *`/`git push`, not a deliberate one.
 
----
+### Known limitation: OpenCode Go's own rate limit surfaces as a generic error
+
+Live-verified 2026-07-27: hitting OpenCode Go's 5-hour usage cap mid-dispatch does
+**not** produce a distinct `abort_reason` — every attempt fails instantly with
+`opencode exited 1` and stderr `error: An unknown error occurred (Unexpected)`,
+indistinguishable at that layer from a real opencode/sandbox fault. The actual
+cause (`AI_APICallError: 5-hour usage limit reached. Resets in <N>`) only surfaces
+by running `opencode run` **unsandboxed**, directly, with `--print-logs --log-level
+DEBUG` — the sandboxed path swallows it. If a dispatch fails instantly on every
+attempt with this exact message and no `log_path` content, check the account's
+usage window (`https://opencode.ai/workspace/<id>/go`) before assuming the harness
+or the target repo is at fault — it cost real diagnosis time to tell the two apart
+during this measurement round. Not fixed in v1: the contract's `abort_reason` enum
+has no `rate_limited` value yet.
+
+### Known limitation: `run_with_timeout`'s stdout can make opencode crash on startup, and the crash is indistinguishable from a real oracle failure
+
+Live-verified 2026-07-27: every dispatch through the real `opencode-dispatch.sh`
+path (9+ attempts across two separate dispatch runs, including a trivial
+zero-edit task with `--oracle 'true'`) failed with an identical Bun crash at
+opencode startup, **before the model ever sees the task prompt**:
+
+```
+error: EPERM: operation not permitted, fstat
+      at new WriteStream (internal:fs/streams:244:58)
+      at refresh (internal:util/colors:18:39)
+      ...
+TypeError: undefined is not an object (evaluating 'process.stderr.isTTY')
+```
+
+The proximate cause: `opencode run --dir "$WT" --model "$MODEL" --format json
+--auto` is invoked as `run_with_timeout "$ATTEMPT_TIMEOUT" run_sandboxed_direct
+"${oc_args[@]}" | tee -a "$LOG_PATH" >&2` (line ~678) — the pipe to `tee` is
+established *before* `run_with_timeout` backgrounds the command, so the
+sandboxed opencode process's stdout is the write end of a pipe inherited
+across a `set -m` + `&` + `sandbox-exec` exec boundary. Something in that
+specific fd's lineage makes Bun's internal color-detection code (triggered
+while lazily formatting an unrelated assertion error from opencode's own
+startup, itself still unexplained) hit an `fstat` Seatbelt denies.
+
+**This is not the rate-limit gap above** — different signature, and
+unsandboxed `opencode run` with the same model/account works fine throughout
+(ruling out account-level causes). It is also not deterministic: 4/4 direct
+`sandbox-wrap.sh` + `opencode` invocations (same XDG/env setup, stdout piped
+through plain `| tail`, no `run_with_timeout`) succeeded cleanly in the same
+session, immediately after 5 consecutive real-dispatch failures. Sequential
+vs. concurrent dispatch was tested and ruled out as the differentiator — a
+lone dispatch failed 5/5 attempts. `--print-logs --log-level DEBUG` does not
+prevent it either (tested, still crashed). `NO_COLOR`/`CI`/`FORCE_COLOR`
+cannot be tested from the caller at all: `sandbox-wrap.sh`'s `ENV_PASS`
+(line ~301) only forwards `TERM`, `TMPDIR`, and the four `XDG_*` vars, so
+those three never reach the sandboxed process regardless of what the caller
+exports.
+
+**Consequence for the measurement protocol:** the harness reports this as an
+ordinary oracle failure — `oracle_exit=1`, `abort_reason: null` — identical in
+shape to a genuine model failure. Same measurement-poisoning risk as the
+rate-limit gap above, different root cause. As of this writing the harness
+**cannot be trusted to complete a real dispatch on demand**; not fixed in v1.
+
+
 
 ## The Claude Code permission entry
 
@@ -470,10 +530,17 @@ task-shaped prompt without it counting toward the go/no-go number, redirect
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | Replace hand-rolled `.gitignore`-scope `case` matching in `opencode-dispatch.sh`'s `--oracle-guard` handling with `git check-ignore` (issue #98 item 2) | `opencode-go/qwen3.7-max` | No | 1 | 0.028324 | Model never edited the target file — spent the full 300s attempt-timeout reading an unrelated file, then the attempt timed out. Oracle trivially passed (nothing changed, so nothing regressed), but the harness's `commit_failed` path correctly refused to count it: nothing was staged, so nothing was committed. A pure-refactor oracle can't itself distinguish "did nothing" from "refactored correctly" — this is exactly why the harness treats an oracle-pass-with-no-commit as a fail rather than trusting the oracle alone. |
 | 2 | Move `run_with_timeout_probe` + its `__SOURCED__` test-only guard out of `opencode-dispatch.sh` into a new sourced helper file (issue #98 item 4) | `opencode-go/qwen3.7-max` | Yes | 1 | 0.020679875 | Genuine first-pass: model ran `tests/run.sh` itself mid-turn, saw 4 failures, diagnosed a real bash nested-`source`/`return` subtlety the task prompt hadn't spelled out (the guard has to exist in both the new helper file and the still-sourcing production script), fixed it, and reran clean before the harness's own oracle check ran. |
+| 3 | Consolidate the six inline `REAL_GITDIR` transformations in `sandbox-wrap.sh` into one `resolve_and_validate_gitdir()` function (issue #98 item 3) | `opencode-go/qwen3.7-max` | Yes | 1 | 0.011696875 | Oracle passed and a human diff review confirms the refactor is behaviorally faithful — the load-bearing collapse-before-fail-closed step ordering (a previously live-verified bug fix) is preserved exactly, as are every `die` message and the fallback's `core.fsmonitor=false` scrub. **But:** the model silently deleted every explanatory comment in the block — the same security-rationale prose issue #98 item 1 says has already prevented one regression from recurring. The oracle has no way to catch this; it only asserts behavior, not documentation. Counted as first-pass per the protocol's own oracle-only definition, but the raw pass rate below overstates "ready to trust unsupervised" — a diff read is still required, exactly as the harness's own known-limitations section already says. |
 
-Both routed from a clean `origin/master` worktree, `--oracle 'bash tests/run.sh'` (the repo's full behavioral+unit suite), `--oracle-guard 'tests/*'`. 2 of the required ≥5 — **short of the protocol's own sample-size floor, not a completed round.** No go/no-go verdict is drawn from 2 tasks; collect at least 3 more before applying the rule below.
+All three routed from a clean `origin/master` worktree, `--oracle 'bash tests/run.sh'` (the repo's full behavioral+unit suite), `--oracle-guard 'tests/*'`. 3 of the required ≥5 — **still short of the protocol's own sample-size floor.** These three exhaust this repo's currently-open, well-scoped, existing-oracle candidates (the remaining items in issue #98 — the comment-density extraction and the cleanup TOCTOU fix — don't have a machine-checkable pass/fail condition, so per this protocol's own rule they stay on Claude rather than being forced through this harness for the sake of a bigger sample). Completing the round needs either new real tasks as they arise in this repo, or tasks from elsewhere.
 
-**Excluded from this table:** four earlier `tier:"opencode"` entries in `~/.claude/audit.jsonl` from 2026-07-25 (project `imps-headimp-fixes`, model `opencode-go/deepseek-v4-flash`, all within an 11-minute span: 3 failed, 1 passed first-try). Real dispatches, not `e2e.sh` fixture runs — but same project, same model, tightly clustered, with no record of them being 4 distinct hand-chosen mechanical tasks rather than harness-development testing during PR #95/#97. Also `deepseek-v4-flash` is the documented cost floor, not the protocol's default model. Left out of the rate calculation rather than silently folded in; if you can attribute them to real distinct tasks, they belong here too.
+**Attempt #4, not counted either way:** a genuine real task turned up in a different repo (`dazn-fantasy-football`, maintainer-authorized for this round) — `apps/engine/pyproject.toml` on that repo's own `main` had literal unresolved git conflict markers committed into it, breaking `uv sync` outright. Every dispatch attempt against it failed instantly with the generic `An unknown error occurred (Unexpected)`; live diagnosis (see the "OpenCode Go's own rate limit surfaces as a generic error" limitation above) found the real cause was the account's OpenCode Go 5-hour usage cap, already exhausted by tasks 1–3 above plus diagnostic runs — not a harness or repo bug. The dispatch never produced a contract line and isn't in `audit.jsonl`, so it isn't recorded as a fail. Fixed directly by hand instead of waiting out the ~2h reset, since the bug was actively blocking that repo; a genuine 4th opencode-routed data point is still owed once quota resets.
+
+**Tasks 2 and 3's actual code was never shipped — only their writeups were.** Discovered 2026-07-27 while trying to extend this round: `run_with_timeout_probe` is still defined directly in `opencode-dispatch.sh` (never moved to a sourced helper, despite task 2's row above), and `resolve_and_validate_gitdir()` does not exist anywhere in `sandbox-wrap.sh` or any branch in this repo (task 3's consolidation). Both dispatches ran in ephemeral worktrees that were never merged or even branched from — the PRs that recorded these results (#100, #101) touched only this reference doc. So issue #98 items 3 and 4 are **still open** despite being recorded here as first-pass, and v1 of this harness has no step that preserves a passing dispatch's actual commit anywhere durable. Anyone building on `oracle: pass` from this table should not assume the code exists — check the file, not this table.
+
+**Attempted #4 and #5 (2026-07-27, later the same day): neither model ever saw its task prompt.** Retrying issue #98 item 2 (the `.gitignore`-scope → `git check-ignore` refactor, sharper prompt this time) and a new task carved from issue #96 (a `resolve_model_alias()` function for `cheap`/`default` model aliases, failing unit test written first and committed at `71cf3d0`) both hit the newly-discovered `run_with_timeout` pipe/EPERM crash (see the known-limitation section above) on every attempt across two separate dispatch runs — 9+ real attempts total, including a trivial zero-edit control task that also crashed identically. **Neither task is recorded as pass or fail here** — the harness never got a real model attempt on either, so counting them either way would misrepresent the model's actual capability. The `resolve_model_alias` fixtures remain committed on this branch as genuine red-test prep for whenever dispatch is fixed or hand-implemented; `bash tests/run.sh` currently reports 4 failing tests there by design (`tests/fixtures/unit/imps/opencode-dispatch.sh/resolve_model_alias/*`) — not a regression, just unimplemented.
+
+**Excluded from this table:** four earlier `tier:"opencode"` entries in `~/.claude/audit.jsonl` from 2026-07-25 (project `imps-headimp-fixes`, model `opencode-go/deepseek-v4-flash`, all within an 11-minute span: 3 failed, 1 passed first-try) — same reasoning as before, plus six more from 2026-07-27, all crash-poisoned by the `run_with_timeout` bug above, none of them a real model attempt: `a-c6f9f267` (08:37:25Z), `a-ee1ca19e` (08:37:56Z), `a-f936b1c1` (08:42:15Z), `a-22041f8c` (08:44:51Z), `a-b77adc43` (12:49:08Z), `a-2b5b697d` (12:57:04Z). All show `exit_status: failed` with either `oracle_exit: 1` or `oracle_exit: 0, abort: commit_failed` — indistinguishable from genuine failures without this note. If you're computing a pass rate from `audit.jsonl` directly rather than this table, exclude these ten IDs or the number is wrong.
 
 **Go/no-go, stated plainly:**
 
@@ -481,4 +548,4 @@ Both routed from a clean `origin/master` worktree, `--oracle 'bash tests/run.sh'
 - **<40% → stop.** The tier is not worth the harness.
 - In between: collect more tasks before deciding.
 
-*2 real tasks recorded (2026-07-27), both on `qwen3.7-max`: 1/2 first-pass. Below the ≥5-task floor this protocol requires — collect at least 3 more real mechanical tasks before treating any percentage here as a decision.*
+*3 real tasks recorded (2026-07-27), all on `qwen3.7-max`: 2/3 first-pass (67%) on the oracle's own terms — one of the two passes shipped with a silent documentation loss the oracle can't see, and (discovered later the same day) neither pass's actual code survives anywhere in the repo. Still below the ≥5-task floor this protocol requires. **The round is now blocked on a harness bug, not on task availability**: two further real tasks were prepared and dispatched but the harness itself could not complete a real model attempt on either (see the `run_with_timeout` limitation above). No go/no-go verdict — not enough data, and the tool needed to gather more is currently broken.*
