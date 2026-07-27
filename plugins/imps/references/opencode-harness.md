@@ -372,6 +372,21 @@ it does nothing at the OS level. `/usr/bin/curl`, `wget`, `nc`, or
 sandbox grants network egress by design. Egress is unrestricted in v1 — the denylist
 exists to stop an *accidental* `rm -rf *`/`git push`, not a deliberate one.
 
+### Known limitation: OpenCode Go's own rate limit surfaces as a generic error
+
+Live-verified 2026-07-27: hitting OpenCode Go's 5-hour usage cap mid-dispatch does
+**not** produce a distinct `abort_reason` — every attempt fails instantly with
+`opencode exited 1` and stderr `error: An unknown error occurred (Unexpected)`,
+indistinguishable at that layer from a real opencode/sandbox fault. The actual
+cause (`AI_APICallError: 5-hour usage limit reached. Resets in <N>`) only surfaces
+by running `opencode run` **unsandboxed**, directly, with `--print-logs --log-level
+DEBUG` — the sandboxed path swallows it. If a dispatch fails instantly on every
+attempt with this exact message and no `log_path` content, check the account's
+usage window (`https://opencode.ai/workspace/<id>/go`) before assuming the harness
+or the target repo is at fault — it cost real diagnosis time to tell the two apart
+during this measurement round. Not fixed in v1: the contract's `abort_reason` enum
+has no `rate_limited` value yet.
+
 ---
 
 ## The Claude Code permission entry
@@ -473,6 +488,8 @@ task-shaped prompt without it counting toward the go/no-go number, redirect
 | 3 | Consolidate the six inline `REAL_GITDIR` transformations in `sandbox-wrap.sh` into one `resolve_and_validate_gitdir()` function (issue #98 item 3) | `opencode-go/qwen3.7-max` | Yes | 1 | 0.011696875 | Oracle passed and a human diff review confirms the refactor is behaviorally faithful — the load-bearing collapse-before-fail-closed step ordering (a previously live-verified bug fix) is preserved exactly, as are every `die` message and the fallback's `core.fsmonitor=false` scrub. **But:** the model silently deleted every explanatory comment in the block — the same security-rationale prose issue #98 item 1 says has already prevented one regression from recurring. The oracle has no way to catch this; it only asserts behavior, not documentation. Counted as first-pass per the protocol's own oracle-only definition, but the raw pass rate below overstates "ready to trust unsupervised" — a diff read is still required, exactly as the harness's own known-limitations section already says. |
 
 All three routed from a clean `origin/master` worktree, `--oracle 'bash tests/run.sh'` (the repo's full behavioral+unit suite), `--oracle-guard 'tests/*'`. 3 of the required ≥5 — **still short of the protocol's own sample-size floor.** These three exhaust this repo's currently-open, well-scoped, existing-oracle candidates (the remaining items in issue #98 — the comment-density extraction and the cleanup TOCTOU fix — don't have a machine-checkable pass/fail condition, so per this protocol's own rule they stay on Claude rather than being forced through this harness for the sake of a bigger sample). Completing the round needs either new real tasks as they arise in this repo, or tasks from elsewhere.
+
+**Attempt #4, not counted either way:** a genuine real task turned up in a different repo (`dazn-fantasy-football`, maintainer-authorized for this round) — `apps/engine/pyproject.toml` on that repo's own `main` had literal unresolved git conflict markers committed into it, breaking `uv sync` outright. Every dispatch attempt against it failed instantly with the generic `An unknown error occurred (Unexpected)`; live diagnosis (see the new "OpenCode Go's own rate limit surfaces as a generic error" limitation above) found the real cause was the account's OpenCode Go 5-hour usage cap, already exhausted by tasks 1–3 above plus diagnostic runs — not a harness or repo bug. The dispatch never produced a contract line and isn't in `audit.jsonl`, so it isn't recorded as a fail. Fixed directly by hand instead of waiting out the ~2h reset, since the bug was actively blocking that repo; a genuine 4th opencode-routed data point is still owed once quota resets.
 
 **Excluded from this table:** four earlier `tier:"opencode"` entries in `~/.claude/audit.jsonl` from 2026-07-25 (project `imps-headimp-fixes`, model `opencode-go/deepseek-v4-flash`, all within an 11-minute span: 3 failed, 1 passed first-try). Real dispatches, not `e2e.sh` fixture runs — but same project, same model, tightly clustered, with no record of them being 4 distinct hand-chosen mechanical tasks rather than harness-development testing during PR #95/#97. Also `deepseek-v4-flash` is the documented cost floor, not the protocol's default model. Left out of the rate calculation rather than silently folded in; if you can attribute them to real distinct tasks, they belong here too.
 
