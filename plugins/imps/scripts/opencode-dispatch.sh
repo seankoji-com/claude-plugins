@@ -387,36 +387,6 @@ run_with_timeout() {
   return "$rc"
 }
 
-# Test-only entry point, same convention as audit-log.sh's pure helpers above
-# its own __SOURCED__ guard: the unit-test harness (tests/run.sh) sources this
-# script with __SOURCED__=1 and calls exactly one function with exactly one
-# positional arg. run_with_timeout itself takes multiple positional args
-# (<seconds> <cmd...>), so this thin wrapper splits that one positional arg on
-# newlines into an array and passes it through as-is — no `eval`, no shell
-# re-parsing of fixture content, each line an opaque argument regardless of
-# any spaces or quote characters it contains. Fixture `arg` files are one
-# argument per line accordingly (see tests/fixtures/unit/imps/
-# opencode-dispatch.sh/run_with_timeout_probe/*/arg).
-#
-# Split with a newline IFS and `read`, not `mapfile`: `mapfile` is bash 4.0+,
-# and stock macOS still ships bash 3.2 (the last GPLv2 release). Since this
-# whole harness exists to drive the macOS-only Seatbelt sandbox, "works on the
-# system bash" is not optional here — under 3.2 `mapfile` fails with
-# `command not found`, leaving args empty and the probe silently measuring
-# nothing.
-# A here-string (`<<<`, bash 2.05b+) rather than an unquoted heredoc: the
-# heredoc form would re-expand `$` and `\` in the fixture content, reopening
-# exactly the shell re-parsing the `eval` this replaced was removed for.
-run_with_timeout_probe() {
-  local -a args
-  local line
-  args=()
-  while IFS= read -r line; do
-    args[${#args[@]}]="$line"
-  done <<<"$1"
-  run_with_timeout "${args[@]+"${args[@]}"}"
-  echo "$?"
-}
 resolve_model_alias() {
   case "$1" in
     cheap)   echo "opencode-go/deepseek-v4-flash" ;;
