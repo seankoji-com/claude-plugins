@@ -121,6 +121,21 @@ assert(
 )
 assert('escalated-not-on-task-item', !Object.prototype.hasOwnProperty.call(IP, 'escalated'), '`escalated` on the task item is never writable after plan time')
 
+// escalation_reasons rides alongside escalated_tasks: a bare id list cannot separate
+// "sandbox-off Bash call denied" (an operator config fix) from "dispatch killed by the
+// tool timeout" (a harness bug) from "the open model actually failed" (the only datum
+// worth measuring). All three would otherwise read as the cheap model being incapable.
+assert('top-level/escalation_reasons', Object.prototype.hasOwnProperty.call(P, 'escalation_reasons'), 'no top-level `escalation_reasons`')
+assert(
+  'top-level/escalation_reasons-shape',
+  !!P.escalation_reasons &&
+    Array.isArray(P.escalation_reasons.type) &&
+    P.escalation_reasons.type.indexOf('object') !== -1 &&
+    P.escalation_reasons.additionalProperties &&
+    P.escalation_reasons.additionalProperties.type === 'string',
+  'escalation_reasons must be an object|null map of id -> reason string, got ' + JSON.stringify(P.escalation_reasons)
+)
+
 // --- Minimal validator (type/enum/properties/required/items/additionalProperties) -----
 function validate(schema, value, path, errs) {
   path = path || '$'
@@ -213,7 +228,7 @@ delete missingTop.phase
 assert('negative/missing-top-level-required', validate(S, missingTop).length > 0, 'validator accepted a state file with no phase')
 
 // A truncated run must not pass silently.
-const EXPECTED_ASSERTS = 33
+const EXPECTED_ASSERTS = 35
 if (asserts !== EXPECTED_ASSERTS) {
   console.log('FAIL state-schema/assertion-count')
   console.log('     ran ' + asserts + ' assertions, expected ' + EXPECTED_ASSERTS)
