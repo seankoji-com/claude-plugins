@@ -63,15 +63,44 @@ bash plugins/imps/scripts/opencode-dispatch.sh \
   --max-attempts    3 \
   --attempt-timeout 300 \
   --oracle-timeout  120 \
-  --oracle-guard    'tests/test_thing.py'
+  --oracle-guard    'tests/test_thing.py' \
+  --expect-oracle   red \
+  --result-branch   imps/opencode/thing-fix
 ```
 
 `--attempt-timeout`/`--oracle-timeout` (seconds, default 300/120) bound the
 model run and the oracle run respectively — without them a stalled provider or
 a hung test suite blocks forever with no contract line at all until someone
-notices and kills the process. `--oracle-guard` (optional pathspec, e.g. a
+notices and kills the process. **`--attempt-timeout` is a terminal abort of the
+whole dispatch, not just of one attempt:** a killed attempt (`rc 124`) reports
+`abort_reason:"attempt_timeout"` and the dispatch stops there — the oracle
+never runs afterward, and the loop never retries, because the killed attempt's
+truncated edits stay in the worktree and would otherwise ship if a later
+attempt happened to go green. `--oracle-guard` (optional pathspec, e.g. a
 test file) checks whether the model's own edits touched it; see
 `oracle_files_modified` below.
+
+`--expect-oracle red|green|any` (default `any`) runs the oracle once, inside
+the sandbox, before the first model attempt, and classifies the starting state
+as `oracle_start_state:"red"|"green"`. `red`/`green` additionally require that
+classification to match, aborting `oracle_preflight_mismatch` before a model
+attempt is spent if it doesn't. The preflight runs unconditionally, even under
+the default `any` — recording the starting state is the point, not only the
+gate. Cost: one extra oracle run per dispatch — time, not model spend.
+
+`--result-branch <name>` additionally publishes the dispatch's commit at
+`refs/heads/<name>`, on top of the unconditional `refs/imps/dispatch/*` ref
+every successful commit now writes regardless of whether this flag is passed
+at all — a dispatch commit is durable whether or not you ever pass
+`--result-branch`. List or prune the auto-refs by hand:
+
+```bash
+git for-each-ref 'refs/imps/dispatch/*'
+git update-ref -d refs/imps/dispatch/<ts>-<sha>   # prune one
+```
+
+They live outside `refs/heads/`, so they stay out of `git branch` and out of
+ordinary branch-pruning tools — nothing removes them automatically.
 
 The **final line of stdout is always** exactly one JSON object, on every exit
 path — success, oracle exhaustion, failed preflight, rejected model:
@@ -79,23 +108,39 @@ path — success, oracle exhaustion, failed preflight, rejected model:
 ```json
 {"status":"pass","attempts":2,"session_id":"ses_…","cost_usd":0.0087,
  "oracle_exit":0,"log_path":"/abs/path.jsonl","abort_reason":null,
- "oracle_files_modified":null}
+ "oracle_files_modified":null,"commit_sha":"a1b2c3d…",
+ "oracle_start_state":"red"}
 ```
 
-`session_id`, `cost_usd`, `oracle_exit`, `log_path` and `oracle_files_modified`
-are nullable. `oracle_files_modified` is a JSON array of paths (or `null`) —
-non-null means the model's own edits touched a file matching `--oracle-guard`.
-This is fail-closed by construction, not by reader diligence: a guard hit is
-reported as `status:"fail"` with `abort_reason:"oracle_guard_violated"`, never
-as a tainted `"pass"` a naive `jq -r .status` consumer would miscount as
-genuine. `abort_reason` is `null` on normal paths (including a clean oracle
-exhaustion), else one of `preflight_smoke_failed`, `model_rejected`,
-`config_missing`, `bad_arguments`, `auth_missing`, `opencode_missing`,
-`sandbox_bypass_refused`, `dispatch_dir_failed`, `log_path_failed`,
-`jq_missing`, `unexpected_exit`, `oracle_timeout`, `oracle_sandbox_failed`,
-`commit_failed`, `worktree_dirty`, `oracle_guard_violated`,
-`gitmeta_tampered`, `commit_lineage_invalid`. Exit code is still non-zero on
-failure. All progress goes to stderr.
+`session_id`, `cost_usd`, `oracle_exit`, `log_path`, `oracle_files_modified`,
+`commit_sha` and `oracle_start_state` are nullable. `oracle_files_modified` is
+a JSON array of paths (or `null`) — non-null means the model's own edits
+touched a file matching `--oracle-guard`. This is fail-closed by construction,
+not by reader diligence: a guard hit is reported as `status:"fail"` with
+`abort_reason:"oracle_guard_violated"`, never as a tainted `"pass"` a naive
+`jq -r .status` consumer would miscount as genuine. `commit_sha` is the
+harness's own commit, populated once a commit exists — including on
+`abort_reason:"result_ref_failed"`, which reports `status:"fail"` precisely
+because a commit landed but its durable ref did not; that is how an operator
+recovers work that committed but never got a ref. `oracle_start_state` is the
+preflight's `"red"`/`"green"` classification of the worktree before the model
+ever runs, or `null` only when the preflight itself had no verdict to give
+(timeout or sandbox failure) — never fabricated as a guess. `abort_reason` is
+`null` on normal paths (including a clean oracle exhaustion), else one of
+`preflight_smoke_failed`, `model_rejected`, `config_missing`, `bad_arguments`,
+`auth_missing`, `opencode_missing`, `sandbox_bypass_refused`,
+`dispatch_dir_failed`, `log_path_failed`, `jq_missing`, `unexpected_exit`,
+`oracle_timeout`, `oracle_sandbox_failed`, `commit_failed`, `worktree_dirty`,
+`oracle_guard_violated`, `gitmeta_tampered`, `commit_lineage_invalid`,
+`attempt_timeout`, `oracle_preflight_mismatch`, `no_model_changes`,
+`result_ref_failed`. Exit code is still non-zero on failure. All progress goes
+to stderr.
+
+**`status:"pass"` alone is not the composite pass invariant** — see "the
+oracle is not fully tamper-proof" below. A consumer that only checks `status`
+can still be looking at an oracle-green result with no red→green transition
+proving the task was actually implemented, or one that gamed the oracle; read
+`oracle_start_state` and the rest of that invariant before trusting a pass.
 
 `log_path` lives under the dispatch dir, never in the worktree: the harness
 runs `git add -A`, so an event-stream log written inside would be committed and
@@ -363,6 +408,49 @@ instead of being indistinguishable from one. Still not enforcement — read the
 diff before promoting anything — but the measurement protocol below can now tell
 the two apart instead of silently counting a gamed pass as a real one.
 
+**The composite pass invariant.** A result is trustworthy only if *all* of the
+following hold: the preflight classified the start as red
+(`oracle_start_state:"red"`) · the attempt was not killed
+(`abort_reason != "attempt_timeout"`) · the model staged something
+(`abort_reason != "no_model_changes"`) · the oracle went green at the end
+(`status:"pass"`) · the commit descends from the pre-dispatch `BASE_SHA`
+(enforced by the `merge-base --is-ancestor` check before any ref is written) ·
+a durable ref exists (`abort_reason != "result_ref_failed"`). Every one of the
+measurement round's false passes below fails at least one clause — task 1
+fails the model-staged-something clause (caught, at the time, by
+`commit_failed`; under this invariant `no_model_changes`/`--expect-oracle`
+would catch the same thing earlier, and the attempt-timeout clause would in
+fact abort that dispatch first); task 3, a pure refactor against an
+already-passing suite, fails the red-start clause; task 4's counted attempt
+was killed by the attempt timeout and fails the not-killed clause. This is the
+concrete answer to this section's own "read the diff before promoting
+anything": it closes every *structural* false-pass this round found,
+mechanically and for free. It does **not** close a *semantic* one — no
+clause here inspects what the change actually says, only whether the
+mechanics ran cleanly, so a result that clears every clause above (as a
+green-suite task like task 3 legitimately can, or as task 4's dispatch would
+have if its attempt hadn't happened to hit the timeout) can still be wrong the
+way tasks 3 and 4 were: silently deleted comments, a silently weakened guard.
+Diff review is still required before promoting anything; the invariant
+narrows what diff review has to catch, it does not replace it.
+
+**Apparent contradiction, resolved:** `--expect-oracle green` exists for
+pure-refactor tasks (confirming the worktree is already green before letting a
+model touch it), and such a dispatch can *never* satisfy the composite
+invariant's red-start clause — that is expected, not a bug, since a refactor
+task isn't making the red-to-green claim the invariant certifies. The default
+`any` doesn't enforce the red-start clause either. So `status:"pass"` alone —
+even `abort_reason == null` — never tells you whether a result meets the
+composite invariant; a consumer must also read `oracle_start_state`.
+
+**Remaining contaminant, not closed by any of the above:** the *in-loop*
+oracle's own byproducts (e.g. `__pycache__/`, `.pytest_cache/`) still enter the
+harness's `git add -A` on the attempt that produces the final commit.
+Restore-to-clean before the model runs neutralises only the pre-model half of
+this; a `pytest`-style oracle can still carry incidental build artifacts into
+the commit, and — because that commit is now durable and gets merged onward —
+into a shared branch. Read the diff before promoting.
+
 ### Known limitation: the bash denylist is a typo-guard, not egress control
 
 `templates/opencode.sandbox.json`'s bash denylist (`rm -rf *`, `git push *`, `sudo *`,
@@ -526,23 +614,33 @@ measure honestly. If you ever need to test the harness itself against a real
 task-shaped prompt without it counting toward the go/no-go number, redirect
 `AUDIT_LOG_FILE` the same way.
 
+**Definition: `pass` means verified-correct, not oracle-green.** This round's
+own findings (below) are why: two of its three oracle-green results were
+wrong on human diff review. Diff review is folded into the criterion itself,
+not appended as a footnote afterward — a task counts as a pass only if the
+oracle went green **and** a diff review confirms the change is behaviorally
+and semantically correct, not merely that the oracle accepted it.
+`audit.jsonl`/the contract's `status:"pass"` records the oracle's own verdict
+only; the table's "First-pass?" column and prose below distinguish
+oracle-pass from verified-pass explicitly wherever they differ.
+
 | # | Task | Model | First-pass? | Attempts | Cost (USD) | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | Replace hand-rolled `.gitignore`-scope `case` matching in `opencode-dispatch.sh`'s `--oracle-guard` handling with `git check-ignore` (issue #98 item 2) | `opencode-go/qwen3.7-max` | No | 1 | 0.028324 | Model never edited the target file — spent the full 300s attempt-timeout reading an unrelated file, then the attempt timed out. Oracle trivially passed (nothing changed, so nothing regressed), but the harness's `commit_failed` path correctly refused to count it: nothing was staged, so nothing was committed. A pure-refactor oracle can't itself distinguish "did nothing" from "refactored correctly" — this is exactly why the harness treats an oracle-pass-with-no-commit as a fail rather than trusting the oracle alone. |
+| 1 | Replace hand-rolled `.gitignore`-scope `case` matching in `opencode-dispatch.sh`'s `--oracle-guard` handling with `git check-ignore` (issue #98 item 2) | `opencode-go/qwen3.7-max` | No | 1 | 0.028324 | Model never edited the target file — spent the full 300s attempt-timeout reading an unrelated file, then the attempt timed out. Oracle trivially passed (nothing changed, so nothing regressed), but the harness's `commit_failed` path correctly refused to count it: nothing was staged, so nothing was committed. A pure-refactor oracle can't itself distinguish "did nothing" from "refactored correctly" — this is exactly why the harness treats an oracle-pass-with-no-commit as a fail rather than trusting the oracle alone. → resolved going forward by `no_model_changes`/`--expect-oracle`: the stage-emptiness check now catches this before commit is even attempted, independent of the `commit_failed` path that caught it here (and the terminal `attempt_timeout` would abort this exact dispatch even earlier). |
 | 2 | Move `run_with_timeout_probe` + its `__SOURCED__` test-only guard out of `opencode-dispatch.sh` into a new sourced helper file (issue #98 item 4) | `opencode-go/qwen3.7-max` | Yes | 1 | 0.020679875 | Genuine first-pass: model ran `tests/run.sh` itself mid-turn, saw 4 failures, diagnosed a real bash nested-`source`/`return` subtlety the task prompt hadn't spelled out (the guard has to exist in both the new helper file and the still-sourcing production script), fixed it, and reran clean before the harness's own oracle check ran. |
 | 3 | Consolidate the six inline `REAL_GITDIR` transformations in `sandbox-wrap.sh` into one `resolve_and_validate_gitdir()` function (issue #98 item 3) | `opencode-go/qwen3.7-max` | Yes | 1 | 0.011696875 | Oracle passed and a human diff review confirms the refactor is behaviorally faithful — the load-bearing collapse-before-fail-closed step ordering (a previously live-verified bug fix) is preserved exactly, as are every `die` message and the fallback's `core.fsmonitor=false` scrub. **But:** the model silently deleted every explanatory comment in the block — the same security-rationale prose issue #98 item 1 says has already prevented one regression from recurring. The oracle has no way to catch this; it only asserts behavior, not documentation. Counted as first-pass per the protocol's own oracle-only definition, but the raw pass rate below overstates "ready to trust unsupervised" — a diff read is still required, exactly as the harness's own known-limitations section already says. |
-| 4 | Retry: replace the hand-rolled `.gitignore`-scope matching with `git check-ignore` (issue #98 item 2) | `opencode-go/qwen3.7-max` | **No** | 1 | 0.03069475 | Oracle passed (`audit.jsonl` entry `a-400e4d9c` shows `exit_status: completed`) — but diff review found a real behavioral regression the oracle cannot see. The model's implementation tests whether a synthetic probe filename is ignored by the changed `.gitignore`'s actual content, instead of the original's pure directory-containment check the task explicitly required be preserved. Empirically confirmed: with `GUARD_DIR=tests` and `tests/.gitignore` containing only `*.pyc`, `git check-ignore -v --no-index tests/__imps_scope_probe__` exits 1 (not ignored) — so a changed `tests/.gitignore` in the *same directory as the guard* would silently NOT be flagged, even though the task's own spec says same-directory is always in scope. This weakens the fail-closed guard the whole block exists for. **Not merged.** Also note: this attempt's opencode process was itself killed by the 300s attempt-timeout mid-run (`attempt 1 timed out after 300s`), and the harness committed the work anyway once the oracle went green — a killed attempt shipping code, worth flagging on its own. A first attempt at this task (same day, before this fix) ran 5/5 attempts against a worktree whose oracle could never pass — that worktree carried the still-unimplemented `resolve_model_alias` fixtures from task 5's prep, so `bash tests/run.sh` was failing for reasons unrelated to this task before the model touched anything. Voided; not counted (`audit.jsonl` entry `a-b28ae495`). |
+| 4 | Retry: replace the hand-rolled `.gitignore`-scope matching with `git check-ignore` (issue #98 item 2) | `opencode-go/qwen3.7-max` | **No** | 1 | 0.03069475 | Oracle passed (`audit.jsonl` entry `a-400e4d9c` shows `exit_status: completed`) — but diff review found a real behavioral regression the oracle cannot see. The model's implementation tests whether a synthetic probe filename is ignored by the changed `.gitignore`'s actual content, instead of the original's pure directory-containment check the task explicitly required be preserved. Empirically confirmed: with `GUARD_DIR=tests` and `tests/.gitignore` containing only `*.pyc`, `git check-ignore -v --no-index tests/__imps_scope_probe__` exits 1 (not ignored) — so a changed `tests/.gitignore` in the *same directory as the guard* would silently NOT be flagged, even though the task's own spec says same-directory is always in scope. This weakens the fail-closed guard the whole block exists for. **Not merged.** Also note: this attempt's opencode process was itself killed by the 300s attempt-timeout mid-run (`attempt 1 timed out after 300s`), and the harness committed the work anyway once the oracle went green — a killed attempt shipping code. → resolved: `--attempt-timeout` is now a terminal abort (`attempt_timeout`); the oracle never runs after a kill, so a killed attempt can no longer produce `status:"pass"`. A first attempt at this task (same day, before this fix) ran 5/5 attempts against a worktree whose oracle could never pass — that worktree carried the still-unimplemented `resolve_model_alias` fixtures from task 5's prep, so `bash tests/run.sh` was failing for reasons unrelated to this task before the model touched anything. Voided; not counted (`audit.jsonl` entry `a-b28ae495`). |
 | 5 | Add `resolve_model_alias()` (`cheap`→`opencode-go/deepseek-v4-flash`, `default`→`opencode-go/qwen3.7-max`, passthrough otherwise), wired in before the model-allowlist check (issue #96, one narrow slice) | `opencode-go/qwen3.7-max` | Yes | 1 | 0.0213345 | Genuine first-pass, diff-verified: matches the prompt's spec exactly, placed alongside the file's other small helpers, sourceable under the existing `__SOURCED__` pattern, no unrelated changes. `bash tests/run.sh`: 37/37 (the 4 red-test fixtures written ahead of this dispatch now pass). **This is the first dispatch-produced code in this entire round to actually ship** — cherry-picked onto this branch as `2e33e24`, unlike tasks 2 and 3 above. |
 
-All three routed from a clean `origin/master` worktree, `--oracle 'bash tests/run.sh'` (the repo's full behavioral+unit suite), `--oracle-guard 'tests/*'`. 3 of the required ≥5 — **still short of the protocol's own sample-size floor.** These three exhaust this repo's currently-open, well-scoped, existing-oracle candidates (the remaining items in issue #98 — the comment-density extraction and the cleanup TOCTOU fix — don't have a machine-checkable pass/fail condition, so per this protocol's own rule they stay on Claude rather than being forced through this harness for the sake of a bigger sample). Completing the round needs either new real tasks as they arise in this repo, or tasks from elsewhere.
+All five rows above ran `--oracle 'bash tests/run.sh'` (the repo's full behavioral+unit suite) with `--oracle-guard 'tests/*'` — each row's cell above notes its own dispatch worktree's starting point, including row 4's voided contaminated-worktree first attempt and its clean cherry-picked re-run, and row 5's own pre-placed red-test fixtures. Five real tasks **meets** the protocol's own ≥5 floor — see the concluding paragraphs below for what that number does, and does not, license. At the time these five exhausted this repo's currently-open, well-scoped, existing-oracle candidates (the remaining items in issue #98 — the comment-density extraction and the cleanup TOCTOU fix — don't have a machine-checkable pass/fail condition, so per this protocol's own rule they stay on Claude rather than being forced through this harness for the sake of a bigger sample); any future round needs new real tasks as they arise, in this repo or elsewhere.
 
 **Attempt #4, not counted either way:** a genuine real task turned up in a different repo (`dazn-fantasy-football`, maintainer-authorized for this round) — `apps/engine/pyproject.toml` on that repo's own `main` had literal unresolved git conflict markers committed into it, breaking `uv sync` outright. Every dispatch attempt against it failed instantly with the generic `An unknown error occurred (Unexpected)`; live diagnosis (see the "OpenCode Go's own rate limit surfaces as a generic error" limitation above) found the real cause was the account's OpenCode Go 5-hour usage cap, already exhausted by tasks 1–3 above plus diagnostic runs — not a harness or repo bug. The dispatch never produced a contract line and isn't in `audit.jsonl`, so it isn't recorded as a fail. Fixed directly by hand instead of waiting out the ~2h reset, since the bug was actively blocking that repo; a genuine 4th opencode-routed data point is still owed once quota resets.
 
-**Tasks 2 and 3's actual code was never shipped — only their writeups were.** Discovered 2026-07-27 while trying to extend this round: `run_with_timeout_probe` is still defined directly in `opencode-dispatch.sh` (never moved to a sourced helper, despite task 2's row above), and `resolve_and_validate_gitdir()` does not exist anywhere in `sandbox-wrap.sh` or any branch in this repo (task 3's consolidation). Both dispatches ran in ephemeral worktrees that were never merged or even branched from — the PRs that recorded these results (#100, #101) touched only this reference doc. So issue #98 items 3 and 4 are **still open** despite being recorded here as first-pass, and v1 of this harness had no step that preserves a passing dispatch's actual commit anywhere durable. Task 5 below is the first to break that pattern.
+**Tasks 2 and 3's actual code was never shipped — only their writeups were.** Discovered 2026-07-27 while trying to extend this round: `run_with_timeout_probe` is still defined directly in `opencode-dispatch.sh` (never moved to a sourced helper, despite task 2's row above), and `resolve_and_validate_gitdir()` does not exist anywhere in `sandbox-wrap.sh` or any branch in this repo (task 3's consolidation). Both dispatches ran in ephemeral worktrees that were never merged or even branched from — the PRs that recorded these results (#100, #101) touched only this reference doc. So issue #98 items 3 and 4 are **still open** despite being recorded here as first-pass. This is the exact loss `--result-branch` and the unconditional `refs/imps/dispatch/*` ref close: every successful commit now writes a durable ref regardless of any flag, so the commit survives worktree deletion instead of evaporating with it. Task 5 above was the first dispatch in this round to actually land its commit; any dispatch that passes today does the same automatically.
 
 **The `run_with_timeout` dispatch crash (previous known-limitation entry above) is fixed.** Root cause confirmed and closed same day: the pipe to `tee` was replaced with a direct append-redirect to the log file (commit `94f6d99`). Verified with 5/5 clean trivial dispatches (vs. 0/9 through the unfixed script), then with two real tasks — see rows 4 and 5 above. The live `tee`-to-stderr echo during a run is gone as a result; read `$LOG_PATH` (or `tail -f` it) instead.
 
-**A second, harness-adjacent mistake showed up while retrying task 4.** The first retry (after the crash fix) ran in a worktree cut from a branch tip that already carried task 5's not-yet-implemented `resolve_model_alias` red-test fixtures — so `bash tests/run.sh` could never return 0 regardless of what task 4's model did. All 5 attempts genuinely ran, genuinely failed the (unpassable) oracle, and the run was voided rather than counted (`audit.jsonl` entry `a-b28ae495`). Re-run from a clean cherry-picked base (fix only, no unrelated fixtures) to get row 4's real result. **Lesson for the protocol itself:** nothing in this harness warns that a dispatch worktree inheriting unrelated failing tests makes a full-suite oracle silently unpassable — worth a preflight check in a future version.
+**A second, harness-adjacent mistake showed up while retrying task 4.** The first retry (after the crash fix) ran in a worktree cut from a branch tip that already carried task 5's not-yet-implemented `resolve_model_alias` red-test fixtures — so `bash tests/run.sh` could never return 0 regardless of what task 4's model did. All 5 attempts genuinely ran, genuinely failed the (unpassable) oracle, and the run was voided rather than counted (`audit.jsonl` entry `a-b28ae495`). Re-run from a clean cherry-picked base (fix only, no unrelated fixtures) to get row 4's real result. → resolved: `--expect-oracle green` (or `red`) now runs exactly this check as a preflight and aborts `oracle_preflight_mismatch` before a single model attempt is spent, instead of burning all 5 attempts against an oracle that could never pass.
 
 **Excluded from this table:** four earlier `tier:"opencode"` entries in `~/.claude/audit.jsonl` from 2026-07-25 (project `imps-headimp-fixes`, model `opencode-go/deepseek-v4-flash`, all within an 11-minute span: 3 failed, 1 passed first-try); six from 2026-07-27 crash-poisoned by the (now-fixed) `run_with_timeout` bug: `a-c6f9f267`, `a-ee1ca19e`, `a-f936b1c1`, `a-22041f8c`, `a-b77adc43`, `a-2b5b697d`; five fix-verification trials (trivial zero-edit control tasks, not real measurement): `a-f9190a23`, `a-a0bd67ad`, `a-87fe6992`, `a-71f55491`, `a-62d3432b`; and the voided contaminated-oracle task-4 attempt: `a-b28ae495`. Sixteen IDs total — if you're computing a pass rate from `audit.jsonl` directly rather than this table, exclude all of them or the number is wrong. Note also that `a-400e4d9c` (row 4's real attempt) shows `exit_status: completed` in `audit.jsonl` — the harness only knows the oracle passed; it has no way to record the diff-review finding that this table does. Don't trust `audit.jsonl` alone for a rate; the human-reviewed table above is authoritative.
 
@@ -552,6 +650,36 @@ All three routed from a clean `origin/master` worktree, `--oracle 'bash tests/ru
 - **<40% → stop.** The tier is not worth the harness.
 - In between: collect more tasks before deciding.
 
-**No verdict, and not extending further.** 5 real tasks, 3/5 first-pass (60%) — inside the ambiguous band, and per the protocol's own rule that should mean collecting more. Not doing that here, deliberately: **two of the three counted passes were oracle-green and wrong** (task 3's silently deleted security comments; task 4's silently weakened fail-closed guard, this round's most consequential single finding), both caught only by human diff review, neither catchable by the oracle-only pass rate this go/no-go rule is built on. A 6th or 7th hand-picked task would add a data point to a measurement whose instrument is already known to be unreliable — more samples don't fix that. Before this protocol produces a trustworthy number, the oracle-only definition of "pass" needs revision (e.g., mandatory diff review folded into the criterion, not treated as a footnote) or the go/no-go rule needs to weight verified-correct passes differently from oracle-only passes. That's the real conclusion of this round, not a percentage.
+**No verdict, and not extending further.** 5 real tasks, 3/5 first-pass (60%) — inside the ambiguous band, and per the protocol's own rule that should mean collecting more. Not doing that here, deliberately: **two of the three counted passes were oracle-green and wrong** (task 3's silently deleted security comments; task 4's silently weakened fail-closed guard, this round's most consequential single finding), both caught only by human diff review, neither catchable by the oracle-only pass rate this go/no-go rule is built on. A 6th or 7th hand-picked task would add a data point to a measurement whose instrument is already known to be unreliable — more samples don't fix that. Before this protocol produces a trustworthy number, the oracle-only definition of "pass" needs revision (e.g., mandatory diff review folded into the criterion, not treated as a footnote) or the go/no-go rule needs to weight verified-correct passes differently from oracle-only passes. That's the real conclusion of this round, not a percentage. (This doc's own revision above — `pass` now means verified-correct — is that fix; it does not, on its own, change any number recorded above.)
+
+**Two findings this round leaves at different epistemic weights — do not conflate them:**
+
+- **Green-at-start blindness is a proven structural property, not a one-off.** A
+  green-at-start oracle cannot distinguish "implemented correctly" from "did
+  nothing" — it is satisfied either way. Task 1 is the demonstration: the
+  *oracle* went green on an attempt where the model never edited the target
+  file at all; the *harness* — not the oracle — caught it, via
+  `commit_failed` (nothing staged, so nothing committed). The guard worked;
+  the oracle was blind. That is a caught phantom pass, not an uncaught one —
+  the fix this round adds (`no_model_changes`/`--expect-oracle`) exists to
+  keep that catch working by a more direct mechanism, not because task 1 slipped
+  through. (Task 1 also hit the attempt timeout; under this round's
+  terminal-abort change it would now stop at `attempt_timeout` before the
+  oracle ever ran.)
+- **The red-arm result is an n=1 hypothesis, not a rate.** Task 5 — the
+  round's one genuinely verified, shipped success — was dispatched against an
+  oracle that started red. It is also, of this round's five tasks, the
+  smallest and most narrowly scoped. One red-start task cannot be separated
+  from "this was also the easiest task" with n=1; the result is a hypothesis
+  worth testing again with task size held constant, not evidence of a red-start
+  success rate.
+
+**What the reframe changes and what it does not.** Redefining `pass` as
+verified-correct changes *which experiment to run next* — red-start dispatches
+with task size controlled for, rather than more hand-picked tasks of whatever
+shape turns up — because that is the confound the n=1 red-arm result leaves
+open. It does **not** retroactively convert this round's 40% verified-correct
+figure into a go; that figure, the "no verdict" call, and the two
+oracle-green-but-wrong tasks all stand exactly as recorded above.
 
 *5 real tasks recorded (2026-07-27), all on `qwen3.7-max`: 3/5 first-pass (60%) on the oracle's own terms, but 2 of those 3 counted passes were later found to be wrong on diff review (task 3: silent comment loss; task 4 attempted twice more the same day — once voided by a contaminated oracle, once oracle-green but a real security regression) — so genuinely-correct-and-verified is 2/5 (40%), not 3/5. Task 5 is the round's one unambiguous, verified, actually-shipped success. Round concludes here at n=5, no go/no-go verdict, with the oracle-only pass-rate metric itself flagged as unreliable pending revision — see above.*
