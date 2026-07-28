@@ -303,8 +303,21 @@ run_with_timeout() {
   # would be true from that instant regardless of whether the watchdog ever
   # fired — every call would report 124. The watchdog must WRITE a byte to it
   # on timeout, and the caller must check non-empty (-s), not existence (-f).
+  #
+  # FAIL CLOSED if the sentinel cannot be created. Without it the watchdog's write
+  # is skipped, the 128+signal comparison below never matches, and this function
+  # returns the raw 143 instead of the 124 sentinel — so the caller's
+  # `attempt_timeout` check silently stops firing, the oracle runs over the killed
+  # attempt's truncated edits, and a green oracle commits them and mints a durable
+  # ref. That is verbatim the false pass this harness exists to prevent, arrived at
+  # through a disk/inode failure nobody would think to look for. Rare, but
+  # "fail-closed beats fail-open everywhere safety-relevant" (AGENTS.md), and there
+  # is no safe way to run a timeout you cannot detect.
   local timed_out_flag=""
-  timed_out_flag="$(mktemp "${TMPDIR:-/tmp}/imps-timeout-flag.XXXXXX" 2>/dev/null)" || timed_out_flag=""
+  if ! timed_out_flag="$(mktemp "${TMPDIR:-/tmp}/imps-timeout-flag.XXXXXX" 2>/dev/null)"; then
+    log "cannot create the timeout sentinel — refusing to run: timeout detection would fail open"
+    return 125
+  fi
   # The watchdog records WHICH signal it just sent, not a constant '1', so the
   # check below can compare against 128+that signal rather than hardcoding
   # 143/137. Signal numbers are not fixed by POSIX; ask the shell for them
@@ -926,6 +939,9 @@ fi
 # sandbox-broken oracle has no starting state, and recording it as "red" would
 # fabricate a measurement instead of taking one. Same two reasons the in-loop
 # oracle treats these as terminal, distinguished only by the message.
+if [ "$preflight_rc" -eq 125 ]; then
+  abort dispatch_dir_failed "run_with_timeout could not create its timeout sentinel under \$TMPDIR during the oracle preflight — refusing to dispatch without working timeout detection"
+fi
 if [ "$preflight_rc" -eq 124 ]; then
   abort oracle_timeout "preflight oracle did not finish within ${ORACLE_TIMEOUT}s — cannot establish the starting state, refusing to spend a model attempt"
 fi
@@ -995,6 +1011,13 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   run_with_timeout "$ATTEMPT_TIMEOUT" run_sandboxed_direct "${oc_args[@]}" >>"$LOG_PATH" 2>&1
   oc_rc=$?
 
+  # 125 is run_with_timeout refusing to run because it could not create its
+  # timeout sentinel. Terminal: without the sentinel a kill is indistinguishable
+  # from a clean exit, so nothing downstream could be trusted.
+  if [ "$oc_rc" -eq 125 ]; then
+    abort dispatch_dir_failed "run_with_timeout could not create its timeout sentinel under \$TMPDIR — refusing to dispatch without working timeout detection"
+  fi
+
   # Session id and cost are harvested BEFORE the timeout abort below, so a
   # killed attempt still reports what it spent — the operator needs that number
   # even (especially) on the failure path.
@@ -1034,6 +1057,9 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
   rm -f "$ORACLE_OUT_FILE"
   log "oracle exit $ORACLE_EXIT"
 
+  if [ "$ORACLE_EXIT" -eq 125 ]; then
+    abort dispatch_dir_failed "run_with_timeout could not create its timeout sentinel under \$TMPDIR while running the oracle — refusing to trust an oracle result whose timeout cannot be detected"
+  fi
   if [ "$ORACLE_EXIT" -eq 124 ]; then
     abort oracle_timeout "oracle did not finish within ${ORACLE_TIMEOUT}s on attempt $attempt"
   fi

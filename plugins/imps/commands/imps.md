@@ -305,7 +305,16 @@ quote or reason about its contents. Then:
     [Model selection reference](#model-selection-reference)). Always set `model:` explicitly.
   - **Type** — `code` (file changes, worktree-isolated) · `query` (read-only) ·
     `publish` (GitHub artifacts; use `gh api graphql` for Discussions, not REST)
-  - **Executor** *(optional, `code` tasks only)* — omit it (or `"claude"`) for everything
+  - **Executor** *(optional, `code` tasks only)* — **STATUS: EXPERIMENTAL. Do not set
+    `"executor": "opencode"` unless the operator asked for it on this run.** The
+    measurement round behind this tier concluded with **no go/no-go verdict**: 2 of 5
+    dispatches were verified-correct, and the pass-rate metric itself was flagged
+    unreliable (see `references/opencode-harness.md`). The mechanism is shipped so the
+    round that decides whether it earns its keep can actually be run — that round has not
+    run yet. Routing real work here by default would be using an instrument its own record
+    declines to endorse.
+
+    Otherwise: omit it (or `"claude"`) for everything
     normal. Set `"executor": "opencode"` **only** for a mechanical task that has a
     machine-checkable acceptance command and that command **fails today**, and pair it with
     `"oracle": "<that command>"`. The tier runs `--expect-oracle red` unconditionally and

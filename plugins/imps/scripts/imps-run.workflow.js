@@ -110,6 +110,13 @@ const STATE_SCHEMA = {
     // its peers — patchState() merges top-level keys only, and no call site patches
     // `tasks`, so a field on the task item is writable at plan time and never again.
     escalated_tasks: { type: 'array', items: { type: 'number' } },
+    // WHY each id in escalated_tasks escalated, keyed by task id. A bare count cannot
+    // distinguish the three causes, and they call for opposite responses: a denied
+    // sandbox-off Bash call is a thirty-second operator config fix, a killed dispatch is a
+    // harness-budget bug, and only the third — the open model genuinely failing — is the
+    // datum this tier is being measured on. Without this, all three read as "the cheap
+    // model can't do it" and the measurement is worthless.
+    escalation_reasons: { type: ['object', 'null'], additionalProperties: { type: 'string' } },
     worktrees: { type: 'object', additionalProperties: { type: 'string' } },
     artifacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
     pr: { type: ['object', 'null'], additionalProperties: true },
@@ -438,8 +445,9 @@ ${spec}${guidance ? `\n\nOperator guidance from a prior attempt — this is part
 ${task.oracle}
 <<<IMPS_OC_ORACLE_END>>>
    Pass it to \`--oracle\` as ONE shell argument. Shell-quote it yourself — it is an arbitrary command line and may contain quotes, \`$\`, or spaces; a mis-quoted oracle silently measures the wrong thing.
-6. Run this ONCE, with Bash \`dangerouslyDisableSandbox: true\` (required — the harness applies its own Seatbelt sandbox and Seatbelt does not nest), substituting the quoted oracle for <ORACLE>:
-   \`bash ${args.pluginRoot}/scripts/opencode-dispatch.sh --worktree "$WT" --prompt-file "$TMPDIR/imps-oc-${task.id}.prompt" --oracle <ORACLE> --expect-oracle red --result-branch "$BR" 2>"$TMPDIR/imps-oc-${task.id}.err" | tail -n 1\`
+6. Run this ONCE, with Bash \`dangerouslyDisableSandbox: true\` (required — the harness applies its own Seatbelt sandbox and Seatbelt does not nest) AND \`timeout: 600000\` (the Bash tool's maximum; its 120s DEFAULT would kill the dispatch mid-attempt), substituting the quoted oracle for <ORACLE>:
+   \`bash ${args.pluginRoot}/scripts/opencode-dispatch.sh --worktree "$WT" --prompt-file "$TMPDIR/imps-oc-${task.id}.prompt" --oracle <ORACLE> --expect-oracle red --result-branch "$BR" --max-attempts 2 --attempt-timeout 180 --oracle-timeout 60 2>"$TMPDIR/imps-oc-${task.id}.err" | tail -n 1\`
+   The budget flags are NOT optional and must not be raised without also raising \`timeout\`. The script's own defaults (3 attempts x 300s + 4 oracle runs x 120s) worst-case at ~1380s — more than double the Bash ceiling — so with defaults the tool kills the call mid-attempt, no contract line is ever read, and the wrapper reports "no output". That failure is indistinguishable from the open model failing, which would silently record this tier as 0% capable when nothing was ever measured. These values (60 + 2x180 + 2x60 = 540s) fit inside the ceiling with headroom.
    Keep stderr in the file and read only the LAST line of stdout — that line is the contract JSON. Do not merge stderr into stdout; interleaving can displace it.
    Do NOT pass \`--model\`: the script's own default open model applies, and routing an Anthropic model through opencode is forbidden.
    Do NOT run gates, linters, formatters, or \`git add\`/\`git commit\` yourself at any point. The harness owns the commit; anything you write into the worktree breaks step 2's invariant.
@@ -511,6 +519,7 @@ function parseTaskDecision(decision) {
 async function runDispatch(state) {
   const doneIds = new Set(state.tasks_done || [])
   const escalatedIds = new Set(state.escalated_tasks || [])
+  const escalationReasons = { ...(state.escalation_reasons || {}) }
   const failed = new Map((state.failed_tasks || []).map((f) => [f.id, f]))
   let worktrees = { ...(state.worktrees || {}) }
   let artifacts = [...(state.artifacts || [])]
@@ -570,6 +579,8 @@ async function runDispatch(state) {
       if (t.executor !== 'opencode') continue
       if (!eligibleForOpencode(t)) {
         escalatedIds.add(t.id) // ineligible: no oracle, already ran as a Claude imp
+        escalationReasons[String(t.id)] =
+          'ineligible for the tier (executor "opencode" with no usable oracle) — never dispatched, cost nothing; this is a plan error, not a model failure'
         continue
       }
       const r = results[i] ? results[i].result : null
@@ -583,6 +594,13 @@ async function runDispatch(state) {
       )
       escalations.forEach((e, k) => {
         escalatedIds.add(e.task.id)
+        // Capture the opencode attempt's own notes BEFORE overwriting the slot. Step 8 of
+        // the wrapper prompt puts abort_reason plus the stderr tail there, and it is the
+        // only record of why the tier was abandoned; the fallback's result replaces it
+        // entirely, so reading it afterwards gets the Claude imp's notes or nothing.
+        const ocResult = results[e.index] ? results[e.index].result : null
+        escalationReasons[String(e.task.id)] =
+          (ocResult && ocResult.notes) || 'opencode dispatch returned no result'
         results[e.index] = fallbacks[k] || null
       })
     }
@@ -606,7 +624,7 @@ async function runDispatch(state) {
       }
     })
     await patchState(
-      { tasks_done: [...doneIds], escalated_tasks: [...escalatedIds], worktrees, artifacts, failed_tasks: [...failed.values()], last_heartbeat: 'agent-supplies-timestamp' },
+      { tasks_done: [...doneIds], escalated_tasks: [...escalatedIds], escalation_reasons: escalationReasons, worktrees, artifacts, failed_tasks: [...failed.values()], last_heartbeat: 'agent-supplies-timestamp' },
       'heartbeat'
     )
     // If this cascade drained the whole remaining pipeline, stop early rather than
@@ -614,7 +632,7 @@ async function runDispatch(state) {
     if (failed.size && doneIds.size + failed.size >= state.tasks.length) break
   }
 
-  return { blocked: false, doneIds, escalatedIds, failed: [...failed.values()], worktrees, artifacts }
+  return { blocked: false, doneIds, escalatedIds, escalationReasons, failed: [...failed.values()], worktrees, artifacts }
 }
 
 // ---------------------------------------------------------------------------
@@ -1232,7 +1250,17 @@ const result = {
   dod_coverage: (coverage && coverage.criteria) || [],
   dod_coverage_error: dodCoverageError,
   dod_coverage_status: dodCoverageStatus,
-  dispatch: { model_counts: modelCounts, tokens_spent: null, artifacts: dispatchOutcome.artifacts },
+  dispatch: {
+    model_counts: modelCounts,
+    tokens_spent: null,
+    artifacts: dispatchOutcome.artifacts,
+    // Surfaced at the operator gate, not just written to the state file. The
+    // escalation rate is the cheapest read on whether the opencode tier earns its
+    // keep, and the reasons separate "the operator is missing a permission grant"
+    // from "the model actually failed" — left unreported it is a number nobody sees.
+    escalated_tasks: [...(dispatchOutcome.escalatedIds || [])],
+    escalation_reasons: dispatchOutcome.escalationReasons || {},
+  },
 }
 await patchState({ segment: 'publish_finalize' }, 'enter-publish')
 await saveResult(result)

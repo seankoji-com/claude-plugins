@@ -28,10 +28,19 @@
 #      `command -v jq` at source time, so it is always 1 in CI, and the harness
 #      cannot set env vars), which is exactly why the check lives here.
 #
-# Of opencode-dispatch.sh's guards, only attempt_timeout genuinely needs the
-# macOS sandbox and a real model attempt; it is ticked by the post-merge
-# validation round, not here. Preflight mismatch and no_model_changes are NOT
-# sandbox-only and are covered above.
+# COVERAGE, stated precisely — three of opencode-dispatch.sh's guards need the
+# macOS sandbox and a real model attempt for end-to-end proof: attempt_timeout,
+# oracle_preflight_mismatch, and no_model_changes. What is closed here for free is
+# their DECISION LOGIC — expect_oracle_verdict / classify_oracle_state as unit
+# fixtures, restore_worktree_clean / stage_model_changes against a real scratch
+# worktree. The CALL SITES that wire those decisions into an abort
+# (opencode-dispatch.sh's preflight block and its oracle-green block) sit behind
+# run_oracle_sandboxed -> sandbox-wrap.sh -> Seatbelt, so they are reviewed, not
+# executed. The post-merge validation round ticks all three.
+#
+# Do not read "the helper is tested" as "the guard is tested". An earlier draft of
+# this header claimed only attempt_timeout was sandbox-gated, and two Definition-
+# of-Done items were ticked on that claim.
 set -uo pipefail
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
