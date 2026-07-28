@@ -357,6 +357,49 @@ else
   skip "imps/tests/sandbox-wrap-shape.sh" "missing or not executable: $imps_sandbox_wrap_shape"
 fi
 
+# Sibling of worktree-shape.sh (which owns the --worktree shape gate); this one
+# owns opencode-dispatch.sh's other free guards: the new --expect-oracle /
+# --result-branch bad_arguments paths, create_result_ref's durability claim
+# (commit survives worktree deletion + gc), the no_model_changes pair
+# (restore_worktree_clean / stage_model_changes), and emit_contract key parity
+# between its jq branch and its hand-written no-jq fallback literal. Pure git
+# plumbing and string logic — no sandbox, no credentials, no spend — so it runs
+# unconditionally, including on ubuntu-latest CI.
+imps_dispatch_guards="$ROOT/plugins/imps/tests/dispatch-guards.sh"
+if [ -x "$imps_dispatch_guards" ]; then
+  dispatch_guards_out="$(bash "$imps_dispatch_guards" 2>&1)"
+  dispatch_guards_rc=$?
+  if [ "$dispatch_guards_rc" -eq 0 ]; then
+    report "imps/tests/dispatch-guards.sh" 1
+  else
+    report "imps/tests/dispatch-guards.sh" 0 "$dispatch_guards_out"
+  fi
+else
+  skip "imps/tests/dispatch-guards.sh" "missing or not executable: $imps_dispatch_guards"
+fi
+
+# /imps state-schema round-trip (schema 3: per-task oracle/executor plus a
+# top-level escalated_tasks, all of which must survive repeated patchState()
+# heartbeats). Same free, unconditional shape as the two above.
+#
+# The wiring is deliberately here ahead of the file: whoever owns
+# state-schema.sh does not own this harness, so without a pre-placed block a
+# forgotten test is invisible. With it, a missing or non-executable file
+# surfaces as a `skip` line — the file's standing invariant (see the
+# sandbox-smoke.sh block above): never silent, and never counted as a pass.
+imps_state_schema="$ROOT/plugins/imps/tests/state-schema.sh"
+if [ -x "$imps_state_schema" ]; then
+  state_schema_out="$(bash "$imps_state_schema" 2>&1)"
+  state_schema_rc=$?
+  if [ "$state_schema_rc" -eq 0 ]; then
+    report "imps/tests/state-schema.sh" 1
+  else
+    report "imps/tests/state-schema.sh" 0 "$state_schema_out"
+  fi
+else
+  skip "imps/tests/state-schema.sh" "missing or not executable: $imps_state_schema"
+fi
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
