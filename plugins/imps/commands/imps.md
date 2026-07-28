@@ -311,8 +311,11 @@ quote or reason about its contents. Then:
     `"oracle": "<that command>"`. The tier runs `--expect-oracle red` unconditionally and
     aborts if the oracle is already green at start: a green-at-start oracle cannot tell
     "implemented correctly" from "did nothing", which is the exact false positive the
-    measurement round found. No oracle, or a green one, means no offload — the task simply
-    runs as a normal Claude imp and is recorded in `escalated_tasks`.
+    measurement round found. Either way the task ends up running as a normal Claude imp and
+    is recorded in `escalated_tasks` — but the two cost differently, so prefer omitting the
+    oracle to guessing one: **no oracle** is caught in-process and costs nothing, whereas a
+    **green-at-start oracle** is only caught inside the script, after a wrapper agent has
+    spawned and burned one full sandboxed preflight oracle run, and only then escalates.
     **`model:` still names a CLAUDE model here** (`haiku` is enough): it is the wrapper
     agent that shells out to `opencode-dispatch.sh` and reshapes its JSON, not the open
     model. There is no per-task open-model field — the script's own default applies.
