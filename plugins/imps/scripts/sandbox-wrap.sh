@@ -173,7 +173,7 @@ resolve_and_validate_gitdir() {
   # necessarily writable (it lives inside the granted worktree), so a model
   # that rewrites it before the oracle run (a SEPARATE, later sandbox-wrap.sh
   # invocation, after the model has already had its turn) gets whatever gitdir
-  # it names fed straight into `(allow fileWrite* (subpath @REAL_GITDIR@))` —
+  # it names fed straight into `(allow file-write* (subpath @REAL_GITDIR@))` —
   # reproduced live redirecting to a sibling worktree's gitdir (reopening the
   # RCE this whole rule exists to close) and to an entirely unrelated repo's
   # gitdir (writing that repo's hooks/config from inside this sandbox).
@@ -214,7 +214,7 @@ resolve_and_validate_gitdir() {
   # A MAIN worktree's gitdir equals $GITMETA exactly — there's no separate
   # per-worktree gitdir to re-allow, and reallowing "$GITMETA" itself would
   # reopen the whole tree the specific-file denies above just closed: the
-  # profile's `(allow fileWrite* (subpath @REAL_GITDIR@))` rule is a later,
+  # profile's `(allow file-write* (subpath @REAL_GITDIR@))` rule is a later,
   # broader match than those, so under last-match-wins it would silently
   # override every one of them — verified live (hooks/config/info/attributes/
   # alternates all reported writable again with this left unguarded). Treat
