@@ -14,6 +14,7 @@
 #                        [--attempt-timeout <secs>] [--oracle-timeout <secs>]
 #                        [--oracle-guard <pathspec>] [--result-branch <name>]
 #                        [--expect-oracle red|green|any]
+#                        [--engine auto|opencode|agy]
 #
 #   --worktree        git worktree the model may edit (its only writable code path)
 #   --prompt-file     the task prompt, read verbatim
@@ -54,6 +55,13 @@
 #                     code, and this v1's whole purpose is to produce a
 #                     trustworthy pass-rate number, fail-closed by
 #                     construction rather than by reader diligence.
+#   --engine          auto|opencode|agy (default auto). Selects the execution
+#                     engine for this dispatch. `auto` and `opencode` are
+#                     identical today (both route through opencode). `agy` is
+#                     recognised but not yet supported for sandboxed dispatch
+#                     in this harness — an explicit `--engine agy` aborts
+#                     immediately with abort_reason:"engine_unsupported",
+#                     before any preflight, sandbox-smoke, or model work.
 #
 # Contract: the FINAL line of stdout is always exactly one JSON object —
 #   {"status":"pass|fail","attempts":2,"session_id":"ses_…","cost_usd":0.0087,
@@ -64,6 +72,35 @@
 # null unless IMPS_KEEP_DISPATCH_DIR=1 — otherwise the dispatch dir (and the
 # log inside it) is removed by this same cleanup before the process exits, so
 # advertising the path would point at something already gone.
+#
+# abort_reason values (non-exhaustive, the set grows as guards are added):
+#   bad_arguments              — a flag value was malformed or out of range
+#   engine_unsupported         — the requested --engine is recognised but has
+#                                no sandboxed execution path in this harness
+#                                yet (currently: `agy`)
+#   jq_missing                 — jq is not on PATH
+#   model_rejected             — --model failed the provider allowlist
+#   opencode_missing           — opencode binary not on PATH
+#   auth_missing               — credentials not found or not copyable
+#   config_missing             — hardened opencode.json template missing or
+#                                does not set the required denies
+#   sandbox_bypass_refused     — IMPS_SANDBOX_DANGEROUSLY_DISABLE was set
+#   preflight_smoke_failed     — sandbox-smoke.sh did not return 0 or 77
+#   worktree_dirty             — worktree had uncommitted changes at start,
+#                                or the preflight oracle contaminated it
+#   gitmeta_tampered           — pointer files changed during dispatch
+#   oracle_timeout             — oracle or preflight oracle exceeded its budget
+#   oracle_sandbox_failed      — sandbox-wrap.sh failed closed on an oracle
+#   oracle_preflight_mismatch  — --expect-oracle red|green did not match start
+#   attempt_timeout            — a model attempt was killed by the watchdog
+#   no_model_changes           — oracle went green but the model staged nothing
+#   oracle_guard_violated      — the model touched the guarded oracle file(s)
+#   commit_failed              — oracle went green but git commit failed
+#   commit_lineage_invalid     — committed HEAD does not descend from BASE_SHA
+#   result_ref_failed          — the durability ref or named branch could not
+#                                be written
+#   dispatch_dir_failed        — could not create the dispatch scratch dir
+#   unexpected_exit            — the script exited without calling finish
 #
 # Durability: on every successful commit this writes
 # refs/imps/dispatch/<UTC-ts>-<short-sha> UNCONDITIONALLY. A flag-gated design
@@ -574,7 +611,7 @@ fi
 # ---------------------------------------------------------------------------
 WT="" PROMPT_FILE="" ORACLE="" MODEL="opencode-go/qwen3.7-max" MAX_ATTEMPTS=3 MODE=""
 ATTEMPT_TIMEOUT=300 ORACLE_TIMEOUT=120 ORACLE_GUARD=""
-RESULT_BRANCH="" RESULT_BRANCH_SET=0 EXPECT_ORACLE="any"
+RESULT_BRANCH="" RESULT_BRANCH_SET=0 EXPECT_ORACLE="any" ENGINE="auto"
 while [ $# -gt 0 ]; do
   case "$1" in
     --worktree)        WT="${2:-}";              shift 2 ;;
@@ -588,6 +625,7 @@ while [ $# -gt 0 ]; do
     --oracle-guard)    ORACLE_GUARD="${2:-}";     shift 2 ;;
     --result-branch)   RESULT_BRANCH="${2:-}"; RESULT_BRANCH_SET=1; shift 2 ;;
     --expect-oracle)   EXPECT_ORACLE="${2:-}";    shift 2 ;;
+    --engine)          ENGINE="${2:-}";            shift 2 ;;
     *) abort bad_arguments "unknown argument: $1" ;;
   esac
 done
@@ -608,6 +646,8 @@ case "$MAX_ATTEMPTS" in ''|0|*[!0-9]*) abort bad_arguments "--max-attempts must 
 case "$ATTEMPT_TIMEOUT" in ''|0|*[!0-9]*) abort bad_arguments "--attempt-timeout must be a positive integer, got '$ATTEMPT_TIMEOUT'" ;; esac
 case "$ORACLE_TIMEOUT" in ''|0|*[!0-9]*) abort bad_arguments "--oracle-timeout must be a positive integer, got '$ORACLE_TIMEOUT'" ;; esac
 case "$EXPECT_ORACLE" in red|green|any) ;; *) abort bad_arguments "--expect-oracle must be one of red|green|any, got '$EXPECT_ORACLE'" ;; esac
+case "$ENGINE" in auto|opencode|agy) ;; *) abort bad_arguments "--engine must be one of auto|opencode|agy, got '$ENGINE'" ;; esac
+[ "$ENGINE" = "agy" ] && abort engine_unsupported "--engine agy is not yet supported for sandboxed dispatch in this harness"
 # Name validation here, collision check further down (it needs a resolved
 # worktree). Both are deliberately BEFORE the auth_missing check, so a
 # malformed or already-taken branch name fails fast and free rather than after

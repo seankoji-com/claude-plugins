@@ -164,6 +164,35 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 1b. --engine auto|opencode|agy — issue #96's engine-selection flag. Full
+#     agy execution is out of scope (no sandboxed agy support exists yet), so
+#     an explicit `--engine agy` must abort immediately and distinctly rather
+#     than silently falling through to opencode or being rejected as an
+#     unrecognized argument.
+# ---------------------------------------------------------------------------
+out="$(run_dispatch --engine bogus)"
+assert_eq "engine-rejects-unknown-word" "$(reason_of "$out")" "bad_arguments"
+
+out="$(run_dispatch --engine agy)"
+assert_eq "engine-agy-is-unsupported" "$(reason_of "$out")" "engine_unsupported"
+
+# Positive controls, same style as the --expect-oracle/--result-branch check
+# above: assert "did not reject at the argument gate" rather than pinning the
+# exact downstream slug, so this doesn't break when an unrelated check is
+# added further down the same path.
+for engine_case in "--engine opencode" ""; do
+  # shellcheck disable=SC2086 # intentional: "" must expand to zero args, not one empty arg
+  out="$(run_dispatch $engine_case)"
+  reason="$(reason_of "$out")"
+  if [ "$reason" = "bad_arguments" ] || [ "$reason" = "engine_unsupported" ]; then
+    assert "engine-valid-value-passes-argument-gate: [$engine_case]" 0 \
+      "raw=$out stderr=$(cat "$DISPATCH_ERR" 2>/dev/null)"
+  else
+    assert "engine-valid-value-passes-argument-gate: [$engine_case]" 1
+  fi
+done
+
+# ---------------------------------------------------------------------------
 # 2. create_result_ref — the durability claim (DoD: the commit survives
 #    deletion of the dispatch worktree)
 # ---------------------------------------------------------------------------
