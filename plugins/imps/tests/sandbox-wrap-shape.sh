@@ -456,6 +456,41 @@ else
 fi
 
 # ==============================================================================
+# issue #98 item 3 — the six inline REAL_GITDIR transformations (canon, quote/
+# backslash/ampersand/colon/pipe/newline rejection, collapse-if-equal-to-
+# $GITMETA, fail-closed-if-empty-and-worktrees-exists, structural containment,
+# inert placeholder) must be consolidated into one resolve_and_validate_gitdir()
+# function — called exactly once to produce REAL_GITDIR, not copy-pasted.
+#
+# This does NOT retest the transformations' own behavior — the 24 existing
+# --real-gitdir/REAL_GITDIR assertions elsewhere in this file already cover
+# that, unchanged by a pure refactor, and are part of the SAME `bash
+# tests/run.sh` oracle. What a purely behavioral check cannot catch — and
+# what silently broke the last time this exact consolidation was attempted —
+# is documentation loss: the block carries several load-bearing rationale
+# comments (a live-verified RCE, a live-verified last-match-wins override, a
+# live-verified ordering bug), and an oracle that only asserts behavior has no
+# way to notice prose deleted alongside code that still runs correctly. Assert
+# a fixed set of distinctive fragments from that rationale still exist
+# somewhere in the file — belt and braces on top of the diff review this
+# round's own protocol requires regardless, not a replacement for it.
+assert_eq "gitdir-consolidation/function-defined-once" \
+  "$(grep -c '^resolve_and_validate_gitdir()' "$WRAP")" "1"
+assert_eq "gitdir-consolidation/function-called" \
+  "$(grep -c 'REAL_GITDIR="\$(resolve_and_validate_gitdir' "$WRAP")" "1"
+for frag in \
+  'full RCE' \
+  'last-match-wins' \
+  'Fail closed instead of silently degrading' \
+  'sibling-worktree redirect' \
+  'unambiguously-impossible path' \
+; do
+  assert_eq "gitdir-consolidation/rationale-preserved: ${frag:0:30}" \
+    "$(grep -c -- "$frag" "$WRAP")" "1" \
+    "expected exactly one occurrence of a distinctive fragment of the load-bearing rationale — 0 means it was deleted, >1 means something unexpected duplicated it"
+done
+
+# ==============================================================================
 echo "---"
 if [ "$fails" -ne 0 ]; then
   echo "sandbox-wrap-shape: $fails assertion(s) failed" >&2
