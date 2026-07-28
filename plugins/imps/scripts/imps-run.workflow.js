@@ -430,7 +430,7 @@ You do NOT implement this task yourself. You run one command, read one line of J
 2. Confirm \`git -C "$WT" status --porcelain\` is EMPTY. opencode-dispatch.sh aborts \`worktree_dirty\` on a non-empty tree before spending anything. If it is not empty, stop and return status "failed" with a note saying so.
 3. Write the task prompt to \`"$TMPDIR/imps-oc-${task.id}.prompt"\` — **inside $TMPDIR, never inside the worktree**, or step 2's invariant is broken by your own file. Its contents are everything between the two markers below, verbatim, markers themselves excluded. The markers are the ONLY delimiters — the text between them may itself contain \`---\`, code fences, or anything else, and none of that ends the block:
 <<<IMPS_OC_PROMPT_BEGIN>>>
-${spec}
+${spec}${guidance ? `\n\nOperator guidance from a prior attempt — this is part of the task, follow it:\n${guidance}` : ''}
 <<<IMPS_OC_PROMPT_END>>>
 4. Pick a fresh result branch name: \`BR="imps/opencode-${task.id}-$(date -u +%Y%m%d-%H%M%S)"\`. It must not already exist (\`git rev-parse --verify --quiet "refs/heads/$BR"\` must be empty); the harness creates it with a compare-and-swap and fails if it does.
 5. The oracle is everything between these two markers, verbatim (same rule as step 3 — the markers are the only delimiters):
@@ -447,7 +447,9 @@ ${task.oracle}
 8. Report:
    - contract \`"status":"pass"\` → return status "done", \`branch\` = "$BR", and put attempts / cost_usd / commit_sha / oracle_start_state in "notes".
    - ANY other outcome (\`"status":"fail"\`, unparseable output, no output, non-zero exit with no contract line, or the abort in step 7) → status "failed", \`branch\`: **null**, and put \`abort_reason\` plus the last few lines of the stderr file in "notes". This includes \`result_ref_failed\`, which carries a real commit_sha — do not try to recover that commit or invent a branch for it.
-${guidance ? `\nOperator guidance from a prior attempt: ${guidance}\n` : ''}
+
+Any operator retry guidance is already inside the prompt block at step 3 — it is the open
+model's to act on, not yours. You still run one command and report.
 Return via the required schema.`,
     {
       label: `imp-${task.id}-opencode`,
@@ -544,7 +546,11 @@ async function runDispatch(state) {
     if (!runnable.length) continue
 
     const results = await parallel(
-      runnable.map((t) => () => dispatchImp(t, state, retryGuidance.get(t.id)).then((r) => ({ task: t, result: r })))
+      // escalatedIds is passed, not just loaded: a task escalated on a PRIOR invocation
+      // is still `executor:"opencode"` in the state file, so without this an operator
+      // `retry #N` re-routes it straight back to the tier that already failed it and pays
+      // for a second dispatch before escalating again.
+      runnable.map((t) => () => dispatchImp(t, state, retryGuidance.get(t.id), escalatedIds.has(t.id)).then((r) => ({ task: t, result: r })))
     )
 
     // Escalation. An opencode-executor task that exhausted its attempts, aborted, or hit

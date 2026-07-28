@@ -72,7 +72,11 @@
 # survives the worktree — only a ref was missing, and any ref under refs/ is a gc
 # root. refs/imps/ stays out of `git branch` and out of branch-pruning tools.
 # `result_ref_failed` reports status:"fail" with commit_sha POPULATED, so an
-# operator can still recover work that committed but did not get a ref.
+# operator can still recover work that committed but did not get every ref it
+# asked for. Read it as "at least one ref failed", not "no ref exists": the
+# auto-ref is written FIRST, so on the common failure (a --result-branch name
+# collision) the durability ref has already landed and only the named branch is
+# missing. The stderr line says which.
 #
 # KNOWN CONTAMINANT — requires diff review before promotion: the IN-LOOP oracle's
 # byproducts still enter `git add -A`. The preflight oracle's are neutralised
@@ -497,7 +501,7 @@ create_result_ref() {
   [ -n "$branch" ] || return 0
   if ! err="$(git -C "$wt" -c core.hooksPath=/dev/null -c core.fsmonitor=false \
         update-ref "refs/heads/$branch" "$sha" "" 2>&1)"; then
-    printf 'cannot create refs/heads/%s (it already exists, or the ref store rejected it): %s\n' "$branch" "$err"
+    printf 'auto-ref %s LANDED and the commit is durable; only refs/heads/%s failed (it already exists, or the ref store rejected it): %s\n' "$auto_ref" "$branch" "$err"
     return 1
   fi
   return 0
@@ -904,6 +908,20 @@ preflight_rc=$?
 preflight_out="$(cat "$PREFLIGHT_OUT_FILE" 2>/dev/null)"
 rm -f "$PREFLIGHT_OUT_FILE"
 
+# The preflight just executed a command inside the sandbox, so the SAME
+# invariant the post-model check enforces applies here. This sits ahead of EVERY
+# other preflight exit, deliberately: under `--expect-oracle red` (which the
+# /imps:go executor tier passes unconditionally) the mismatch abort below is the
+# ROUTINE exit for any green-at-start task, not an exceptional one. Checking only
+# on the paths that continue would leave the common path exiting without ever
+# comparing the pointers — and the next dispatch into this worktree re-baselines
+# GITMETA_POINTER_BASELINE from whatever was left behind, making a preflight-time
+# redirect permanently invisible. Nothing between here and the restore below is a
+# git command, so hoisting this costs nothing and strictly widens coverage.
+if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
+  abort gitmeta_tampered "SANDBOX ESCAPE SUSPECTED: worktree/gitmeta pointer files changed during the oracle preflight — refused to continue. Inspect $WT/.git and $GITMETA before running any git command against this repo."
+fi
+
 # Rule out "no state at all" BEFORE classifying red/green. A timed-out or
 # sandbox-broken oracle has no starting state, and recording it as "red" would
 # fabricate a measurement instead of taking one. Same two reasons the in-loop
@@ -921,15 +939,13 @@ if [ "$(expect_oracle_verdict "$EXPECT_ORACLE" "$ORACLE_START_STATE")" != "ok" ]
   abort oracle_preflight_mismatch "oracle starts $ORACLE_START_STATE but --expect-oracle $EXPECT_ORACLE was required — aborting before any model attempt is paid for"
 fi
 
-# The preflight just executed a command inside the sandbox, so the SAME
-# invariant the post-model check enforces applies here: restore_worktree_clean
-# below is the first UNSANDBOXED, index-reading git command afterwards, and an
-# index-reading git command executes a configured core.fsmonitor hook. Check the
-# pointer snapshot before it runs, not after — with the check after, the restore
-# itself is what fires a redirected hook at operator privilege.
-if [ "$(snapshot_gitmeta_pointers)" != "$GITMETA_POINTER_BASELINE" ]; then
-  abort gitmeta_tampered "SANDBOX ESCAPE SUSPECTED: worktree/gitmeta pointer files changed during the oracle preflight — refused to continue. Inspect $WT/.git and $GITMETA before running any git command against this repo."
-fi
+# The pointer snapshot was compared immediately after the preflight oracle
+# returned, above — ahead of every abort, so the routine `--expect-oracle`
+# mismatch exit is covered too. It must precede restore_worktree_clean, which is
+# the first UNSANDBOXED, index-reading git command afterwards, because an
+# index-reading git command executes a configured core.fsmonitor hook: with the
+# check after, the restore itself is what fires a redirected hook at operator
+# privilege.
 
 # Restore-to-clean, not a dirt baseline. Without this the preflight's own
 # untracked byproducts get swept into the harness's `git add -A` and the commit
@@ -1251,7 +1267,7 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
       # branch second, so a branch CAS collision still leaves the work durable.
       RESULT_REF="refs/imps/dispatch/$(date -u +%Y%m%dT%H%M%SZ)-$(printf '%s' "$COMMIT_SHA" | cut -c1-12)"
       if ! ref_err="$(create_result_ref "$WT" "$COMMIT_SHA" "$RESULT_REF" "$RESULT_BRANCH")"; then
-        abort result_ref_failed "commit $COMMIT_SHA landed but publishing a durable ref failed — recover it from commit_sha before deleting the worktree: $ref_err"
+        abort result_ref_failed "commit $COMMIT_SHA landed but AT LEAST ONE ref failed — read the stderr line above to see which survived: on the common case (a --result-branch name collision) the auto-ref under refs/imps/dispatch/ DID land and the work is already durable. Recover from commit_sha before deleting the worktree; list survivors with: git for-each-ref 'refs/imps/dispatch/*'. Detail: $ref_err"
       fi
       log "durable ref $RESULT_REF -> $COMMIT_SHA"
       [ -n "$RESULT_BRANCH" ] && log "result branch $RESULT_BRANCH -> $COMMIT_SHA"

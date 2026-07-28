@@ -120,12 +120,25 @@ not by reader diligence: a guard hit is reported as `status:"fail"` with
 `abort_reason:"oracle_guard_violated"`, never as a tainted `"pass"` a naive
 `jq -r .status` consumer would miscount as genuine. `commit_sha` is the
 harness's own commit, populated once a commit exists — including on
-`abort_reason:"result_ref_failed"`, which reports `status:"fail"` precisely
-because a commit landed but its durable ref did not; that is how an operator
-recovers work that committed but never got a ref. `oracle_start_state` is the
-preflight's `"red"`/`"green"` classification of the worktree before the model
-ever runs, or `null` only when the preflight itself had no verdict to give
-(timeout or sandbox failure) — never fabricated as a guess. `abort_reason` is
+`abort_reason:"result_ref_failed"`, which reports `status:"fail"` because a
+commit landed but **at least one** ref did not. Read it that way, not as "no ref
+exists": the auto-ref is written *first*, so on the common failure — a
+`--result-branch` name collision — `refs/imps/dispatch/<ts>-<sha>` has already
+landed and the work is durable; only the named branch is missing. The stderr
+line says which survived; `git for-each-ref 'refs/imps/dispatch/*'` lists them.
+Either way `commit_sha` is populated, which is how an operator recovers.
+`oracle_start_state` is the preflight's `"red"`/`"green"` classification of the
+worktree before the model ever runs, and is `null` in two distinct cases: the
+preflight ran but had no verdict to give (timeout or sandbox failure), or the
+dispatch aborted *before* the preflight at all (`bad_arguments`, `auth_missing`,
+`config_missing`, `preflight_smoke_failed`, `model_rejected`,
+`dispatch_dir_failed`, and the pre-dispatch `worktree_dirty`). It is never
+fabricated as a guess. That second case matters because `worktree_dirty` is a
+**deliberately overloaded slug** — it covers both "the operator had uncommitted
+WIP at dispatch start" (before the preflight, so `oracle_start_state` is `null`)
+and "the preflight oracle contaminated the tree unrecoverably" (after it, so
+`oracle_start_state` is set). Key on `oracle_start_state` to tell them apart; the
+messages differ but the slug does not. `abort_reason` is
 `null` on normal paths (including a clean oracle exhaustion), else one of
 `preflight_smoke_failed`, `model_rejected`, `config_missing`, `bad_arguments`,
 `auth_missing`, `opencode_missing`, `sandbox_bypass_refused`,
@@ -415,7 +428,10 @@ following hold: the preflight classified the start as red
 (`abort_reason != "no_model_changes"`) · the oracle went green at the end
 (`status:"pass"`) · the commit descends from the pre-dispatch `BASE_SHA`
 (enforced by the `merge-base --is-ancestor` check before any ref is written) ·
-a durable ref exists (`abort_reason != "result_ref_failed"`). Every one of the
+a durable ref exists. That last clause is `status:"pass"`, which already implies
+it — do **not** test it as `abort_reason != "result_ref_failed"`: that reason can
+fire when the auto-ref landed and only the named `--result-branch` failed, so
+using it as the durability test rejects results that are in fact durable. Every one of the
 measurement round's false passes below fails at least one clause — task 1
 fails the model-staged-something clause (caught, at the time, by
 `commit_failed`; under this invariant `no_model_changes`/`--expect-oracle`
@@ -640,7 +656,7 @@ All five rows above ran `--oracle 'bash tests/run.sh'` (the repo's full behavior
 
 **The `run_with_timeout` dispatch crash (previous known-limitation entry above) is fixed.** Root cause confirmed and closed same day: the pipe to `tee` was replaced with a direct append-redirect to the log file (commit `94f6d99`). Verified with 5/5 clean trivial dispatches (vs. 0/9 through the unfixed script), then with two real tasks — see rows 4 and 5 above. The live `tee`-to-stderr echo during a run is gone as a result; read `$LOG_PATH` (or `tail -f` it) instead.
 
-**A second, harness-adjacent mistake showed up while retrying task 4.** The first retry (after the crash fix) ran in a worktree cut from a branch tip that already carried task 5's not-yet-implemented `resolve_model_alias` red-test fixtures — so `bash tests/run.sh` could never return 0 regardless of what task 4's model did. All 5 attempts genuinely ran, genuinely failed the (unpassable) oracle, and the run was voided rather than counted (`audit.jsonl` entry `a-b28ae495`). Re-run from a clean cherry-picked base (fix only, no unrelated fixtures) to get row 4's real result. → resolved: `--expect-oracle green` (or `red`) now runs exactly this check as a preflight and aborts `oracle_preflight_mismatch` before a single model attempt is spent, instead of burning all 5 attempts against an oracle that could never pass.
+**A second, harness-adjacent mistake showed up while retrying task 4.** The first retry (after the crash fix) ran in a worktree cut from a branch tip that already carried task 5's not-yet-implemented `resolve_model_alias` red-test fixtures — so `bash tests/run.sh` could never return 0 regardless of what task 4's model did. All 5 attempts genuinely ran, genuinely failed the (unpassable) oracle, and the run was voided rather than counted (`audit.jsonl` entry `a-b28ae495`). Re-run from a clean cherry-picked base (fix only, no unrelated fixtures) to get row 4's real result. → resolved: `--expect-oracle green` now runs exactly this check as a preflight and aborts `oracle_preflight_mismatch` before a single model attempt is spent, instead of burning all 5 attempts against an oracle that could never pass. Note this is the `green` arm specifically — `red` does **not** catch this class: a worktree carrying unrelated failing tests starts red, `--expect-oracle red` is satisfied, and the attempts burn exactly as they did here.
 
 **Excluded from this table:** four earlier `tier:"opencode"` entries in `~/.claude/audit.jsonl` from 2026-07-25 (project `imps-headimp-fixes`, model `opencode-go/deepseek-v4-flash`, all within an 11-minute span: 3 failed, 1 passed first-try); six from 2026-07-27 crash-poisoned by the (now-fixed) `run_with_timeout` bug: `a-c6f9f267`, `a-ee1ca19e`, `a-f936b1c1`, `a-22041f8c`, `a-b77adc43`, `a-2b5b697d`; five fix-verification trials (trivial zero-edit control tasks, not real measurement): `a-f9190a23`, `a-a0bd67ad`, `a-87fe6992`, `a-71f55491`, `a-62d3432b`; and the voided contaminated-oracle task-4 attempt: `a-b28ae495`. Sixteen IDs total — if you're computing a pass rate from `audit.jsonl` directly rather than this table, exclude all of them or the number is wrong. Note also that `a-400e4d9c` (row 4's real attempt) shows `exit_status: completed` in `audit.jsonl` — the harness only knows the oracle passed; it has no way to record the diff-review finding that this table does. Don't trust `audit.jsonl` alone for a rate; the human-reviewed table above is authoritative.
 
