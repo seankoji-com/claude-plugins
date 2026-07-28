@@ -305,6 +305,18 @@ quote or reason about its contents. Then:
     [Model selection reference](#model-selection-reference)). Always set `model:` explicitly.
   - **Type** — `code` (file changes, worktree-isolated) · `query` (read-only) ·
     `publish` (GitHub artifacts; use `gh api graphql` for Discussions, not REST)
+  - **Executor** *(optional, `code` tasks only)* — omit it (or `"claude"`) for everything
+    normal. Set `"executor": "opencode"` **only** for a mechanical task that has a
+    machine-checkable acceptance command and that command **fails today**, and pair it with
+    `"oracle": "<that command>"`. The tier runs `--expect-oracle red` unconditionally and
+    aborts if the oracle is already green at start: a green-at-start oracle cannot tell
+    "implemented correctly" from "did nothing", which is the exact false positive the
+    measurement round found. No oracle, or a green one, means no offload — the task simply
+    runs as a normal Claude imp and is recorded in `escalated_tasks`.
+    **`model:` still names a CLAUDE model here** (`haiku` is enough): it is the wrapper
+    agent that shells out to `opencode-dispatch.sh` and reshapes its JSON, not the open
+    model. There is no per-task open-model field — the script's own default applies.
+    Never write an opencode model id into `model:`.
   - **Depends-on** — prerequisite task IDs, or `—` if independent. A worktree-isolated
     task's checkout is cut from the remote default branch HEAD at spawn time, not from
     a not-yet-merged dependency's branch — if a task's spec needs its dependency's
@@ -415,6 +427,7 @@ current branch.
   "max_dispatch_hours": 6,
   "last_heartbeat": null,
   "tasks_done": [],
+  "escalated_tasks": [],
   "worktrees": {},
   "artifacts": [],
   "pr": null,
@@ -443,6 +456,38 @@ guard their own side effects. A legacy schema-2 file (missing these four fields)
 treated as having them all `null` — the script's own dispatch/gate/learnings logic
 re-derives
 whatever it needs rather than assuming they exist.
+
+**Opencode execute tier (also additive, also schema 3).** Two optional per-task fields and
+one top-level array. A task routed to the tier looks like this — copy the plain row above
+for everything else, these fields are not defaults:
+
+```json
+{ "id": 4, "label": "make the failing parser test pass", "spec": "...", "model": "haiku", "type": "code", "deps": [], "oracle": "pytest tests/test_parser.py -q", "executor": "opencode" }
+```
+
+- `oracle` — the machine-checkable acceptance command, run in the dispatch worktree; exit
+  0 means done. `null`/absent for an ordinary imp.
+- `executor` — `"claude"` (default when absent) or `"opencode"`. `model` stays a **Claude**
+  model either way; see the Executor bullet in Phase 2 Step 1.
+- `escalated_tasks` — top-level, beside `tasks_done`: the ids of tasks that were marked
+  `executor: "opencode"` but ended up done by a normal Claude imp, because the tier
+  aborted, exhausted its attempts, had its sandbox-off shell-out denied, or was never
+  eligible (no oracle). The run does not fail over this; the fallback is the designed
+  behaviour. The id is recorded because the dispatch bookkeeping keeps only
+  `id`/`branch`/`artifacts` on success, so without it an escalated-then-succeeded task is
+  indistinguishable from one that never touched opencode — and whether the tier earns its
+  keep is exactly what is being measured.
+
+⚠️ **Setup prerequisite, operator-owned.** The tier shells out to
+`opencode-dispatch.sh` with the Bash sandbox **off** (the harness applies its own Seatbelt
+sandbox, and Seatbelt does not nest). Nothing in this repo grants that: a worktree checkout
+has no `.claude/settings.local.json` (it is git-ignored), so in practice the call is
+allowed by the auto-mode classifier rather than by a rule — which can change without
+notice. For a deterministic grant, add the permission entry from
+`${CLAUDE_PLUGIN_ROOT}/references/opencode-harness.md` to **user-level**
+`~/.claude/settings.json`, which loads regardless of cwd. Without it the tier degrades
+safely rather than stalling: a denied, prompted, or timed-out call is treated as an abort,
+the task escalates to a Claude imp, and its id lands in `escalated_tasks`.
 
 Discussion-seed mode: set `source_discussion` to
 `{ "owner": "...", "repo": "...", "number": <int>, "id": "<GraphQL node ID>", "url": "<discussion URL>" }`
