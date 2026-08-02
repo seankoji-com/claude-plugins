@@ -70,7 +70,7 @@ one-shot clone retry are actual code now, not prose trusted to be followed corre
 Drop this directory into your plugin marketplace repo and add an entry:
 
 ```json
-{ "name": "ape", "source": "./ape", "description": "Forage OSS repos for transferable techniques" }
+{ "name": "ape", "source": "./plugins/ape", "description": "Forage OSS repos for transferable techniques" }
 ```
 
 ## Usage

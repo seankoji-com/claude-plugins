@@ -78,10 +78,10 @@ else
   if git rev-parse --show-toplevel >/dev/null 2>&1; then scope="project"; else scope="user"; fi
 fi
 
-project="null"
+project_name=""
 if [ "$scope" = "project" ]; then
   toplevel="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-  [ -n "$toplevel" ] && project="\"$(basename "$toplevel")\""
+  [ -n "$toplevel" ] && project_name="$(basename "$toplevel")"
 fi
 
 cost_json="null"
@@ -121,14 +121,15 @@ if ! jq -nc \
   --arg plugin "$plugin" \
   --arg command "$command" \
   --arg scope "$scope" \
-  --argjson project "$project" \
+  --arg project "$project_name" \
   --arg exit_status "$exit_status" \
   --argjson duration_ms "$duration_ms" \
   --argjson cost_estimate_usd "$cost_json" \
   --argjson tier "$tier_json_val" \
   --argjson attempts "$attempts_json_val" \
   --arg notes "${notes:0:200}" \
-  '{id:$id, ts:$ts, plugin:$plugin, command:$command, scope:$scope, project:$project,
+  '{id:$id, ts:$ts, plugin:$plugin, command:$command, scope:$scope,
+    project:(if $project == "" then null else $project end),
     exit_status:$exit_status, duration_ms:$duration_ms, cost_estimate_usd:$cost_estimate_usd,
     tier:$tier, attempts:$attempts, notes:$notes}' >> "$AUDIT_FILE" 2>/dev/null; then
   echo "audit-log: failed to write to $AUDIT_FILE" >&2

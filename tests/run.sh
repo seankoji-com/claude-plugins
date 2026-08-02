@@ -81,10 +81,11 @@ run_exec_case() {
     done <"$case_dir/args"
   fi
 
-  local test_home out err exit_code ok=1 detail=""
+  local test_home out err diff_file exit_code ok=1 detail=""
   test_home="$(mktemp -d)"
   out="$(mktemp)"
   err="$(mktemp)"
+  diff_file="$(mktemp "${TMPDIR:-/tmp}/ape-test-diff.XXXXXX")"
   # Optional per-case input files (see header comment) copied into the fresh
   # $PWD before the script runs.
   [ -d "$case_dir/files" ] && cp -R "$case_dir/files/." "$test_home/"
@@ -104,8 +105,8 @@ run_exec_case() {
 exit code: want $want_exit, got $exit_code"; }
 
   if [ -f "$case_dir/stdout" ]; then
-    diff -u "$case_dir/stdout" "$out" >/tmp/ape-test-diff.$$ 2>&1 || { ok=0; detail="$detail
-$(cat /tmp/ape-test-diff.$$)"; }
+    diff -u "$case_dir/stdout" "$out" >"$diff_file" 2>&1 || { ok=0; detail="$detail
+$(cat "$diff_file")"; }
   elif [ -f "$case_dir/stdout.contains" ]; then
     while IFS= read -r pattern; do
       [ -z "$pattern" ] && continue
@@ -115,12 +116,12 @@ missing pattern in stdout: $pattern"; }
   fi
 
   if [ -f "$case_dir/stderr" ]; then
-    diff -u "$case_dir/stderr" "$err" >/tmp/ape-test-diff.$$ 2>&1 || { ok=0; detail="$detail
-$(cat /tmp/ape-test-diff.$$)"; }
+    diff -u "$case_dir/stderr" "$err" >"$diff_file" 2>&1 || { ok=0; detail="$detail
+$(cat "$diff_file")"; }
   fi
 
   report "$name" "$ok" "$detail"
-  rm -rf "$test_home" "$out" "$err" /tmp/ape-test-diff.$$
+  rm -rf "$test_home" "$out" "$err" "$diff_file"
 }
 
 run_unit_case() {
