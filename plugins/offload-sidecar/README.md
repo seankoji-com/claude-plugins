@@ -103,7 +103,7 @@ as the fixed rules they implement.
 - Optional: [`yq`](https://github.com/mikefarah/yq) (`brew install yq`) — makes
   `yaml_to_json` deterministic and enables `json_to_yaml`.
 
-No build step, no Node, no dependencies. The server is one file:
+No build step, Node runtime, or pip dependencies. The server is one file:
 `scripts/offload_sidecar.py`, invoked via this plugin's `.mcp.json`.
 
 ---

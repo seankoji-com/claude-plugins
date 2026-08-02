@@ -38,7 +38,7 @@ Plugins install into a local cache. To test changes without publishing:
 
 ```bash
 ls ~/.claude/plugins/cache/seankoji/
-# ape/  claude-tuneup/  elephant-goldfish/  imps/  offload-sidecar/  prompt-builder/
+# ape/  claude-tuneup/  elephant-goldfish/  imps/  offload-sidecar/  prompt-builder/  recon/
 ```
 
 Each plugin lives at `~/.claude/plugins/cache/seankoji/<plugin>/<version>/`.
@@ -47,7 +47,7 @@ Each plugin lives at `~/.claude/plugins/cache/seankoji/<plugin>/<version>/`.
 
 ```bash
 cp plugins/elephant-goldfish/commands/elephant.md \
-   ~/.claude/plugins/cache/seankoji/elephant-goldfish/0.1.0/commands/elephant.md
+   ~/.claude/plugins/cache/seankoji/elephant-goldfish/0.1.10/commands/elephant.md
 ```
 
 Do this for any file you changed — commands, scripts, or READMEs.

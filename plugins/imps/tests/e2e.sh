@@ -104,7 +104,7 @@ cleanup() {
 $(git -C "$BASE" for-each-ref --format='%(refname)' 'refs/imps/dispatch/*' 2>/dev/null)
 EOF
 }
-trap cleanup EXIT
+trap cleanup EXIT HUP INT TERM
 
 # Unchecked, this cascades into confusing secondary failures (cp into a
 # nonexistent dir, git errors) instead of one clear "worktree add failed"

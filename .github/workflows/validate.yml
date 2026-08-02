@@ -2,6 +2,9 @@ name: Validate
 
 on: [push, pull_request]
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -92,6 +95,12 @@ jobs:
             [ "$actual_name" = "$name" ] || { echo "ERROR: name mismatch: marketplace='$name' manifest='$actual_name'"; exit 1; }
             echo "OK: $name -> $source"
           done
+
+      - name: Validate every plugin is registered in marketplace.json
+        run: |
+          manifest_names=$(for plugin_json in plugins/*/.claude-plugin/plugin.json; do jq -r '.name' "$plugin_json"; done | sort)
+          marketplace_names=$(jq -r '.plugins[].name' .claude-plugin/marketplace.json | sort)
+          diff -u <(printf '%s\n' "$manifest_names") <(printf '%s\n' "$marketplace_names")
 
       - name: Validate marketplace versions match plugin.json
         run: |

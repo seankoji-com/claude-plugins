@@ -4,6 +4,7 @@ description: >
   claude-tuneup (plus audit.jsonl and any per-project imps logs), synthesize command-body
   improvements, gate each batch with the operator, and ship approved edits as a draft PR.
 argument-hint: '[plugin name to scope to, e.g. imps]'
+disable-model-invocation: true
 ---
 
 # /learn
