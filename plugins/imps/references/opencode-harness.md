@@ -167,7 +167,7 @@ source of truth, this file only describes them.
 
 Only `opencode-go/*` and `opencode/*` are accepted, and the **whole** model
 string is then re-checked for `claude`/`anthropic` as a *substring*. A prefix-only
-check is defeated by `--model openrouter/anthropic/claude-sonnet-4`, which would
+check is defeated by `--model openrouter/anthropic/claude-sonnet-5.0`, which would
 bill a Claude model through opencode — the exact anti-goal of this tier.
 
 Defaults worth knowing: `opencode-go/qwen3.7-max` is the working default,

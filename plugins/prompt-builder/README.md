@@ -81,7 +81,7 @@ A finished deliverable looks like this (abridged, from the brief "a prompt that 
 ## Prompt: PR Security Reviewer
 
 **Use when:** reviewing a pull request's diff for security issues before merge
-**Model:** claude-sonnet-5
+**Model:** claude-sonnet-5.0
 **Variables:** `{{repo_name}}` (required), `{{pr_number}}` (required)
 **MCP dependencies:** mcp__github__pull_request_read, mcp__github__get_file_contents
 **Save as:** `.claude/commands/security-review-pr.md`

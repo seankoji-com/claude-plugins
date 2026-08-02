@@ -631,7 +631,7 @@ if [ "$RESULT_BRANCH_SET" = 1 ] && [ "$(validate_result_branch "$RESULT_BRANCH")
 fi
 
 # Model guard. Reject on *substring*, not prefix: `--model
-# openrouter/anthropic/claude-sonnet-4` sails past a prefix check and bills a
+# openrouter/anthropic/claude-sonnet-5.0` sails past a prefix check and bills a
 # Claude model through opencode — the exact ToS anti-goal this tier exists to
 # avoid. Allowlist the known-good providers, then re-check the whole string.
 MODEL="$(resolve_model_alias "$MODEL")"

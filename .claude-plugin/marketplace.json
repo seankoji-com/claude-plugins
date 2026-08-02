@@ -19,13 +19,13 @@
     },
     {
       "name": "prompt-builder",
-      "version": "0.1.12",
+      "version": "0.1.13",
       "source": "./plugins/prompt-builder",
       "description": "Iterative prompt engineering assistant — structures with Anthropic's evidence-based prompting techniques, drafts, critiques, and delivers a finished artefact with test cases."
     },
     {
       "name": "imps",
-      "version": "0.3.34",
+      "version": "0.3.35",
       "source": "./plugins/imps",
       "description": "Swarm orchestrator — decomposes tasks into parallel model-routed agents, dispatches via a real Workflow script, merges through gates and persona review. Plus /imps:imp-agency: whole-repo audit → imps-ready remediation plan."
     },
