@@ -44,9 +44,36 @@ class EnvHelpersTest(unittest.TestCase):
             os.environ.pop("SIDECAR_TEST_VAR", None)
             self.assertEqual(sidecar._env("SIDECAR_TEST_VAR", "default"), "default")
 
-    def test_env_falls_back_on_unexpanded_placeholder(self):
-        with mock.patch.dict(os.environ, {"SIDECAR_TEST_VAR": "${OLLAMA_HOST}"}):
+    def test_env_falls_back_on_unexpanded_user_config_placeholder(self):
+        with mock.patch.dict(os.environ, {"SIDECAR_TEST_VAR": "${user_config.ollama_host}"}):
             self.assertEqual(sidecar._env("SIDECAR_TEST_VAR", "default"), "default")
+
+    def test_env_falls_back_on_unexpanded_claude_builtin_placeholder(self):
+        with mock.patch.dict(os.environ, {"SIDECAR_TEST_VAR": "${CLAUDE_PROJECT_DIR}"}):
+            self.assertEqual(sidecar._env("SIDECAR_TEST_VAR", "default"), "default")
+
+    def test_env_passes_through_non_placeholder_dollar_brace_value(self):
+        with mock.patch.dict(os.environ, {"SIDECAR_TEST_VAR": "${HOME}/x"}):
+            self.assertEqual(sidecar._env("SIDECAR_TEST_VAR", "default"), "${HOME}/x")
+
+    def test_every_mcp_env_placeholder_is_recognized_by_the_guard(self):
+        # .mcp.json is the actual source of truth for what an unexpanded
+        # placeholder looks like. This pins _UNEXPANDED_PLACEHOLDER against
+        # it directly so a new env entry using a placeholder shape the guard
+        # doesn't recognize fails loudly here instead of silently shipping
+        # a var the guard can no longer protect (exactly how the first cut
+        # of this guard missed SIDECAR_ROOT's ${CLAUDE_PROJECT_DIR}).
+        mcp_path = os.path.join(_HERE, "..", "..", "plugins", "offload-sidecar", ".mcp.json")
+        with open(mcp_path, encoding="utf-8") as f:
+            env = json.load(f)["mcpServers"]["offload-sidecar"]["env"]
+        for key, val in env.items():
+            if "${" in val:
+                self.assertRegex(
+                    val,
+                    sidecar._UNEXPANDED_PLACEHOLDER,
+                    f"{key}={val!r}: _env() would not recognize this as a "
+                    "placeholder if it ever reached the process unexpanded",
+                )
 
     def test_env_returns_real_value(self):
         with mock.patch.dict(os.environ, {"SIDECAR_TEST_VAR": "http://box:11434"}):
@@ -192,6 +219,17 @@ class PathScopingTest(unittest.TestCase):
             sidecar.choose_write_path(link, True)
 
 
+class ResolveRootTest(unittest.TestCase):
+    def test_unexpanded_project_dir_placeholder_falls_back_to_cwd(self):
+        # .mcp.json wires SIDECAR_ROOT to ${CLAUDE_PROJECT_DIR}; if that ever
+        # reaches the process unexpanded, it must fall back to cwd rather than
+        # being treated as a literal root directory named "${CLAUDE_PROJECT_DIR}"
+        # (which would make every real path look like it escapes the root).
+        with mock.patch.dict(os.environ, {"SIDECAR_ROOT": "${CLAUDE_PROJECT_DIR}"}):
+            root = sidecar.resolve_root()
+        self.assertEqual(root, os.path.realpath(os.getcwd()))
+
+
 class ContextBudgetTest(unittest.TestCase):
     def test_estimate_tokens_minimum_one(self):
         self.assertEqual(sidecar.estimate_tokens(""), 1)
@@ -233,6 +271,15 @@ class TlsContextTest(unittest.TestCase):
             with self.assertRaises(sidecar.OllamaError) as cm:
                 sidecar._tls_context_for("https://h:11434/api/generate")
         self.assertIn(os.path.expanduser("~/nope/ca.pem"), str(cm.exception))
+
+    def test_dollar_brace_ca_path_raises_instead_of_silently_ignored(self):
+        # A user-written value that merely contains "${" (not a Claude Code
+        # placeholder) must reach the real file-open attempt and fail loudly,
+        # not be mistaken for an unexpanded placeholder and silently dropped
+        # to unconfigured (which would fall back to default CA verification).
+        with mock.patch.dict(os.environ, {"OLLAMA_TLS_CA": "${HOME}/certs/ca.pem"}):
+            with self.assertRaises(sidecar.OllamaError):
+                sidecar._tls_context_for("https://h:11434/api/generate")
 
 
 class CallOllamaTest(unittest.TestCase):
