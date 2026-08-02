@@ -219,11 +219,32 @@ test('parseGateDecision tolerates whitespace around the guidance text', () => {
   })
 })
 
+// Gate names come from the discovered gate list, not a fixed vocabulary, so real projects
+// routinely name them `type-check`, `test-e2e`, `lint:fix`-minus-the-colon and so on. #120
+// widened the gate capture from `\w+` to `[^:]+` (retry) and `.+` (skip) and added .trim()
+// to match; this test still asserted the old `\w+` behavior and had been failing on master
+// since that merge. Non-word characters in a gate name are valid input, not malformed.
+test('parseGateDecision accepts gate names that are not bare \\w+', () => {
+  const { parseGateDecision } = loadWorkflowFunctions({ agent: noopAgent, parallel })
+
+  assert.deepEqual(parseGateDecision('retry test-fail: guidance'), {
+    kind: 'retry',
+    gate: 'test-fail',
+    guidance: 'guidance',
+  })
+  assert.deepEqual(parseGateDecision('skip type-check'), { kind: 'skip', gate: 'type-check' })
+  // The gate name itself is trimmed, not just the guidance.
+  assert.deepEqual(parseGateDecision('retry   spaced gate  : do the thing'), {
+    kind: 'retry',
+    gate: 'spaced gate',
+    guidance: 'do the thing',
+  })
+})
+
 test('parseGateDecision returns null (not NaN, not a throw) for malformed input', () => {
   const { parseGateDecision } = loadWorkflowFunctions({ agent: noopAgent, parallel })
 
   assert.equal(parseGateDecision('retry lint'), null, 'missing colon must not match')
-  assert.equal(parseGateDecision('retry test-fail: guidance'), null, 'hyphenated gate name is not \\w+')
   assert.equal(parseGateDecision('gibberish decision'), null)
   assert.equal(parseGateDecision(''), null)
   assert.equal(parseGateDecision(null), null)
