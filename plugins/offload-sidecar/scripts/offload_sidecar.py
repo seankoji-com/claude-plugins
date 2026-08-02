@@ -282,9 +282,7 @@ def resolve_output_dir(root, output_dir_path):
     existing directory that chunk files get written into, not a single
     file path."""
     if not output_dir_path:
-        raise SidecarError(
-            "output_path (an existing directory) is required for split_file"
-        )
+        raise SidecarError("output_path (an existing directory) is required for split_file")
     if not os.path.isabs(output_dir_path):
         output_dir_path = os.path.join(root, output_dir_path)
     if not os.path.isdir(output_dir_path):
@@ -305,20 +303,14 @@ def choose_write_path(output_path, overwrite):
     it — but check the '.new' fallback for the same hazards too, so a
     second run can't silently clobber the first run's '.new'."""
     if os.path.islink(output_path):
-        raise SidecarError(
-            f"output_path is a symlink, refusing to write through it: {output_path}"
-        )
+        raise SidecarError(f"output_path is a symlink, refusing to write through it: {output_path}")
     if overwrite or not os.path.exists(output_path):
         return output_path
     candidate = output_path + ".new"
     if os.path.islink(candidate):
-        raise SidecarError(
-            f"'.new' fallback is a symlink, refusing to write through it: {candidate}"
-        )
+        raise SidecarError(f"'.new' fallback is a symlink, refusing to write through it: {candidate}")
     if os.path.exists(candidate):
-        raise SidecarError(
-            f"both output_path and its '.new' fallback already exist: {candidate}"
-        )
+        raise SidecarError(f"both output_path and its '.new' fallback already exist: {candidate}")
     return candidate
 
 
@@ -413,9 +405,7 @@ def call_ollama(cfg, system_prompt, user_prompt):
         url, data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
     try:
-        with urllib.request.urlopen(
-            req, timeout=cfg["timeout"], context=tls_context
-        ) as resp:
+        with urllib.request.urlopen(req, timeout=cfg["timeout"], context=tls_context) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace") if e.fp else ""
@@ -423,9 +413,7 @@ def call_ollama(cfg, system_prompt, user_prompt):
             f"ollama at {host} returned HTTP {e.code} for model '{model}': {detail[:300]}"
         )
     except urllib.error.URLError as e:
-        raise OllamaError(
-            f"could not reach ollama at {host}: {e.reason}", unreachable=True
-        )
+        raise OllamaError(f"could not reach ollama at {host}: {e.reason}", unreachable=True)
     except OSError as e:
         # Covers socket.timeout and other low-level connection failures.
         raise OllamaError(f"ollama request to {host} failed: {e}", unreachable=True)
@@ -514,30 +502,22 @@ def check_cloud_budget(cfg, now=None):
     lockout = state["lockouts"].get(model)
     if isinstance(lockout, (int, float)) and lockout > now:
         resume = datetime.datetime.fromtimestamp(lockout).isoformat(timespec="seconds")
-        return (
-            False,
-            (
-                f"model '{model}' is quota-locked by Google until {resume} (parsed "
-                "from an earlier agy response). Use a local tier ('deep'/'fast') "
-                "until then."
-            ),
-            quota_usage(state, model, now),
-        )
+        return False, (
+            f"model '{model}' is quota-locked by Google until {resume} (parsed "
+            "from an earlier agy response). Use a local tier ('deep'/'fast') "
+            "until then."
+        ), quota_usage(state, model, now)
 
     usage = quota_usage(state, model, now)
     for window, cap in cfg["caps"].items():
         if cap > 0 and usage[window] >= cap:
-            return (
-                False,
-                (
-                    f"cloud budget exhausted for tier '{cfg['tier']}': {usage[window]} "
-                    f"calls in the last {window} (cap {cap}). Rejecting up front "
-                    "instead of burning subscription quota — use a local tier "
-                    "('deep'/'fast'), or raise the cap in the plugin config "
-                    f"(agy_{cfg['tier']}_per_{window}) if this budget is too tight."
-                ),
-                usage,
-            )
+            return False, (
+                f"cloud budget exhausted for tier '{cfg['tier']}': {usage[window]} "
+                f"calls in the last {window} (cap {cap}). Rejecting up front "
+                "instead of burning subscription quota — use a local tier "
+                "('deep'/'fast'), or raise the cap in the plugin config "
+                f"(agy_{cfg['tier']}_per_{window}) if this budget is too tight."
+            ), usage
     return True, None, usage
 
 
@@ -568,9 +548,7 @@ _AGY_LOCKOUT_RE = re.compile(
     r"resume using this model (?:at|on|after)\s+([^\n.]+)", re.IGNORECASE
 )
 # An expired login makes agy print a sign-in URL instead of an answer.
-_AGY_AUTH_RE = re.compile(
-    r"(sign.?in|log.?in|authenticat\w+).{0,80}https?://", re.IGNORECASE | re.DOTALL
-)
+_AGY_AUTH_RE = re.compile(r"(sign.?in|log.?in|authenticat\w+).{0,80}https?://", re.IGNORECASE | re.DOTALL)
 
 
 def _parse_lockout_deadline(text, now=None):
@@ -685,9 +663,7 @@ def call_agy(cfg, system_prompt, input_text=None, input_path=None):
             if _AGY_LOCKOUT_RE.search(combined):
                 until = _parse_lockout_deadline(combined)
                 record_lockout(cfg["model"], until)
-                resume = datetime.datetime.fromtimestamp(until).isoformat(
-                    timespec="seconds"
-                )
+                resume = datetime.datetime.fromtimestamp(until).isoformat(timespec="seconds")
                 raise AgyError(
                     f"agy reports model '{cfg['model']}' is quota-locked "
                     f"(resume ~{resume}). Recorded — further calls to this tier "
@@ -744,9 +720,7 @@ def _http_get_json(url, timeout):
     the whole urllib call graph. Honors OLLAMA_TLS_CA for https endpoints,
     same as the transform path."""
     req = urllib.request.Request(url, method="GET")
-    with urllib.request.urlopen(
-        req, timeout=timeout, context=_tls_context_for(url)
-    ) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=_tls_context_for(url)) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -784,10 +758,9 @@ def gather_status(host, model, timeout=DEFAULT_STATUS_TIMEOUT_SECONDS):
         return status
     except urllib.error.URLError as e:
         status["error"] = f"could not reach ollama at {host}: {e.reason}"
-        if (
-            isinstance(e.reason, (socket.timeout, TimeoutError))
-            or "timed out" in str(e.reason).lower()
-        ):
+        if isinstance(e.reason, (socket.timeout, TimeoutError)) or "timed out" in str(
+            e.reason
+        ).lower():
             status["hint"] = COLD_START_HINT
         return status
     except OSError as e:
@@ -810,14 +783,7 @@ def gather_status(host, model, timeout=DEFAULT_STATUS_TIMEOUT_SECONDS):
         status["loaded_models"] = sorted(
             m.get("name", "") for m in ps.get("models", []) if isinstance(m, dict)
         )
-    except (
-        OllamaError,
-        socket.timeout,
-        TimeoutError,
-        urllib.error.URLError,
-        OSError,
-        json.JSONDecodeError,
-    ):
+    except (OllamaError, socket.timeout, TimeoutError, urllib.error.URLError, OSError, json.JSONDecodeError):
         # /api/ps failing shouldn't blank out an otherwise-successful
         # /api/tags reachability check — loaded_models just stays empty.
         pass
@@ -868,14 +834,10 @@ def format_cloud_status(cfg):
     usage = quota_usage(state, cfg["model"])
     found = shutil.which(cfg["bin"]) is not None
     lines = [f"{SERVER_NAME} status: agy ({cfg['bin']})"]
-    lines.append(
-        f"  binary found:      {'yes' if found else 'no — cloud tier unavailable'}"
-    )
+    lines.append(f"  binary found:      {'yes' if found else 'no — cloud tier unavailable'}")
     lines.append(f"  configured model:  {cfg['model']}")
     for window, cap in cfg["caps"].items():
-        lines.append(
-            f"  budget ({window}):{' ' * (10 - len(window))}{usage[window]}/{cap} calls used"
-        )
+        lines.append(f"  budget ({window}):{' ' * (10 - len(window))}{usage[window]}/{cap} calls used")
     lockout = state["lockouts"].get(cfg["model"])
     if isinstance(lockout, (int, float)) and lockout > time.time():
         resume = datetime.datetime.fromtimestamp(lockout).isoformat(timespec="seconds")
@@ -1104,10 +1066,7 @@ def _validate_redact_secrets(input_text, output_text, output_path, instruction):
             "rather than a targeted redaction"
         )
     if _SECRET_LIKE_RE.search(output_text):
-        return (
-            False,
-            "output still contains a known secret-shaped pattern after redaction",
-        )
+        return False, "output still contains a known secret-shaped pattern after redaction"
     return True, None
 
 
@@ -1251,10 +1210,7 @@ def _validate_draft_commit_message(input_text, output_text, output_path, instruc
     if not text:
         return False, "output is empty"
     if "```" in text:
-        return (
-            False,
-            "output contains a markdown code fence — expected a bare commit message",
-        )
+        return False, "output contains a markdown code fence — expected a bare commit message"
     first = text.splitlines()[0]
     if len(first) > 100:
         return False, (
@@ -1349,7 +1305,7 @@ def _prompt_verify_screenshot(instruction, output_path):
     return (
         BASE_SYSTEM_PROMPT
         + " Operation: the input file is a screenshot. Check it against "
-        f'this assertion: "{instruction}". Output a single JSON object '
+        f"this assertion: \"{instruction}\". Output a single JSON object "
         "with exactly these keys: pass (true|false), observed (string — "
         "what the screenshot actually shows, relevant to the assertion), "
         "mismatches (array of strings, empty when pass is true)."
@@ -1459,10 +1415,7 @@ def _val_sort_lines(input_bytes, output_bytes, output_path, params):
     n_out = len(output_bytes.decode("utf-8", errors="replace").splitlines())
     if params.get("unique", False):
         if n_out > n_in:
-            return (
-                False,
-                f"unique-sorted output has more lines ({n_out}) than input ({n_in})",
-            )
+            return False, f"unique-sorted output has more lines ({n_out}) than input ({n_in})"
     elif n_out != n_in:
         return False, (
             f"sorted output has {n_out} lines but input has {n_in} — sort must "
@@ -1595,17 +1548,9 @@ def _val_strip_ansi_codes(input_bytes, output_bytes, output_path, params):
 # record counting).
 _TS_PATTERNS = [
     # Apache/NCSA combined log: [10/Oct/2023:13:55:36 -0700]
-    (
-        re.compile(r"\[(\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4})\]"),
-        "%d/%b/%Y:%H:%M:%S %z",
-        True,
-    ),
+    (re.compile(r"\[(\d{2}/\w{3}/\d{4}:\d{2}:\d{2}:\d{2} [+-]\d{4})\]"), "%d/%b/%Y:%H:%M:%S %z", True),
     # US-style: 10/10/2023 13:55:36
-    (
-        re.compile(r"\b(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})\b"),
-        "%m/%d/%Y %H:%M:%S",
-        True,
-    ),
+    (re.compile(r"\b(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})\b"), "%m/%d/%Y %H:%M:%S", True),
     # syslog: Oct 10 13:55:36 (no year in the source format — assume current)
     (re.compile(r"\b(\w{3}\s+\d{1,2} \d{2}:\d{2}:\d{2})\b"), "%b %d %H:%M:%S", False),
 ]
@@ -1616,9 +1561,7 @@ def _normalize_one_timestamp(raw, fmt, has_year):
         if has_year:
             dt = datetime.datetime.strptime(raw, fmt)
         else:
-            dt = datetime.datetime.strptime(
-                f"{datetime.datetime.now().year} {raw}", f"%Y {fmt}"
-            )
+            dt = datetime.datetime.strptime(f"{datetime.datetime.now().year} {raw}", f"%Y {fmt}")
     except ValueError:
         return None
     return dt.isoformat()
@@ -1630,7 +1573,6 @@ def _det_normalize_log_timestamps(input_bytes, params, instruction, output_path)
     for line in text.splitlines(keepends=True):
         replaced = line
         for rx, fmt, has_year in _TS_PATTERNS:
-
             def _sub(m, _fmt=fmt, _has_year=has_year):
                 iso = _normalize_one_timestamp(m.group(1), _fmt, _has_year)
                 return iso if iso else m.group(0)
@@ -1653,14 +1595,8 @@ def _val_normalize_log_timestamps(input_bytes, output_bytes, output_path, params
 
 def _det_extract_field_list(input_bytes, params, instruction, output_path):
     fields = params.get("fields")
-    if (
-        not fields
-        or not isinstance(fields, list)
-        or not all(isinstance(f, str) for f in fields)
-    ):
-        raise SidecarError(
-            "params.fields (a list of field name strings) is required for extract_fields"
-        )
+    if not fields or not isinstance(fields, list) or not all(isinstance(f, str) for f in fields):
+        raise SidecarError("params.fields (a list of field name strings) is required for extract_fields")
     ext = os.path.splitext(output_path)[1].lower()
     if ext not in SUPPORTED_CONVERT_EXTENSIONS:
         raise SidecarError(
@@ -1764,9 +1700,7 @@ def _det_sqlite_dump_to_json(input_path, params, instruction, output_path):
     try:
         cur = conn.cursor()
         try:
-            cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
             table_names = [row[0] for row in cur.fetchall()]
         except sqlite3.DatabaseError as e:
             raise SidecarError(f"input is not a valid sqlite database: {e}")
@@ -1890,9 +1824,7 @@ def _json_records(input_bytes, operation):
 
 def _det_json_to_jsonl(input_bytes, params, instruction, output_path):
     records = _json_records(input_bytes, "json_to_jsonl")
-    return (
-        "\n".join(json.dumps(r, separators=(",", ":")) for r in records) + "\n"
-    ).encode("utf-8")
+    return ("\n".join(json.dumps(r, separators=(",", ":")) for r in records) + "\n").encode("utf-8")
 
 
 def _val_json_to_jsonl(input_bytes, output_bytes, output_path, params):
@@ -1900,16 +1832,9 @@ def _val_json_to_jsonl(input_bytes, output_bytes, output_path, params):
         n_records = len(_json_records(input_bytes, "json_to_jsonl"))
     except SidecarError as e:
         return False, str(e)
-    lines = [
-        l
-        for l in output_bytes.decode("utf-8", errors="replace").splitlines()
-        if l.strip()
-    ]
+    lines = [l for l in output_bytes.decode("utf-8", errors="replace").splitlines() if l.strip()]
     if len(lines) != n_records:
-        return (
-            False,
-            f"output has {len(lines)} JSON lines but input has {n_records} records",
-        )
+        return False, f"output has {len(lines)} JSON lines but input has {n_records} records"
     for i, line in enumerate(lines, start=1):
         try:
             json.loads(line)
@@ -1931,9 +1856,7 @@ def _det_csv_to_json(input_bytes, params, instruction, output_path):
     if not rows:
         raise SidecarError("input CSV has a header but no data rows")
     if any(None in r for r in rows):
-        raise SidecarError(
-            "input CSV is ragged: some rows have more fields than the header"
-        )
+        raise SidecarError("input CSV is ragged: some rows have more fields than the header")
     return json.dumps(rows, indent=2).encode("utf-8")
 
 
@@ -1982,9 +1905,7 @@ def _det_json_to_csv(input_bytes, params, instruction, output_path):
 
     def cell(v):
         # Nested structures survive as embedded JSON rather than Python repr.
-        return (
-            json.dumps(v, separators=(",", ":")) if isinstance(v, (dict, list)) else v
-        )
+        return json.dumps(v, separators=(",", ":")) if isinstance(v, (dict, list)) else v
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
@@ -2000,9 +1921,7 @@ def _val_json_to_csv(input_bytes, output_bytes, output_path, params):
 
 def _det_toml_to_json(input_bytes, params, instruction, output_path):
     if tomllib is None:
-        raise SidecarError(
-            "toml_to_json needs Python 3.11+ (the stdlib tomllib module)"
-        )
+        raise SidecarError("toml_to_json needs Python 3.11+ (the stdlib tomllib module)")
     try:
         obj = tomllib.loads(input_bytes.decode("utf-8", errors="replace"))
     except tomllib.TOMLDecodeError as e:
@@ -2073,29 +1992,9 @@ def _val_xml_to_json(input_bytes, output_bytes, output_path, params):
 class _HTMLTextExtractor(html.parser.HTMLParser):
     _SKIP = {"script", "style", "head", "template", "noscript"}
     _BLOCK = {
-        "p",
-        "div",
-        "br",
-        "li",
-        "tr",
-        "h1",
-        "h2",
-        "h3",
-        "h4",
-        "h5",
-        "h6",
-        "section",
-        "article",
-        "header",
-        "footer",
-        "ul",
-        "ol",
-        "table",
-        "blockquote",
-        "pre",
-        "hr",
-        "dt",
-        "dd",
+        "p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6",
+        "section", "article", "header", "footer", "ul", "ol", "table",
+        "blockquote", "pre", "hr", "dt", "dd",
     }
 
     def __init__(self):
@@ -2176,9 +2075,7 @@ def _det_regex_replace(input_bytes, params, instruction, output_path):
     try:
         out = rx.sub(replacement, text, count=count)
     except (re.error, IndexError) as e:
-        raise SidecarError(
-            f"params.replacement is not a valid template for this pattern: {e}"
-        )
+        raise SidecarError(f"params.replacement is not a valid template for this pattern: {e}")
     return out.encode("utf-8")
 
 
@@ -2191,9 +2088,7 @@ def _val_regex_replace(input_bytes, output_bytes, output_path, params):
 def _det_slice_lines(input_bytes, params, instruction, output_path):
     head, tail = params.get("head"), params.get("tail")
     start, end = params.get("start"), params.get("end")
-    modes = sum(
-        [head is not None, tail is not None, start is not None or end is not None]
-    )
+    modes = sum([head is not None, tail is not None, start is not None or end is not None])
     if modes != 1:
         raise SidecarError(
             "slice_lines requires exactly one of: params.head, params.tail, "
@@ -2216,9 +2111,7 @@ def _det_slice_lines(input_bytes, params, instruction, output_path):
             start = int(start) if start is not None else 1
             end = int(end) if end is not None else len(lines)
             if start < 1 or end < start:
-                raise SidecarError(
-                    "params.start must be >= 1 and params.end >= params.start"
-                )
+                raise SidecarError("params.start must be >= 1 and params.end >= params.start")
             picked = lines[start - 1 : end]
     except (TypeError, ValueError):
         raise SidecarError("params.head/tail/start/end must be integers")
@@ -2281,19 +2174,14 @@ def _run_yq(argv, input_bytes):
         )
     try:
         proc = subprocess.run(
-            ["yq"] + argv,
-            input=input_bytes,
-            capture_output=True,
-            timeout=YQ_TIMEOUT_SECONDS,
+            ["yq"] + argv, input=input_bytes, capture_output=True, timeout=YQ_TIMEOUT_SECONDS
         )
     except subprocess.TimeoutExpired:
         raise SidecarError(f"yq timed out after {YQ_TIMEOUT_SECONDS}s")
     except OSError as e:
         raise SidecarError(f"failed to run yq: {e}")
     if proc.returncode != 0:
-        raise SidecarError(
-            f"yq failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}"
-        )
+        raise SidecarError(f"yq failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}")
     return proc.stdout
 
 
@@ -2320,9 +2208,7 @@ def _val_json_to_yaml(input_bytes, output_bytes, output_path, params):
     # Strongest available check: yq the YAML back to JSON and require equality
     # with the original input.
     try:
-        back = json.loads(
-            _run_yq(["eval", "-o=json", "."], output_bytes).decode("utf-8")
-        )
+        back = json.loads(_run_yq(["eval", "-o=json", "."], output_bytes).decode("utf-8"))
         original = json.loads(input_bytes.decode("utf-8", errors="replace"))
     except (SidecarError, json.JSONDecodeError, UnicodeDecodeError) as e:
         return False, f"could not round-trip the YAML output back to JSON: {e}"
@@ -2346,9 +2232,7 @@ def _json_schema_of(node, depth=0):
             return {"type": "object", "keys": len(node), "note": "max depth reached"}
         keys = list(node.keys())
         out = {"type": "object", "key_count": len(keys)}
-        shown = {
-            k: _json_schema_of(node[k], depth + 1) for k in keys[:_JSON_DIGEST_MAX_KEYS]
-        }
+        shown = {k: _json_schema_of(node[k], depth + 1) for k in keys[:_JSON_DIGEST_MAX_KEYS]}
         out["keys"] = shown
         if len(keys) > _JSON_DIGEST_MAX_KEYS:
             out["keys_omitted"] = len(keys) - _JSON_DIGEST_MAX_KEYS
@@ -2368,9 +2252,7 @@ def _json_schema_of(node, depth=0):
     if node is None:
         return {"type": "null"}
     s = str(node)
-    sample = s[:_JSON_DIGEST_SAMPLE_CHARS] + (
-        "…" if len(s) > _JSON_DIGEST_SAMPLE_CHARS else ""
-    )
+    sample = s[:_JSON_DIGEST_SAMPLE_CHARS] + ("…" if len(s) > _JSON_DIGEST_SAMPLE_CHARS else "")
     return {"type": "string", "sample": sample}
 
 
@@ -2440,9 +2322,7 @@ def _xlsx_cell_value(cell, shared):
         try:
             return shared[int(raw)]
         except (ValueError, IndexError):
-            raise SidecarError(
-                f"worksheet references shared string #{raw} which does not exist"
-            )
+            raise SidecarError(f"worksheet references shared string #{raw} which does not exist")
     if ctype == "b":
         return raw == "1"
     if ctype in ("str", "e"):  # formula-cached string / error literal
@@ -2468,18 +2348,12 @@ def _det_xlsx_extract(input_path, params, instruction, output_path):
     with zf:
         try:
             wb = xml.etree.ElementTree.fromstring(zf.read("xl/workbook.xml"))
-            rels = xml.etree.ElementTree.fromstring(
-                zf.read("xl/_rels/workbook.xml.rels")
-            )
+            rels = xml.etree.ElementTree.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
         except (KeyError, xml.etree.ElementTree.ParseError) as e:
             raise SidecarError(f"input is not a valid .xlsx workbook: {e}")
         rel_ns = "{http://schemas.openxmlformats.org/package/2006/relationships}"
-        id_attr = (
-            "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
-        )
-        targets = {
-            r.get("Id"): r.get("Target") for r in rels.iter(f"{rel_ns}Relationship")
-        }
+        id_attr = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+        targets = {r.get("Id"): r.get("Target") for r in rels.iter(f"{rel_ns}Relationship")}
         shared = _xlsx_shared_strings(zf)
         result = {}
         sheets = list(wb.iter(f"{_XLSX_NS_MAIN}sheet"))
@@ -3052,14 +2926,10 @@ def error_payload(reason, extra=None):
 
 def handle_merge_files(args):
     input_paths = args.get("input_paths")
-    if (
-        not input_paths
-        or not isinstance(input_paths, list)
-        or not all(isinstance(p, str) for p in input_paths)
+    if not input_paths or not isinstance(input_paths, list) or not all(
+        isinstance(p, str) for p in input_paths
     ):
-        return error_payload(
-            "input_paths (a non-empty list of file paths) is required for merge_files"
-        )
+        return error_payload("input_paths (a non-empty list of file paths) is required for merge_files")
     if len(input_paths) < 2:
         return error_payload("merge_files requires at least 2 input_paths")
 
@@ -3118,9 +2988,7 @@ def handle_split_file(args):
     lines_per_chunk = params.get("lines_per_chunk")
     num_chunks = params.get("num_chunks")
     if not lines_per_chunk and not num_chunks:
-        return error_payload(
-            "split_file requires params.lines_per_chunk or params.num_chunks"
-        )
+        return error_payload("split_file requires params.lines_per_chunk or params.num_chunks")
     overwrite = bool(args.get("overwrite", False))
 
     try:
@@ -3150,10 +3018,7 @@ def handle_split_file(args):
             return error_payload("params.lines_per_chunk must be an integer")
         if lines_per_chunk <= 0:
             return error_payload("params.lines_per_chunk must be > 0")
-        chunks = [
-            lines[i : i + lines_per_chunk]
-            for i in range(0, len(lines), lines_per_chunk)
-        ]
+        chunks = [lines[i : i + lines_per_chunk] for i in range(0, len(lines), lines_per_chunk)]
     else:
         try:
             num_chunks = int(num_chunks)
@@ -3197,9 +3062,7 @@ def handle_process_local_file(args):
     if operation == "split_file":
         return handle_split_file(args)
     if operation not in OPERATIONS:
-        return error_payload(
-            f"unknown operation '{operation}', must be one of {ALL_OPERATION_NAMES}"
-        )
+        return error_payload(f"unknown operation '{operation}', must be one of {ALL_OPERATION_NAMES}")
 
     op = OPERATIONS[operation]
     instruction = args.get("instruction") or ""
@@ -3210,11 +3073,7 @@ def handle_process_local_file(args):
     if op["kind"] == "llm" and "det_transform" in op and yq_available():
         # Hybrid operation (yaml_to_json): yq is on PATH, so run it
         # deterministically — no model call at all.
-        op = {
-            "kind": "deterministic",
-            "transform": op["det_transform"],
-            "validate": op["det_validate"],
-        }
+        op = {"kind": "deterministic", "transform": op["det_transform"], "validate": op["det_validate"]}
         engine = "yq"
 
     try:
@@ -3239,9 +3098,7 @@ def handle_process_local_file(args):
     if op["kind"] == "llm":
         tier_name = args.get("tier") or op.get("default_tier", "deep")
         if tier_name not in LLM_TIERS:
-            return error_payload(
-                f"tier must be one of {list(LLM_TIERS)}, got '{tier_name}'"
-            )
+            return error_payload(f"tier must be one of {list(LLM_TIERS)}, got '{tier_name}'")
         if op.get("requires_instruction") and not instruction.strip():
             return error_payload(
                 f"operation '{operation}' requires an instruction — it is the "
@@ -3288,9 +3145,7 @@ def handle_process_local_file(args):
                     reason,
                     extra={"quota_usage": usage, "quota_caps": cfg["caps"]},
                 )
-            if not is_media and input_tokens > max_input_tokens_for(
-                system_prompt, cfg["num_ctx"]
-            ):
+            if not is_media and input_tokens > max_input_tokens_for(system_prompt, cfg["num_ctx"]):
                 return error_payload(
                     f"input too large even for the cloud tier's context budget "
                     f"(~{input_tokens} estimated tokens, num_ctx={cfg['num_ctx']}). "
@@ -3337,9 +3192,7 @@ def handle_process_local_file(args):
                 try:
                     result = call_ollama(other, system_prompt, input_text)
                 except OllamaError as e2:
-                    return error_payload(
-                        f"both tiers failed — {tier_name}: {e}; {other['tier']}: {e2}"
-                    )
+                    return error_payload(f"both tiers failed — {tier_name}: {e}; {other['tier']}: {e2}")
                 fell_back_from, cfg = tier_name, other
 
             done_reason = result.get("done_reason")
