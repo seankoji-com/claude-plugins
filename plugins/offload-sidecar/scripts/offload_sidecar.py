@@ -141,15 +141,29 @@ DEFAULT_PRO_PER_5H = 5
 DEFAULT_PRO_PER_WEEK = 25
 
 
+_UNEXPANDED_PLACEHOLDER = re.compile(r"^\$\{(?:user_config\.[A-Za-z0-9_]+|CLAUDE_[A-Z_]+)\}\Z")
+
+
 def _env(name, default):
     """Read an env var, falling back to `default` if unset OR if it still
-    contains an unexpanded ``${...}`` token. Claude Code interpolates
-    userConfig values into .mcp.json's env block; if a value is left unset
-    by the user, the substitution behavior for that case is not something
-    this server can assume, so it treats either an empty string or a
-    literal, un-interpolated placeholder as "not configured"."""
+    holds Claude Code's own unexpanded template placeholder, whole and
+    exact: ``${user_config.<key>}`` (from .mcp.json's env block, when the
+    user never configured that field) or a ``${CLAUDE_PROJECT_DIR}``-style
+    built-in (.mcp.json's `SIDECAR_ROOT` uses exactly that one) — kept
+    honest against drift by a dedicated test in test_offload_sidecar.py
+    that checks every placeholder .mcp.json actually uses. The substitution
+    behavior for a field the user never configured isn't something this
+    server can assume, so both an empty string and a literal, un-
+    substituted placeholder are treated as "not configured". The match
+    requires the *whole* value to be one of these placeholder shapes, so a
+    value the user wrote themselves that merely contains "${" — e.g.
+    OLLAMA_TLS_CA="${HOME}/certs/ca.pem" — passes through untouched instead
+    of silently collapsing to the default. That value still isn't shell-
+    expanded here (no `$HOME`/`${HOME}` substitution happens), so it fails
+    loudly at the file-open site instead of being mistaken for Claude
+    Code's own syntax."""
     val = os.environ.get(name, "")
-    if "${" in val:
+    if _UNEXPANDED_PLACEHOLDER.match(val):
         val = ""
     return val or default
 

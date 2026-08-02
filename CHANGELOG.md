@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Claude Code's `${user_config.*}` substitution nor this shell-less subprocess ever
   expanded `~`, so a `~`-prefixed value previously failed closed (`tls_ca_file`) or
   silently missed the binary (`agy_bin`).
+- `plugins/offload-sidecar` (0.3.1) — `_env()`'s unexpanded-placeholder guard was a
+  bare `"${" in val` substring check, so a value the user wrote themselves that
+  merely contained `${` (e.g. `tls_ca_file='${HOME}/certs/ca.pem'`) was mistaken for
+  an un-substituted `${user_config.*}` placeholder and silently dropped to the
+  default. For `tls_ca_file` this was worse than a no-op: it skipped the informative
+  error for a bad CA path in favor of silent fallback to default system CA
+  verification. Narrowed the guard to an exact match against Claude Code's actual
+  placeholder shapes (`${user_config.<key>}`, `${CLAUDE_PROJECT_DIR}`), so
+  user-written values now pass through untouched.
 
 ## [Unreleased] - 2026-07-11
 
