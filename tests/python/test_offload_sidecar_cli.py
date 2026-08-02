@@ -35,6 +35,9 @@ _PLUGIN_DIR = os.path.normpath(os.path.join(_HERE, "..", "..", "plugins", "offlo
 _SCRIPT_PATH = os.path.join(_PLUGIN_DIR, "scripts", "offload_sidecar.py")
 _MCP_JSON_PATH = os.path.join(_PLUGIN_DIR, ".mcp.json")
 _PLUGIN_JSON_PATH = os.path.join(_PLUGIN_DIR, ".claude-plugin", "plugin.json")
+_MARKETPLACE_JSON_PATH = os.path.normpath(
+    os.path.join(_HERE, "..", "..", ".claude-plugin", "marketplace.json")
+)
 
 
 def _subprocess_env(quota_dir, extra=None):
@@ -284,10 +287,10 @@ class ConfigConsistencyTest(unittest.TestCase):
 
     def _env_names_read_by_script(self):
         """AST-parse offload_sidecar.py and collect the first string-literal
-        argument of every _env(...)/_env_int(...) call site. Deliberately
-        NOT a regex over `[A-Z_]*` — that pattern misses names containing
-        digits (e.g. an _PER_5H-shaped constant), which an AST walk over
-        actual call sites doesn't."""
+        argument of every _env(...)/_env_int(...)/_env_path(...) call site.
+        Deliberately NOT a regex over `[A-Z_]*` — that pattern misses names
+        containing digits (e.g. an _PER_5H-shaped constant), which an AST walk
+        over actual call sites doesn't."""
         with open(_SCRIPT_PATH, "r", encoding="utf-8") as f:
             tree = ast.parse(f.read(), filename=_SCRIPT_PATH)
 
@@ -297,7 +300,7 @@ class ConfigConsistencyTest(unittest.TestCase):
             def visit_Call(self, node):
                 if (
                     isinstance(node.func, ast.Name)
-                    and node.func.id in ("_env", "_env_int")
+                    and node.func.id in ("_env", "_env_int", "_env_path")
                     and node.args
                     and isinstance(node.args[0], ast.Constant)
                     and isinstance(node.args[0].value, str)
@@ -325,6 +328,34 @@ class ConfigConsistencyTest(unittest.TestCase):
             missing,
             set(),
             f"env vars declared in .mcp.json but never read by offload_sidecar.py: {missing}",
+        )
+
+    def test_server_version_matches_plugin_and_marketplace(self):
+        # SERVER_VERSION (offload_sidecar.py) is a hand-maintained constant
+        # reported in the MCP `initialize` response. version-bump.yml only
+        # ever writes plugin.json/marketplace.json, so nothing keeps
+        # SERVER_VERSION in sync automatically — a stale value is invisible
+        # to every other check in this class and to CI.
+        with open(_PLUGIN_JSON_PATH, "r", encoding="utf-8") as f:
+            plugin_version = json.load(f)["version"]
+
+        with open(_MARKETPLACE_JSON_PATH, "r", encoding="utf-8") as f:
+            marketplace = json.load(f)
+        marketplace_version = next(
+            p["version"] for p in marketplace["plugins"] if p["name"] == "offload-sidecar"
+        )
+
+        with open(_SCRIPT_PATH, "r", encoding="utf-8") as f:
+            script_src = f.read()
+        match = re.search(r'^SERVER_VERSION = "([^"]+)"', script_src, re.M)
+        self.assertIsNotNone(match, "SERVER_VERSION constant not found in offload_sidecar.py")
+        server_version = match.group(1)
+
+        self.assertEqual(
+            {plugin_version, marketplace_version, server_version},
+            {plugin_version},
+            f"version drift: plugin.json={plugin_version} marketplace.json="
+            f"{marketplace_version} SERVER_VERSION={server_version}",
         )
 
     def test_user_config_keys_match_mcp_json_references_bidirectionally(self):

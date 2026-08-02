@@ -111,7 +111,7 @@ YQ_TIMEOUT_SECONDS = 60
 MCP_PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "offload-sidecar"
 # Kept in lockstep with plugin.json / marketplace.json.
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.3.1"
 
 # --- agy (Google Antigravity CLI) engine defaults ---------------------------
 # Model names are agy's display names, exactly as `agy models` prints them.
@@ -162,6 +162,13 @@ def _env_int(name, default):
         return default
 
 
+def _env_path(name, default=""):
+    """Path-shaped env vars reach us as a literal string through a shell-less
+    subprocess (userConfig -> .mcp.json's env block), so `~` is never
+    expanded upstream — expand it here, at the single seam."""
+    return os.path.expanduser(_env(name, default))
+
+
 LLM_TIERS = ("deep", "fast", "flash", "pro")
 LOCAL_TIERS = ("deep", "fast")
 CLOUD_TIERS = ("flash", "pro")
@@ -196,7 +203,7 @@ def resolve_tier(tier):
         return {
             "tier": tier,
             "engine": "agy",
-            "bin": _env("AGY_BIN", DEFAULT_AGY_BIN),
+            "bin": _env_path("AGY_BIN", DEFAULT_AGY_BIN),
             "model": model,
             "num_ctx": _env_int("AGY_NUM_CTX", DEFAULT_AGY_NUM_CTX),
             "timeout": _env_int("AGY_TIMEOUT", DEFAULT_AGY_TIMEOUT),
@@ -235,7 +242,7 @@ class SidecarError(Exception):
 
 
 def resolve_root():
-    root = _env("SIDECAR_ROOT", "")
+    root = _env_path("SIDECAR_ROOT", "")
     root = root or os.getcwd()
     return os.path.realpath(root)
 
@@ -372,7 +379,7 @@ def _tls_context_for(url):
     path to a PEM file). Lets a LAN reverse proxy with an mkcert/self-signed
     CA verify properly instead of forcing plain http or an insecure skip.
     Returns None for http URLs or when unconfigured (default verification)."""
-    ca_file = _env("OLLAMA_TLS_CA", "")
+    ca_file = _env_path("OLLAMA_TLS_CA")
     if not ca_file or not url.lower().startswith("https://"):
         return None
     try:
@@ -435,7 +442,7 @@ QUOTA_WINDOWS = {"5h": 5 * 3600, "week": 7 * 24 * 3600}
 
 
 def quota_state_path():
-    override = _env("AGY_QUOTA_STATE", "")
+    override = _env_path("AGY_QUOTA_STATE")
     if override:
         return override
     return os.path.join(

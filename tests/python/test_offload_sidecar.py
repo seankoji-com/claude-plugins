@@ -87,6 +87,24 @@ class EnvHelpersTest(unittest.TestCase):
         self.assertEqual(fast["host"], "http://fastbox:11434")
         self.assertEqual(fast["model"], "small")
 
+    def test_env_path_expands_tilde(self):
+        with mock.patch.dict(os.environ, {"SIDECAR_TEST_PATH": "~/a/b.pem"}):
+            self.assertEqual(
+                sidecar._env_path("SIDECAR_TEST_PATH"), os.path.expanduser("~/a/b.pem")
+            )
+
+    def test_env_path_leaves_absolute_path_unchanged(self):
+        with mock.patch.dict(os.environ, {"SIDECAR_TEST_PATH": "/a/b.pem"}):
+            self.assertEqual(sidecar._env_path("SIDECAR_TEST_PATH"), "/a/b.pem")
+
+    def test_env_path_falls_back_on_unset(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SIDECAR_TEST_PATH", None)
+            self.assertEqual(
+                sidecar._env_path("SIDECAR_TEST_PATH", "~/default.pem"),
+                os.path.expanduser("~/default.pem"),
+            )
+
 
 class PathScopingTest(unittest.TestCase):
     def setUp(self):
@@ -192,6 +210,29 @@ class ContextBudgetTest(unittest.TestCase):
         # Tiny num_ctx: the 256-token floor must not exceed what's available.
         budget = sidecar.max_input_tokens_for("", 100)
         self.assertLessEqual(budget, 100)
+
+
+class TlsContextTest(unittest.TestCase):
+    def test_returns_none_for_http_url(self):
+        with mock.patch.dict(os.environ, {"OLLAMA_TLS_CA": "/some/ca.pem"}):
+            self.assertIsNone(sidecar._tls_context_for("http://h:11434/api/generate"))
+
+    def test_returns_none_when_unconfigured(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("OLLAMA_TLS_CA", None)
+            self.assertIsNone(sidecar._tls_context_for("https://h:11434/api/generate"))
+
+    def test_expands_tilde_in_ca_path(self):
+        with mock.patch.dict(os.environ, {"OLLAMA_TLS_CA": "~/certs/ca.pem"}):
+            with mock.patch.object(sidecar.ssl, "create_default_context") as create_ctx:
+                sidecar._tls_context_for("https://h:11434/api/generate")
+        create_ctx.assert_called_once_with(cafile=os.path.expanduser("~/certs/ca.pem"))
+
+    def test_missing_ca_file_raises_with_expanded_path(self):
+        with mock.patch.dict(os.environ, {"OLLAMA_TLS_CA": "~/nope/ca.pem"}):
+            with self.assertRaises(sidecar.OllamaError) as cm:
+                sidecar._tls_context_for("https://h:11434/api/generate")
+        self.assertIn(os.path.expanduser("~/nope/ca.pem"), str(cm.exception))
 
 
 class CallOllamaTest(unittest.TestCase):
@@ -904,6 +945,11 @@ class CloudTierResolutionTest(unittest.TestCase):
         self.assertEqual(sidecar.resolve_tier("deep")["engine"], "ollama")
         self.assertEqual(sidecar.resolve_tier("fast")["engine"], "ollama")
 
+    def test_bin_path_expands_tilde(self):
+        with mock.patch.dict(os.environ, {"AGY_BIN": "~/bin/agy"}):
+            cfg = sidecar.resolve_tier("flash")
+        self.assertEqual(cfg["bin"], os.path.expanduser("~/bin/agy"))
+
 
 class QuotaGateTest(unittest.TestCase):
     def setUp(self):
@@ -1015,6 +1061,13 @@ class QuotaGateTest(unittest.TestCase):
         text = "You can resume using this model at half past teatime"
         ts = sidecar._parse_lockout_deadline(text, now=now)
         self.assertAlmostEqual(ts, now + 5 * 3600, delta=5)
+
+
+class QuotaStatePathTest(unittest.TestCase):
+    def test_override_expands_tilde(self):
+        with mock.patch.dict(os.environ, {"AGY_QUOTA_STATE": "~/state/quota.json"}):
+            path = sidecar.quota_state_path()
+        self.assertEqual(path, os.path.expanduser("~/state/quota.json"))
 
 
 class CallAgyTest(unittest.TestCase):
