@@ -123,7 +123,7 @@ const STATE_SCHEMA = {
     verdicts: { type: ['object', 'null'], additionalProperties: true },
     discussion_comment_url: { type: ['string', 'null'] },
     source_discussion: { type: ['object', 'null'], additionalProperties: true },
-    gate_commands: { type: ['object', 'null'], additionalProperties: true },
+    gate_commands: { type: ['array', 'null'], items: { type: 'object', additionalProperties: true } },
     learnings_saved: { type: ['array', 'null'] },
     operator_decision: { type: ['string', 'null'] },
     last_result: { type: ['object', 'null'], additionalProperties: true },
@@ -694,10 +694,10 @@ function fixGate(gate, tail, guidance) {
 // task IDs — distinguished from parseTaskDecision by the absence of "tasks #".
 function parseGateDecision(decision) {
   if (!decision) return null
-  const retryMatch = decision.match(/^retry (\w+):\s*(.*)$/i)
-  if (retryMatch) return { kind: 'retry', gate: retryMatch[1], guidance: retryMatch[2].trim() }
-  const skipMatch = decision.match(/^skip (\w+)$/i)
-  if (skipMatch) return { kind: 'skip', gate: skipMatch[1] }
+  const retryMatch = decision.match(/^retry ([^:]+):\s*(.*)$/i)
+  if (retryMatch) return { kind: 'retry', gate: retryMatch[1].trim(), guidance: retryMatch[2].trim() }
+  const skipMatch = decision.match(/^skip (.+)$/i)
+  if (skipMatch) return { kind: 'skip', gate: skipMatch[1].trim() }
   return null
 }
 
