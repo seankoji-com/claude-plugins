@@ -129,8 +129,8 @@ Config (prompted at install; reconfigure later via `claude plugin` config comman
 | `fast_ollama_host` | *(unset → deep)* | **Fast tier** — optional second Ollama server, e.g. `http://your-pc.local:11434`. |
 | `fast_ollama_model` | *(unset → deep)* | Fast tier model tag. |
 | `fast_num_ctx` | *(unset → deep)* | Fast tier context window. |
-| `tls_ca_file` | *(unset)* | PEM CA bundle for verifying **https** Ollama endpoints (mkcert/self-signed LAN proxies). |
-| `agy_bin` | `agy` | **Cloud tiers** — Antigravity CLI binary name/path. |
+| `tls_ca_file` | *(unset)* | PEM CA bundle path (`~` or absolute) for verifying **https** Ollama endpoints (mkcert/self-signed LAN proxies). |
+| `agy_bin` | `agy` | **Cloud tiers** — Antigravity CLI binary name, or a `~`/absolute path. |
 | `agy_flash_model` | `Gemini 3.5 Flash (Low)` | Flash tier model, exactly as `agy models` prints it. |
 | `agy_pro_model` | `Gemini 3.1 Pro (High)` | Pro tier model. |
 | `agy_flash_per_5h` | `60` | Flash call budget per 5h window (`0` disables). |

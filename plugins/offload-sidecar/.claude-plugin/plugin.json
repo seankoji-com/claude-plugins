@@ -1,6 +1,6 @@
 {
   "name": "offload-sidecar",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP tool that offloads file transforms, log triage, and vision tasks so Claude passes file paths, not content — deterministic in-process where possible, else routed across local Ollama tiers (deep/fast, private) or Gemini via the agy CLI (flash/pro, budget-gated so quota exhaustion rejects up front instead of failing mid-call). Formerly ollama-sidecar.",
   "author": {
     "name": "seankoji",
@@ -59,13 +59,13 @@
     "tls_ca_file": {
       "type": "string",
       "title": "TLS CA bundle (optional)",
-      "description": "Path to a PEM CA bundle used to verify https Ollama endpoints — for LAN reverse proxies with an mkcert/self-signed CA. Leave unset for standard system verification.",
+      "description": "Path to a PEM CA bundle used to verify https Ollama endpoints — for LAN reverse proxies with an mkcert/self-signed CA. Accepts a ~ or absolute path. Leave unset for standard system verification.",
       "default": ""
     },
     "agy_bin": {
       "type": "string",
       "title": "Cloud tiers — agy binary (optional)",
-      "description": "Name or path of the Google Antigravity CLI binary used by the flash/pro tiers. Leave as 'agy' if it's on PATH; the cloud tiers simply error (and local tiers keep working) when it isn't installed. NOTE: cloud tiers send file contents to Google.",
+      "description": "Name or path of the Google Antigravity CLI binary used by the flash/pro tiers. Leave as 'agy' if it's on PATH; a ~ or absolute path also works. The cloud tiers simply error (and local tiers keep working) when it isn't installed. NOTE: cloud tiers send file contents to Google.",
       "default": "agy"
     },
     "agy_flash_model": {
