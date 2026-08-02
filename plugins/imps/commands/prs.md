@@ -4,6 +4,7 @@ description: >
   Proactive PR monitor for /imps:imps runs. Polls the main-branch PR for review comments,
   CI failures, and merge conflicts, then spawns agents to fix them automatically.
   Self-reschedules via ScheduleWakeup; stops when the PR is merged, closed, or 48 h old.
+disable-model-invocation: true
 ---
 
 # /imps:prs — proactive PR monitor
