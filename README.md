@@ -6,13 +6,12 @@ A [Claude Code](https://code.claude.com/) plugin marketplace by [@seankoji](http
 
 | Plugin | Description |
 |---|---|
-| [elephant-goldfish](./plugins/elephant-goldfish/) | Self-validating `/elephant-goldfish:elephant` design-doc command + Gemini goldfish judge |
+| [elephant-goldfish](./plugins/elephant-goldfish/) | Self-validating `/elephant-goldfish:elephant` design-doc command + Gemini goldfish judge, and `/elephant-goldfish:thinking` — interrogate a problem, build a grading rubric, emit a ready-to-paste brief for a fresh session |
 | [claude-tuneup](./plugins/claude-tuneup/) | Permission audit and settings tuneup for Claude Code |
 | [prompt-builder](./plugins/prompt-builder/) | Iterative prompt engineering assistant |
 | [imps](./plugins/imps/) | Swarm orchestrator — parallel model-routed agents, Workflow dispatch, deterministic gates, persona-review panel |
 | [ape](./plugins/ape/) | Forages OSS repos for transferable techniques — discovery, ranking, cloning, analysis, and synthesis as a real Workflow script |
 | [offload-sidecar](./plugins/offload-sidecar/) | MCP tool that offloads file transforms, log triage, and vision tasks — paths in, paths out, no file content through Claude's context. Local Ollama tiers (private) plus budget-gated Gemini tiers via the agy CLI. Formerly ollama-sidecar |
-| [recon](./plugins/recon/) | Discovery → spec → verify → execute workflow for research, decisions, and reports — for Claude Cowork and Claude Code. Structural context isolation between phases via detection-and-refusal plus independent verification |
 
 ---
 
