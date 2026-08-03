@@ -10,6 +10,7 @@ The module is loaded by file path — its directory, "elephant-goldfish", has a 
 isn't an importable package name. Same pattern as test_scan_perms.py.
 """
 
+import argparse
 import contextlib
 import importlib.util
 import io
@@ -80,6 +81,23 @@ class TestSlugValidation(unittest.TestCase):
         for slug in ("", "-leading", "trailing-", "Upper", "under_score", "x" * 64):
             with self.assertRaises(ts.StateError, msg=slug):
                 ts.validate_slug(slug)
+
+    def test_rejects_subcommand_names_as_slugs(self):
+        # A topic named `list` makes the command's bare $ARGUMENTS undecidable — is it the
+        # list subcommand or the topic? Reserve the names so it can't be created.
+        for slug in sorted(ts.RESERVED_SLUGS):
+            with self.assertRaises(ts.StateError, msg=slug) as ctx:
+                ts.validate_slug(slug)
+            self.assertIn("reserved", str(ctx.exception))
+
+    def test_reserved_set_matches_the_actual_subcommands(self):
+        # If a subcommand is added without updating RESERVED_SLUGS the collision returns.
+        parser = ts.build_parser()
+        subcommands = set()
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                subcommands = set(action.choices)
+        self.assertEqual(subcommands, set(ts.RESERVED_SLUGS))
 
 
 class TestInit(unittest.TestCase):
@@ -224,6 +242,28 @@ class TestGate(unittest.TestCase):
             code, out = run(["gate", "t", "--require", "discovery,spec"])
             self.assertEqual(code, 0)
             self.assertEqual(out["gate"], "pass")
+
+    def test_empty_and_whitespace_only_artifacts_do_not_pass(self):
+        # A 0-byte discovery.md is an interrupted phase, not a completed one. Letting it
+        # through moves the failure to render_handoff.py, after the gate said "pass".
+        for content in ("", "   \n\t\n"):
+            with self.subTest(content=repr(content)), sandbox():
+                run(["init", "t", "--output-type", "research"])
+                write("thinking/t/discovery.md", content)
+                write("thinking/t/spec.md", "s")
+                code, out = run(["gate", "t", "--require", "discovery,spec"])
+                self.assertEqual(code, 1)
+                self.assertIn("empty", out["error"])
+                self.assertIn("discovery.md", out["error"])
+
+    def test_reports_missing_and_empty_separately(self):
+        with sandbox():
+            run(["init", "t", "--output-type", "research"])
+            write("thinking/t/discovery.md", "")
+            code, out = run(["gate", "t", "--require", "discovery,spec"])
+            self.assertEqual(code, 1)
+            self.assertIn("missing: spec.md", out["error"])
+            self.assertIn("empty: discovery.md", out["error"])
 
     def test_accepts_names_with_or_without_extension(self):
         with sandbox():

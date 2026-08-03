@@ -48,6 +48,13 @@ GITHUB_MODES = ("issue", "discussion", "none")
 # resolving somewhere unexpected.
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
+# The script's own CLI is unambiguous — a slug is always a positional after a subcommand, so
+# `resolve list` reads fine. The ambiguity is one level up: /elephant-goldfish:thinking takes
+# a bare `$ARGUMENTS` that is either the word `list` or a topic slug, and a topic actually
+# named `list` makes that undecidable. Reserve the subcommand names so the collision cannot
+# be created in the first place.
+RESERVED_SLUGS = frozenset({"list", "resolve", "init", "set", "gate"})
+
 
 class StateError(Exception):
     """Anything the caller did wrong. Rendered as a JSON error object, exit 1."""
@@ -62,6 +69,11 @@ def validate_slug(slug: str) -> str:
         raise StateError(
             f"invalid slug {slug!r}: use lowercase kebab-case, 1-63 chars, "
             "starting and ending alphanumeric (e.g. 'buy-family-car')"
+        )
+    if slug in RESERVED_SLUGS:
+        raise StateError(
+            f"slug {slug!r} is reserved — it collides with a subcommand name and would make "
+            "the command's own argument ambiguous; pick another (e.g. 'list-topics')"
         )
     return slug
 
@@ -239,18 +251,32 @@ def cmd_set(args) -> dict:
 
 
 def cmd_gate(args) -> dict:
-    """Fail-closed artifact gate. Missing input is an error, never a warning."""
+    """Fail-closed artifact gate. Missing or empty input is an error, never a warning.
+
+    Existence alone is too weak a check: a 0-byte discovery.md is an interrupted phase, not
+    a completed one, and letting it through means the failure surfaces later in
+    render_handoff.py — the wrong component, with a worse message, after the gate has
+    already reported "pass".
+    """
     root = Path(args.root)
     tdir = topic_dir(root, args.slug)
     required = [r.strip() for r in args.require.split(",") if r.strip()]
-    missing = []
+    missing, empty = [], []
     for req in required:
         name = req if req.endswith(".md") else f"{req}.md"
-        if not (tdir / name).exists():
+        path = tdir / name
+        if not path.exists():
             missing.append(name)
-    if missing:
+        elif not path.read_text(encoding="utf-8").strip():
+            empty.append(name)
+    if missing or empty:
+        problems = []
+        if missing:
+            problems.append(f"missing: {', '.join(missing)}")
+        if empty:
+            problems.append(f"empty: {', '.join(empty)}")
         raise StateError(
-            f"topic {args.slug!r} is missing required artifact(s): {', '.join(missing)} — "
+            f"topic {args.slug!r} is not ready ({'; '.join(problems)}) — "
             "run the earlier phase before this one"
         )
     return {"slug": args.slug, "gate": "pass", "required": required}

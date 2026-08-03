@@ -30,12 +30,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 DEFAULT_ROOT = "thinking"
+ISSUE_URL_RE = re.compile(r"https://\S+?/issues/(\d+)")
 # GitHub rejects issue/comment bodies over 65536 characters. Refuse rather than truncate:
 # a silently clipped brief is worse than no published brief, because the thread then
 # looks complete while missing the part that got cut.
@@ -99,7 +101,30 @@ def graphql(query: str, **variables) -> dict:
     cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
     for key, value in variables.items():
         cmd += ["-F", f"{key}={value}"]
-    return json.loads(run(cmd))
+    data = json.loads(run(cmd))
+    # GitHub answers many real failures — Discussions disabled, missing scope, rate limit,
+    # unknown node id — with HTTP 200 and an `errors` array, so a zero exit status is not
+    # evidence of success. Surface GitHub's own message here; without this the caller's
+    # subscript chain hits a null payload and raises a bare TypeError with nothing in it
+    # that would tell anyone what actually went wrong.
+    if data.get("errors"):
+        raise PublishError(
+            "GitHub GraphQL error: "
+            + "; ".join(e.get("message", str(e)) for e in data["errors"])
+        )
+    if not isinstance(data.get("data"), dict):
+        raise PublishError(f"unexpected GraphQL response: {json.dumps(data)[:300]}")
+    return data
+
+
+def dig(data: dict, *path: str):
+    """Walk a GraphQL response, naming the first missing hop instead of raising TypeError."""
+    cursor = data
+    for i, key in enumerate(path):
+        if not isinstance(cursor, dict) or cursor.get(key) is None:
+            raise PublishError(f"GraphQL response missing '{'.'.join(path[: i + 1])}'")
+        cursor = cursor[key]
+    return cursor
 
 
 def repo_ids(repo: str, category: str | None) -> tuple[str, str, str]:
@@ -110,10 +135,11 @@ def repo_ids(repo: str, category: str | None) -> tuple[str, str, str]:
         owner=owner,
         name=name,
     )
-    repository = (data.get("data") or {}).get("repository")
-    if not repository:
-        raise PublishError(f"repository {repo} not found or not accessible")
-    categories = repository["discussionCategories"]["nodes"]
+    try:
+        repository = dig(data, "data", "repository")
+    except PublishError:
+        raise PublishError(f"repository {repo} not found or not accessible") from None
+    categories = dig(repository, "discussionCategories", "nodes")
     if not categories:
         raise PublishError(f"{repo} has no Discussion categories — enable Discussions on the repo first")
     chosen = None
@@ -172,8 +198,15 @@ def cmd_ensure(args) -> int:
 
     require_gh()
     if mode == "issue":
-        url = run(["gh", "issue", "create", "--repo", repo, "--title", title, "--body", intro])
-        number = int(url.rstrip("/").rsplit("/", 1)[-1])
+        # `gh issue create` writes the URL to stdout, but not necessarily alone — version
+        # notices and other advisories land there too. Search for the issue URL rather than
+        # assuming the whole of stdout is one, so an extra line is noise instead of a
+        # ValueError from int() on something that was never a number.
+        out = run(["gh", "issue", "create", "--repo", repo, "--title", title, "--body", intro])
+        match = ISSUE_URL_RE.search(out)
+        if not match:
+            raise PublishError(f"no issue URL in `gh issue create` output: {out[:200]!r}")
+        url, number = match.group(0), int(match.group(1))
         gh_meta.update({"mode": "issue", "repo": repo, "number": number, "url": url, "node_id": None, "category": None})
     else:
         repo_id, cat_id, cat_name = repo_ids(repo, args.category)
@@ -185,7 +218,7 @@ def cmd_ensure(args) -> int:
             t=title,
             b=intro,
         )
-        disc = data["data"]["createDiscussion"]["discussion"]
+        disc = dig(data, "data", "createDiscussion", "discussion")
         gh_meta.update(
             {
                 "mode": "discussion",
@@ -236,7 +269,7 @@ def cmd_post(args) -> int:
             d=gh_meta["node_id"],
             b=body,
         )
-        url = data["data"]["addDiscussionComment"]["comment"]["url"]
+        url = dig(data, "data", "addDiscussionComment", "comment", "url")
 
     published[args.artifact] = digest
     save_meta(meta_file, meta)
