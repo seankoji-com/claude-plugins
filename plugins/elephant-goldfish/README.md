@@ -50,8 +50,11 @@ thinking. You confirm the target once per run; nothing is published without that
 
 **Why this command pins `model: opus`** — the only one in this marketplace that does. It is
 entirely judgment work, and smaller models are measurably more agreeable and ask flatter
-questions, which is the exact failure mode steps 1 and 2 exist to defeat. Mechanical recon
-inside a run still goes to a haiku `scout`.
+questions, which is the exact failure mode steps 1 and 2 exist to defeat. Only the
+conversation is pinned — mechanical recon is delegated to whatever cheap read-only subagent
+the environment provides (a haiku `scout`, `Explore`), falling back to reading files
+directly. The plugin registers no agents of its own, so there is nothing to collide with a
+`scout` you already define.
 
 ### Bundled scripts
 

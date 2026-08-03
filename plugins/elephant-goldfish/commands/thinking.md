@@ -25,8 +25,8 @@ allowed-tools: Bash(python3:*), Bash(bash:*), Bash(git:*), Bash(gh:*), Bash(ls:*
 It's the only command in this marketplace that does. Everything here is judgment work: the
 value is entirely in the quality of the questions and the willingness to disagree with the
 user. Smaller models are measurably more agreeable and ask flatter questions — which is the
-exact failure mode steps 1 and 2 exist to defeat. Mechanical recon inside a run still goes to
-a `scout` (haiku) subagent; only the conversation itself is pinned.
+exact failure mode steps 1 and 2 exist to defeat. Only the conversation itself is pinned;
+mechanical recon inside a run should still be delegated to something cheap (see Step 2).
 
 ---
 
@@ -128,8 +128,13 @@ self-monitoring for agreeableness doesn't work:
   assumption still standing.
 - Ask prior art *late*, once the problem is mapped. Front-loading what they already know
   narrows the interrogation to ground they've already covered.
-- For `implementation`, ground questions in the repo — dispatch a `scout` (haiku) subagent for
-  mechanical recon so findings arrive without file dumps landing in this conversation.
+- For `implementation`, ground questions in the repo. Delegate mechanical recon — where does
+  X live, what's the test command — to a cheap read-only subagent so findings arrive without
+  file dumps landing in this conversation. Use whichever this environment actually provides:
+  a haiku `scout` if one is defined, otherwise `Explore`, otherwise just read the files
+  yourself. This plugin deliberately registers no agents of its own, because shipping a
+  generic name like `scout` would collide with the one many setups already define — so treat
+  the delegation as an optimisation, never a dependency.
 
 Continue until the user explicitly stops. Do not stop at a question count.
 

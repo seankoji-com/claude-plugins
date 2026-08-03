@@ -60,19 +60,27 @@ def read_required(path: Path, what: str) -> str:
 
 
 def render(template: str, values: dict) -> str:
-    def swap(match: re.Match) -> str:
-        key = match.group(1)
-        if key not in values:
-            raise RenderError(f"template references unknown placeholder {{{{{key}}}}}")
-        return values[key]
+    """Substitute {{PLACEHOLDER}} tokens found in the TEMPLATE. User content stays inert.
 
-    out = PLACEHOLDER_RE.sub(swap, template)
-    # Fail closed: a surviving placeholder means the handoff would ship with a literal
-    # {{SPEC}} in it, and the fresh session downstream has no way to know what was lost.
-    leftover = PLACEHOLDER_RE.findall(out)
-    if leftover:
-        raise RenderError(f"unsubstituted placeholders remain: {', '.join(sorted(set(leftover)))}")
-    return out
+    The unknown-placeholder check runs against the template *before* substitution, never
+    against the result. Scanning the output conflates two different things: a typo in a
+    template we ship, and a brace pair inside the user's own documents. Only the first is a
+    bug. The second is ordinary content — Mustache and Handlebars snippets, `{{API_KEY}}`
+    style placeholders in API notes, or a discovery.md that discusses this plugin's own
+    templates — and aborting on it would break the render of a document whose entire job is
+    to reproduce discovery.md and spec.md verbatim.
+
+    Substituted values are never rescanned: re.sub does not re-examine what a replacement
+    function returns, so a `{{SPEC}}` inside discovery.md passes through as literal text
+    rather than being treated as a placeholder or as an error.
+    """
+    unknown = sorted({key for key in PLACEHOLDER_RE.findall(template) if key not in values})
+    if unknown:
+        raise RenderError(
+            "template references unknown placeholder(s): "
+            + ", ".join("{{%s}}" % key for key in unknown)
+        )
+    return PLACEHOLDER_RE.sub(lambda match: values[match.group(1)], template)
 
 
 def main(argv=None) -> int:
