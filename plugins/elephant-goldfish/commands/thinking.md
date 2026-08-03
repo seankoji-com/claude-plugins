@@ -24,9 +24,15 @@ allowed-tools: Bash(python3:*), Bash(bash:*), Bash(git:*), Bash(gh:*), Bash(ls:*
 
 It's the only command in this marketplace that does. Everything here is judgment work: the
 value is entirely in the quality of the questions and the willingness to disagree with the
-user. Smaller models are measurably more agreeable and ask flatter questions — which is the
-exact failure mode steps 1 and 2 exist to defeat. Only the conversation itself is pinned;
-mechanical recon inside a run should still be delegated to something cheap (see Step 2).
+user. The failure modes this is guarding against are specific — accepting a first answer
+instead of pushing on it, asking questions whose answers the user already had, softening a
+disagreement into "it depends", and running out of angles after two rounds. A capable model
+is the best lever available on all four.
+
+This is a default, not a hard requirement. Nothing in the pipeline depends on it: the
+structural rules in Step 2 do most of the work and help any model. If Opus access is
+rate-limited or you'd rather not spend it here, delete the `model:` line from this file's
+frontmatter and the command inherits the session model.
 
 ---
 

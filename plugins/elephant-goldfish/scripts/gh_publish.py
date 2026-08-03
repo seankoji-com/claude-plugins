@@ -16,6 +16,12 @@ Idempotence is by content digest, not by "did we post before": the sha256 record
 meta.json is compared against the artifact's current digest, so an unchanged file is
 skipped and an edited one is correctly re-posted as a new comment.
 
+That check is read-then-write with no lock, so two `post` calls racing on the same artifact
+could both see it as unpublished and comment twice. Left as-is deliberately: a topic is
+driven by one interactive session, the duplicate is visible and harmless, and the lockfile
+needed to close it would be a new failure mode (stale locks after a crash) traded against a
+cosmetic one.
+
 Usage:
   gh_publish.py detect-repo
   gh_publish.py ensure <slug> --mode issue|discussion [--repo OWNER/NAME]
@@ -38,9 +44,20 @@ from pathlib import Path
 
 DEFAULT_ROOT = "thinking"
 ISSUE_URL_RE = re.compile(r"https://\S+?/issues/(\d+)")
-# GitHub rejects issue/comment bodies over 65536 characters. Refuse rather than truncate:
-# a silently clipped brief is worse than no published brief, because the thread then
-# looks complete while missing the part that got cut.
+
+# GitHub caps issue and comment bodies at 65536. Its error phrases this as "characters",
+# but that wording is not a reliable guide to what the backend counts, and the two diverge
+# by 3x for CJK text. Measure UTF-8 bytes: it is the stricter reading, so we never hand
+# GitHub a body it will reject. The cost is conservatively refusing a non-ASCII document
+# somewhere between 65536 characters and 65536 bytes — at which point it is a 20+ page
+# brief, and the error already points at local-only storage.
+#
+# This check is advisory rather than load-bearing: run() raises PublishError carrying
+# GitHub's own message if the API rejects a body anyway, so an over-long post fails loudly
+# either way. What it buys is a better message and no wasted round-trip.
+#
+# Refuse rather than truncate — a silently clipped brief is worse than no published brief,
+# because the thread then looks complete while missing the part that got cut.
 MAX_BODY = 65536
 
 ARTIFACT_HEADINGS = {
@@ -162,10 +179,12 @@ def repo_ids(repo: str, category: str | None) -> tuple[str, str, str]:
 def body_for(path: Path, slug: str) -> str:
     heading = ARTIFACT_HEADINGS.get(path.name, path.name)
     body = f"## {heading}\n\n_`{slug}/{path.name}` — posted by `/elephant-goldfish:thinking`_\n\n{path.read_text(encoding='utf-8').strip()}\n"
-    if len(body) > MAX_BODY:
+    size = len(body.encode("utf-8"))
+    if size > MAX_BODY:
         raise PublishError(
-            f"{path.name} renders to {len(body)} characters, over GitHub's {MAX_BODY} limit — "
-            "shorten the document or switch this topic to local-only storage"
+            f"{path.name} renders to {size} UTF-8 bytes ({len(body)} characters), over "
+            f"GitHub's {MAX_BODY} limit — shorten the document or switch this topic to "
+            "local-only storage"
         )
     return body
 

@@ -144,6 +144,15 @@ class TestRenderCLI(unittest.TestCase):
             self.assertIn("DISCOVERY BODY", out)
             self.assertFalse(os.path.exists("thinking/t/handoff.md"))
 
+    def test_stdout_mode_ends_with_a_newline(self):
+        # Inherited from the templates' own trailing newline rather than added by the
+        # script, so it is worth pinning: an editor stripping it would make piped output
+        # run into whatever follows.
+        for output_type in ("research", "implementation"):
+            with self.subTest(output_type=output_type), topic(output_type=output_type):
+                _, out, _ = run(["t", "--stdout"])
+                self.assertTrue(out.endswith("\n"))
+
     def test_missing_input_fails_closed(self):
         for missing, absent in (("discovery.md", dict(discovery=None)), ("spec.md", dict(spec=None))):
             with self.subTest(missing=missing), topic(**absent):
@@ -185,6 +194,26 @@ class TestPublishGuards(unittest.TestCase):
             with self.assertRaises(gp.PublishError) as ctx:
                 gp.body_for(Path("thinking/t/discovery.md"), "t")
             self.assertIn(str(gp.MAX_BODY), str(ctx.exception))
+
+    def test_limit_is_measured_in_utf8_bytes_not_characters(self):
+        # A CJK document is ~3 bytes/char, so a body well under the limit in characters can
+        # be triple it in bytes. Measuring characters would hand GitHub a body it rejects.
+        from pathlib import Path
+
+        multibyte = "日" * (gp.MAX_BODY // 2)  # half the limit in chars, ~1.5x in bytes
+        with topic(discovery=multibyte):
+            self.assertLess(len(multibyte), gp.MAX_BODY, "precondition: under the char limit")
+            with self.assertRaises(gp.PublishError) as ctx:
+                gp.body_for(Path("thinking/t/discovery.md"), "t")
+            self.assertIn("UTF-8 bytes", str(ctx.exception))
+
+    def test_ascii_body_just_under_the_limit_still_passes(self):
+        # The byte measure must not shrink the effective limit for ordinary ASCII briefs.
+        from pathlib import Path
+
+        with topic(discovery="x" * (gp.MAX_BODY - 500)):
+            body = gp.body_for(Path("thinking/t/discovery.md"), "t")
+            self.assertLessEqual(len(body.encode("utf-8")), gp.MAX_BODY)
 
     def test_headings_cover_exactly_the_pipeline_artifacts(self):
         self.assertEqual(
