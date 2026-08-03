@@ -49,12 +49,18 @@ on one GitHub Issue or Discussion per topic, so the thread reads as the progress
 thinking. You confirm the target once per run; nothing is published without that yes.
 
 **Why this command pins `model: opus`** — the only one in this marketplace that does. It is
-entirely judgment work, and smaller models are measurably more agreeable and ask flatter
-questions, which is the exact failure mode steps 1 and 2 exist to defeat. Only the
-conversation is pinned — mechanical recon is delegated to whatever cheap read-only subagent
-the environment provides (a haiku `scout`, `Explore`), falling back to reading files
-directly. The plugin registers no agents of its own, so there is nothing to collide with a
-`scout` you already define.
+entirely judgment work, and the failure modes are specific: accepting a first answer instead
+of pushing on it, asking questions whose answers you already had, softening disagreement into
+"it depends", running out of angles after two rounds. A capable model is the best lever on all
+four. **It's a default, not a requirement** — nothing in the pipeline depends on it, and if
+Opus access is rate-limited you can delete the `model:` line from `commands/thinking.md` and
+inherit the session model; the structural anti-sycophancy rules do most of the work and help
+any model.
+
+Only the conversation is pinned — mechanical recon goes to whatever cheap read-only subagent
+the environment provides (a haiku `scout`, `Explore`), falling back to reading files directly.
+The plugin registers no agents of its own, so there is nothing to collide with a `scout` you
+already define.
 
 ### Bundled scripts
 

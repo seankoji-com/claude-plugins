@@ -125,7 +125,7 @@ def main(argv=None) -> int:
     else:
         target = tdir / "handoff.md"
         target.write_text(out, encoding="utf-8")
-        print(str(target))
+        print(target)
     return 0
 
 
