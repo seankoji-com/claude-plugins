@@ -105,11 +105,11 @@ class DispatchBannerTest(unittest.TestCase):
         )
 
     _MIXED_TASKS = [
-        {"id": 1, "label": "opus task", "model": "claude-opus-4", "type": "code", "deps": []},
+        {"id": 1, "label": "opus task", "model": "claude-opus-5.0", "type": "code", "deps": []},
         {
             "id": 2,
             "label": "sonnet task",
-            "model": "claude-sonnet-4",
+            "model": "claude-sonnet-5.0",
             "type": "query",
             "deps": [1],
         },

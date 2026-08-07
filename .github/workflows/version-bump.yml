@@ -63,6 +63,17 @@ jobs:
                   .claude-plugin/marketplace.json > "$tmp"
                 mv "$tmp" .claude-plugin/marketplace.json
 
+                # Keep any hand-maintained SERVER_VERSION constant(s) under this plugin in
+                # sync — version-bump.yml is otherwise the only writer of plugin.json/
+                # marketplace.json, so nothing else keeps SERVER_VERSION from drifting.
+                # Matched by content rather than an assumed filename, so this covers any
+                # script under the plugin dir that declares the constant.
+                while IFS= read -r script; do
+                  sed -i "s/^SERVER_VERSION = \"[^\"]*\"/SERVER_VERSION = \"$new_version\"/" "$script"
+                  grep -q "^SERVER_VERSION = \"$new_version\"" "$script" \
+                    || { echo "::error file=$script::SERVER_VERSION not updated to $new_version"; exit 1; }
+                done < <(grep -rl --include='*.py' '^SERVER_VERSION = "' "$plugin_dir" || true)
+
                 changed=1
               else
                 echo "$plugin_name already bumped ($base_version -> $current_version), skipping"
@@ -77,6 +88,6 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add plugins/*/.claude-plugin/plugin.json .claude-plugin/marketplace.json
+          git add -u -- plugins .claude-plugin
           git commit -m "chore: auto-bump plugin versions"
           git push origin "HEAD:${{ github.head_ref }}"

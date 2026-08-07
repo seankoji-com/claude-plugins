@@ -38,7 +38,7 @@ Plugins install into a local cache. To test changes without publishing:
 
 ```bash
 ls ~/.claude/plugins/cache/seankoji/
-# ape/  claude-tuneup/  elephant-goldfish/  imps/  offload-sidecar/  prompt-builder/  recon/
+# ape/  claude-tuneup/  elephant-goldfish/  imps/  offload-sidecar/  prompt-builder/
 ```
 
 Each plugin lives at `~/.claude/plugins/cache/seankoji/<plugin>/<version>/`.

@@ -25,7 +25,7 @@ function loadWorkflowFunctions({ agent, parallel, phase, args, log }) {
     'phase',
     'args',
     'log',
-    `${body}\nreturn { runDispatch, stageTasks, dispatchImp, parseTaskDecision, parseGateDecision, validateStateRead }`
+    `${body}\nreturn { runDispatch, stageTasks, dispatchImp, parseTaskDecision, parseGateDecision, validateStateRead, nowIso, fixLoopRound, adjudicateFindings, writeParkedFindings, constraintsPointer, constraintsPointerForReviewer, headImpReview, personaReview, fixGate }`
   )
   return factory(agent, parallel, phase || (() => {}), args || {}, log || (() => {}))
 }
@@ -219,13 +219,238 @@ test('parseGateDecision tolerates whitespace around the guidance text', () => {
   })
 })
 
+// Gate names come from the discovered gate list, not a fixed vocabulary, so real projects
+// routinely name them `type-check`, `test-e2e`, `lint:fix`-minus-the-colon and so on. #120
+// widened the gate capture from `\w+` to `[^:]+` (retry) and `.+` (skip) and added .trim()
+// to match; this test still asserted the old `\w+` behavior and had been failing on master
+// since that merge. Non-word characters in a gate name are valid input, not malformed.
+test('parseGateDecision accepts gate names that are not bare \\w+', () => {
+  const { parseGateDecision } = loadWorkflowFunctions({ agent: noopAgent, parallel })
+
+  assert.deepEqual(parseGateDecision('retry test-fail: guidance'), {
+    kind: 'retry',
+    gate: 'test-fail',
+    guidance: 'guidance',
+  })
+  assert.deepEqual(parseGateDecision('skip type-check'), { kind: 'skip', gate: 'type-check' })
+  // The gate name itself is trimmed, not just the guidance.
+  assert.deepEqual(parseGateDecision('retry   spaced gate  : do the thing'), {
+    kind: 'retry',
+    gate: 'spaced gate',
+    guidance: 'do the thing',
+  })
+})
+
 test('parseGateDecision returns null (not NaN, not a throw) for malformed input', () => {
   const { parseGateDecision } = loadWorkflowFunctions({ agent: noopAgent, parallel })
 
   assert.equal(parseGateDecision('retry lint'), null, 'missing colon must not match')
-  assert.equal(parseGateDecision('retry test-fail: guidance'), null, 'hyphenated gate name is not \\w+')
   assert.equal(parseGateDecision('gibberish decision'), null)
   assert.equal(parseGateDecision(''), null)
   assert.equal(parseGateDecision(null), null)
   assert.equal(parseGateDecision(undefined), null)
+})
+
+// --- Global Constraints pointer ------------------------------------------------------
+// Cross-cutting invariants live in GOAL.md, delivered to every code-writing/reviewing
+// agent call BY POINTER — never as text embedded in the state file, which patchState()
+// round-trips through haiku and truncates.
+
+const GOAL_ARGS = {
+  goalFilePath: '/tmp/imps-runs/some-run.md',
+  pluginRoot: '/plugins/imps',
+  stateFilePath: '/tmp/imps-runs/some-run.state.json',
+  personaPostingProtocolPath: '/plugins/imps/references/persona-posting.md',
+  personaBriefPaths: {},
+}
+
+// Captures the prompt + options of the single agent() call the function under test makes.
+function captureAgent() {
+  const calls = []
+  const agent = async (prompt, opts) => {
+    calls.push({ prompt, opts: opts || {} })
+    return {}
+  }
+  return { agent, calls }
+}
+
+test('the constraints pointer names the GOAL.md path and the exact section heading', () => {
+  const { constraintsPointer, constraintsPointerForReviewer } = loadWorkflowFunctions({
+    agent: noopAgent,
+    parallel,
+    args: GOAL_ARGS,
+  })
+
+  const pointer = constraintsPointer()
+  assert.match(pointer, /MANDATORY FIRST ACTION/)
+  assert.ok(pointer.includes(GOAL_ARGS.goalFilePath), 'the pointer must carry the real GOAL.md path')
+  assert.ok(pointer.includes('"Global Constraints"'), 'the section name is a pinned contract name')
+  // The reviewer variant adds the one thing a writer does not need.
+  assert.match(constraintsPointerForReviewer(), /MAJOR finding/)
+})
+
+test('every code-writing and code-reviewing agent call carries the constraints pointer', async () => {
+  const { agent, calls } = captureAgent()
+  const wf = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+  const task = { id: 1, label: 'do a thing', type: 'code', model: 'sonnet', deps: [], spec: 'the spec' }
+  const brief = { path: '/briefs/sre.md', model: 'sonnet' }
+
+  await wf.dispatchImp(task, { task: 'run goal' }, undefined, false)
+  await wf.fixGate({ name: 'lint', cmd: 'npm run lint' }, 'tail', undefined)
+  await wf.fixLoopRound(['a finding'])
+  await wf.headImpReview('master')
+  await wf.personaReview('sre', brief, 7, 'seankoji/claude-plugins', 'master', 'live')
+
+  assert.equal(calls.length, 5)
+  for (const call of calls) {
+    assert.ok(
+      call.prompt.includes('MANDATORY FIRST ACTION') && call.prompt.includes(GOAL_ARGS.goalFilePath),
+      `${call.opts.label} lost the Global Constraints pointer`
+    )
+  }
+  // The two reviewer calls, and only those, escalate a violation to a finding.
+  const withMajor = calls.filter((c) => /MAJOR finding/.test(c.prompt)).map((c) => c.opts.label)
+  assert.deepEqual(withMajor.sort(), ['head-imp-diff', 'persona-sre'])
+})
+
+// --- Fix-round schema ------------------------------------------------------------------
+
+test('fixLoopRound requires a rationale for every WONTFIX instead of discarding it silently', async () => {
+  const { agent, calls } = captureAgent()
+  const { fixLoopRound } = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+
+  await fixLoopRound(['finding one', 'finding two'])
+
+  const schema = calls[0].opts.schema
+  assert.ok(schema, 'fixLoopRound was schema-less; its WONTFIX rationale reached nobody')
+  assert.deepEqual(schema.required.sort(), ['fixed', 'summary', 'wontfix'])
+  const wontfixItem = schema.properties.wontfix.items
+  assert.deepEqual(
+    wontfixItem.required.sort(),
+    ['finding', 'rationale'],
+    'a wontfix entry without a rationale is exactly the silent discard this schema exists to block'
+  )
+  // The findings still reach the prompt verbatim.
+  assert.ok(calls[0].prompt.includes('finding two'))
+})
+
+// --- Adjudication ----------------------------------------------------------------------
+
+test('the adjudicator can only rule load-bearing against an external anchor', async () => {
+  const { agent, calls } = captureAgent()
+  const { adjudicateFindings } = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+
+  await adjudicateFindings(
+    [
+      { slug: 'grumpy-engineer', findings: ['the retry bound never increments'] },
+      { slug: 'sre', findings: ['the retry bound never increments'] },
+    ],
+    [{ round: 1, summary: 'renamed a variable', fixed: [] }],
+    'master'
+  )
+
+  const { prompt, opts } = calls[0]
+  assert.equal(opts.model, 'opus', 'adjudication is the run-blocking judgment call — never routed below opus')
+  // Anchor (a): a quoted DoD criterion. Anchor (b): a named breaking input. Both, or the
+  // ruling may not block: with (a) alone an unanticipated correctness finding would be
+  // unblockable by construction, since a DoD enumerates deliverables, not defects.
+  assert.ok(prompt.includes('## Definition of Done'), 'anchor (a) must point at the DoD')
+  assert.match(prompt, /QUOTE that criterion verbatim/)
+  assert.match(prompt, /concrete breaking input/)
+  assert.match(prompt, /MUST NOT be "load-bearing"/)
+  assert.match(prompt, />=2 DISTINCT personas/)
+  // Persona attribution survives into the prompt — the flattened list the fix loop uses
+  // would make the >=2-personas rule inapplicable.
+  assert.ok(prompt.includes('grumpy-engineer') && prompt.includes('"sre"'))
+  // "Reviewed and parked" is not "never reviewed".
+  assert.match(prompt, /SKIPPED/)
+  // The adjudicator may not hand itself the operator's verb.
+  assert.deepEqual(opts.schema.properties.rulings.items.properties.ruling.enum, [
+    'parked-contestable',
+    'parked-deferred',
+    'load-bearing',
+  ])
+  assert.deepEqual(opts.schema.properties.rulings.items.required.sort(), ['finding', 'rationale', 'ruling'])
+})
+
+// --- GOAL.md parked-findings writer -----------------------------------------------------
+
+test('writeParkedFindings replaces one bounded section and never emits a checkbox', async () => {
+  const { agent, calls } = captureAgent()
+  const { writeParkedFindings } = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+
+  await writeParkedFindings([{ finding: 'f', ruling: 'operator-overridden', rationale: 'r' }])
+
+  const { prompt } = calls[0]
+  assert.ok(prompt.includes(GOAL_ARGS.goalFilePath))
+  assert.ok(prompt.includes('## Parked findings'), 'the heading is a pinned contract name')
+  // The boundary rule: one prompt serves a template that places the section LAST and one
+  // that places it MID-FILE. A to-EOF implementation would corrupt the mid-file one.
+  assert.match(prompt, /next line beginning with "## "/)
+  assert.match(prompt, /end-of-file if no further/)
+  assert.match(prompt, /REPLACE that body/)
+  assert.match(prompt, /_None\._/, 'an empty section must render _None._, not vanish')
+  assert.match(prompt, /NO markdown checkboxes/, 'a stray checkbox outside the DoD becomes a phantom task')
+  assert.match(prompt, /Do NOT touch the "## Definition of Done"/, 'dodCoverage owns those boxes')
+  assert.ok(prompt.includes('operator-overridden'), 'a non-parked ruling still needs a home in this section')
+})
+
+// --- Timestamps -------------------------------------------------------------------------
+
+test('nowIso names a concrete date command rather than asking for "the current time"', async () => {
+  const { agent, calls } = captureAgent()
+  const { nowIso } = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+
+  await nowIso()
+
+  const { prompt, opts } = calls[0]
+  assert.ok(prompt.includes('date -u +%Y-%m-%dT%H:%M:%SZ'), 'the command must be named, not described')
+  assert.match(prompt, /Do not compute or guess/)
+  assert.deepEqual(opts.schema.required, ['iso'])
+})
+
+test('a throwing nowIso never costs the heartbeat its dispatch bookkeeping', async () => {
+  const patches = []
+  async function agent(prompt, opts) {
+    if (opts.label === 'now') throw new Error('clock agent died')
+    if (opts.label === 'imp-1') return { status: 'done', branch: 'br-1', artifacts: [{ url: 'x' }] }
+    if (opts.label === 'heartbeat') {
+      patches.push(JSON.parse(prompt.match(/leaving every other existing field untouched: (\{.*\})\. Write/s)[1]))
+      return {}
+    }
+    return {}
+  }
+  const { runDispatch } = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+
+  // The whole point: runDispatch is called with no try/catch of its own, so a throw from
+  // the clock helper would kill the run and lose bookkeeping for imps that already ran.
+  const outcome = await runDispatch(baseState([task(1)]))
+
+  assert.equal(outcome.blocked, false)
+  assert.deepEqual([...outcome.doneIds], [1])
+  assert.equal(patches.length, 1, 'the heartbeat still ran')
+  assert.deepEqual(patches[0].tasks_done, [1], 'the completed stage is still recorded')
+  assert.deepEqual(patches[0].worktrees, { 1: 'br-1' })
+  assert.ok(
+    !Object.prototype.hasOwnProperty.call(patches[0], 'last_heartbeat'),
+    'on a clock failure the key is omitted entirely, not overwritten with a sentinel'
+  )
+})
+
+test('a working nowIso puts a real ISO value in the heartbeat', async () => {
+  const patches = []
+  async function agent(prompt, opts) {
+    if (opts.label === 'now') return { iso: '2026-08-07T11:22:33Z' }
+    if (opts.label === 'imp-1') return { status: 'done', branch: 'br-1', artifacts: [] }
+    if (opts.label === 'heartbeat') {
+      patches.push(JSON.parse(prompt.match(/leaving every other existing field untouched: (\{.*\})\. Write/s)[1]))
+      return {}
+    }
+    return {}
+  }
+  const { runDispatch } = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+
+  await runDispatch(baseState([task(1)]))
+
+  assert.equal(patches[0].last_heartbeat, '2026-08-07T11:22:33Z')
 })

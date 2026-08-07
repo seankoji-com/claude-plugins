@@ -187,10 +187,10 @@ hard to describe in prose. See detailed guidance below.
 
 Apply the complexity rubric: mechanical → haiku, judgment → sonnet, deep judgment → opus.
 
-Default to **Sonnet 5** (`claude-sonnet-5`) for most prompts. Recommend Haiku for tasks
-with deterministic output (extraction, classification, enumeration). Recommend Opus when the
+Default to **Sonnet 5.0** (`claude-sonnet-5.0`) for most prompts. Recommend Haiku for tasks
+with deterministic output (extraction, classification, enumeration). Recommend **Opus 5.0** (`claude-opus-5.0`) when the
 decision space is large and quality is the primary constraint (open-ended research, architectural
-reasoning). When in doubt, recommend Sonnet and note conditions that would push up or down.
+reasoning). When in doubt, recommend Sonnet 5.0 and note conditions that would push up or down.
 
 For multi-agent dispatch/fan-out prompts, say explicitly that implementation agents inherit
 the session model and haiku is reserved for recon/mechanical sub-tasks only — left unstated,

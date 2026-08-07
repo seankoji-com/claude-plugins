@@ -177,54 +177,48 @@ ${other#"$ROOT"/} differs from ${first#"$ROOT"/}"
   report "consistency/audit-log.sh" "$consistent" "$detail"
 fi
 
-# Recon skills cross-contract consistency: recon-verify, recon-execute, and recon-spec
-# define specific literal outputs (status: PASS, status: FAIL, status: SKIPPED, grader: independent)
-# that each skill gates on. If any literal drifts (e.g. typo'd as "status: PASSED"), the
-# gates silently no-op and the skills break. This check verifies every contract literal is
-# still in place across all three files. Literals appear inline in prose (5 of 6) or in
-# fenced code blocks (1 of 6), so anchoring must match both forms.
-recon_literals_check() {
-  local verify="$ROOT/plugins/recon/skills/recon-verify/SKILL.md"
-  local execute="$ROOT/plugins/recon/skills/recon-execute/SKILL.md"
-  local spec="$ROOT/plugins/recon/skills/recon-spec/SKILL.md"
-  local ok=1 detail=""
+# Thinking bundled-asset consistency: /elephant-goldfish:thinking drives its whole pipeline
+# through ${CLAUDE_PLUGIN_ROOT}/... paths — three scripts and six templates. A renamed or
+# deleted asset leaves the command syntactically fine and semantically broken: the Bash call
+# fails at runtime, mid-interrogation, after the user has already spent 20 minutes. Assert
+# every path the command names actually ships. (Replaces the former recon/thinking-literals
+# check, whose literals all belonged to the removed verify phase.)
+thinking_assets_check() {
+  local eg="$ROOT/plugins/elephant-goldfish"
+  local command="$eg/commands/thinking.md"
+  local ok=1 detail="" found=0
 
-  # All three files must exist
-  for file in "$verify" "$execute" "$spec"; do
-    if [ ! -f "$file" ]; then
-      ok=0
-      detail="$detail
-missing $file"
-    fi
-  done
-
-  if [ "$ok" = 1 ]; then
-    # Check each literal contract. Anchoring pattern: '(^|`)literal(`|$)'
-    # matches both fenced code blocks (on their own line) and inline code spans.
-
-    # recon-verify: status: PASS, status: FAIL, grader: independent
-    grep -qE '(^|`)status: PASS(`|$)' "$verify" || { ok=0; detail="$detail
-${verify#"$ROOT"/}: missing status: PASS"; }
-    grep -qE '(^|`)status: FAIL(`|$)' "$verify" || { ok=0; detail="$detail
-${verify#"$ROOT"/}: missing status: FAIL"; }
-    grep -qE '(^|`)grader: independent(`|$)' "$verify" || { ok=0; detail="$detail
-${verify#"$ROOT"/}: missing grader: independent"; }
-
-    # recon-execute: status: PASS (gate check), grader: independent
-    grep -qE '(^|`)status: PASS(`|$)' "$execute" || { ok=0; detail="$detail
-${execute#"$ROOT"/}: missing status: PASS"; }
-    grep -qE '(^|`)grader: independent(`|$)' "$execute" || { ok=0; detail="$detail
-${execute#"$ROOT"/}: missing grader: independent"; }
-
-    # recon-spec: status: SKIPPED
-    grep -qE '(^|`)status: SKIPPED(`|$)' "$spec" || { ok=0; detail="$detail
-${spec#"$ROOT"/}: missing status: SKIPPED"; }
+  if [ ! -f "$command" ]; then
+    report "consistency/thinking-assets" 0 "missing $command"
+    return
   fi
 
-  report "consistency/recon-literals" "$ok" "$detail"
+  # Every ${CLAUDE_PLUGIN_ROOT}/<subdir>/<file> reference, deduplicated.
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    found=$((found + 1))
+    if [ ! -f "$eg/$ref" ]; then
+      ok=0
+      detail="$detail
+commands/thinking.md references \${CLAUDE_PLUGIN_ROOT}/$ref, which does not exist"
+    fi
+  done <<EOF
+$(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9_./-]+' "$command" \
+    | sed 's|\${CLAUDE_PLUGIN_ROOT}/||' | sort -u)
+EOF
+
+  # A command that suddenly references nothing means the extraction broke, not that the
+  # command got simpler — fail rather than reporting a vacuous pass.
+  if [ "$found" -lt 3 ]; then
+    ok=0
+    detail="$detail
+found only $found bundled-asset references in commands/thinking.md (expected at least 3)"
+  fi
+
+  report "consistency/thinking-assets" "$ok" "$detail"
 }
 
-recon_literals_check
+thinking_assets_check
 
 # Seatbelt is last-match-wins, so deny-credentials.sbpl.in's worktrees/modules
 # chain is ordered, not just present: deny the subtrees, re-allow only this

@@ -38,6 +38,16 @@ tier_json()     { [ -z "${1:-}" ] && { echo null; return; }; jq -Rn --arg t "$1"
 attempts_json() { [ -z "${1:-}" ] && { echo null; return; }
                   case "$1" in *[!0-9]*) echo "audit-log: --attempts must be a non-negative integer, got '$1'" >&2; return 1;; esac
                   printf '%s\n' "$1"; }
+# A well-formed decimal: only digits and dots, at least one digit, at most one dot
+# (leading- or trailing-dot forms like ".5"/"5." are fine — jq's own number parser
+# accepts both, so rejecting them here would be stricter than the JSON we hand it).
+# Stripping up to the first dot and checking the remainder for a second dot is what
+# catches "1.2.3"/"..." without a bash 4+ regex engine.
+cost_json()     { [ -z "${1:-}" ] && { echo null; return; }
+                  case "$1" in *[!0-9.]*) echo "audit-log: --cost-usd must be a well-formed decimal number, got '$1'" >&2; return 1;; esac
+                  case "$1" in *[0-9]*) ;; *) echo "audit-log: --cost-usd must be a well-formed decimal number, got '$1'" >&2; return 1;; esac
+                  case "${1#*.}" in *.*) echo "audit-log: --cost-usd must be a well-formed decimal number, got '$1'" >&2; return 1;; esac
+                  printf '%s\n' "$1"; }
 ${__SOURCED__:+false} : || return 0
 
 plugin="" command="" exit_status="" duration_ms="" notes="" cost_usd="" scope="" tier="" attempts=""
@@ -84,20 +94,13 @@ if [ "$scope" = "project" ]; then
   [ -n "$toplevel" ] && project_name="$(basename "$toplevel")"
 fi
 
-cost_json="null"
-if [ -n "$cost_usd" ]; then
-  case "$cost_usd" in
-    ''|*[!0-9.]*) echo "audit-log: --cost-usd must be numeric, got '$cost_usd' — logging as null" >&2 ;;
-    *) cost_json="$cost_usd" ;;
-  esac
-fi
-
-# attempts_json validates format even without jq present — a malformed --attempts is an
-# argument bug in the caller, not an environmental gap, so it must exit 1 regardless (see
-# AGENTS.md). tier_json needs jq to produce a safely-quoted JSON string, so it's deferred
-# past the jq-presence check below to avoid a spurious "jq: command not found" on a
-# jq-less machine that's about to exit 0 anyway.
+# attempts_json and cost_json validate format even without jq present — a malformed
+# --attempts/--cost-usd is an argument bug in the caller, not an environmental gap, so it
+# must exit 1 regardless (see AGENTS.md). tier_json needs jq to produce a safely-quoted
+# JSON string, so it's deferred past the jq-presence check below to avoid a spurious "jq:
+# command not found" on a jq-less machine that's about to exit 0 anyway.
 attempts_json_val="$(attempts_json "$attempts")" || exit 1
+cost_json_val="$(cost_json "$cost_usd")" || exit 1
 
 if ! command -v jq >/dev/null 2>&1; then
   echo "audit-log: 'jq' not on PATH — skipping structured log entry" >&2
@@ -124,7 +127,7 @@ if ! jq -nc \
   --arg project "$project_name" \
   --arg exit_status "$exit_status" \
   --argjson duration_ms "$duration_ms" \
-  --argjson cost_estimate_usd "$cost_json" \
+  --argjson cost_estimate_usd "$cost_json_val" \
   --argjson tier "$tier_json_val" \
   --argjson attempts "$attempts_json_val" \
   --arg notes "${notes:0:200}" \

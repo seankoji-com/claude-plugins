@@ -7,25 +7,25 @@
   "plugins": [
     {
       "name": "elephant-goldfish",
-      "version": "0.1.10",
+      "version": "0.2.1",
       "source": "./plugins/elephant-goldfish",
-      "description": "Self-validating /elephant-goldfish:elephant design-doc command + Gemini goldfish judge."
+      "description": "Design-doc command with a different-lineage Gemini judge, plus /elephant-goldfish:thinking — steps 1 and 2 of Rensin's process: interrogate the problem, build the rubric, emit the plan."
     },
     {
       "name": "claude-tuneup",
-      "version": "0.1.10",
+      "version": "0.1.11",
       "source": "./plugins/claude-tuneup",
       "description": "Permission audit and settings tuneup — scans transcripts, classifies by scope, deduplicates global vs project settings."
     },
     {
       "name": "prompt-builder",
-      "version": "0.1.12",
+      "version": "0.1.14",
       "source": "./plugins/prompt-builder",
       "description": "Iterative prompt engineering assistant — structures with Anthropic's evidence-based prompting techniques, drafts, critiques, and delivers a finished artefact with test cases."
     },
     {
       "name": "imps",
-      "version": "0.3.34",
+      "version": "0.3.37",
       "source": "./plugins/imps",
       "description": "Swarm orchestrator — decomposes tasks into parallel model-routed agents, dispatches via a real Workflow script, merges through gates and persona review. Plus /imps:imp-agency: whole-repo audit → imps-ready remediation plan."
     },
@@ -40,12 +40,6 @@
       "version": "0.3.3",
       "source": "./plugins/offload-sidecar",
       "description": "MCP tool that offloads file transforms, log triage, and vision tasks so Claude passes file paths, not content — deterministic in-process where possible, else routed across local Ollama tiers (deep/fast, private) or Gemini via the agy CLI (flash/pro, budget-gated so quota exhaustion rejects up front instead of failing mid-call). Formerly ollama-sidecar."
-    },
-    {
-      "name": "recon",
-      "version": "0.3.0",
-      "source": "./plugins/recon",
-      "description": "Discovery -> spec -> verify -> execution workflow for research, decisions, and reports, for Claude Cowork and Claude Code. Context isolation between phases is enforced by detection-and-refusal plus independent verification, not by asking a model to forget."
     }
   ]
 }

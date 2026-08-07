@@ -63,7 +63,7 @@ Four entry modes, auto-detected from the argument:
 ### Free-text mode walkthrough
 
 1. `/imps:imps` with a task description (or empty — it will ask).
-2. `/imps:imps` refines the brief via `prompt-builder`, asks five discovery questions, then enters plan mode (opus) to decompose and write `GOAL.md` (to `~/.claude/imps/runs/<slug>.md`, not the repo — see [Runtime state](#runtime-state)).
+2. `/imps:imps` refines the brief via `prompt-builder`, asks five discovery questions, then enters plan mode (opus) to decompose and write `GOAL.md` (to `~/.claude/imps/runs/<slug>.md`, not the repo — see [Runtime state](#runtime-state)). Discovery question 5 ("any constraints?") feeds a `## Global Constraints` section in `GOAL.md` — cross-cutting invariants, stated verbatim, that every task must honor; unlike the Definition of Done (true once, ticked, verified), constraints are true of every task and never ticked. Every code-writing or code-reviewing agent call the script makes receives it by pointer, not by copy.
 3. The Head Imp (opus) adversarially reviews the plan; findings are addressed before dispatch.
 4. After plan approval, `/imps:imps` syncs and invokes the Workflow script, then returns control — `Workflow` runs in the background, and you're notified when it reaches a result. The script does the git preflight, dispatches the task DAG as staged `agent()` calls, and tracks progress in the run state file, so progress is `cat ~/.claude/imps/runs/<slug>.json` (the imps run inside the script's own tracked execution, invisible to the main session's transcript the same way the old subagent design was).
 5. When the imps finish, the script flows straight into integration: merges code branches, drives the Head Imp diff review, runs gates, then returns an `awaiting_authorization` result. After you approve the push, the script (re-invoked fresh with your decision persisted to the state file) opens the endstate PR (the default for runs that change code — decline the push to skip it), runs the persona panel on that PR, applies fixes, and finalizes the run (PR ready, Discussion comment, run stats, monitor state). The main session only relays your decisions, then makes the one `/imps:prs` call to activate the PR monitor.
@@ -195,6 +195,25 @@ posts)` option precisely for runs where this session's own Head-Imp-driven amend
 make an independent review under a bot identity misleading. The posting-identity
 protocol itself lives in `references/persona-posting.md`, shared by this panel and
 `/imps:issue-mode`'s — not duplicated between them.
+
+Findings survive up to three fix rounds. A `WONTFIX: <rationale>` in any round is captured, not
+discarded — every rationale is retained as a `wontfix_rulings` entry and rendered in the run's
+terminal result, not just the state file.
+
+### When findings still don't converge
+
+If dissenting findings remain after the three-round cap, one opus adjudicator rules on each,
+anchored to at least one of: a named `## Definition of Done` criterion (quoted verbatim); a
+concrete breaking input, data-loss path, or security defect in the merged diff; or a named
+`## Global Constraints` violation (quoted verbatim) — a finding meeting none of the three
+anchors cannot be ruled `load-bearing`. Each ruling is one of `parked-contestable`,
+`parked-deferred`, `load-bearing`, or `operator-overridden`. A `load-bearing` ruling blocks the
+run: the Workflow script returns a `blocked` result with `reason: "unresolved_findings"`, and you
+choose `retry findings` (one more capped fix cycle, refused after two cycles) or
+`override findings: <rationale>` (converts every `load-bearing` ruling to `operator-overridden`,
+records your rationale, and proceeds to finalize). Every non-`load-bearing` ruling — and every
+override — is written into `GOAL.md`'s `## Parked findings` section, so a run's disagreements have
+a durable, readable record even after the state file is deleted at finalize.
 
 ## Bundled assets
 
