@@ -28,6 +28,8 @@ export const meta = {
   ],
 }
 
+const fs = require('fs')
+
 const CANDIDATES_SCHEMA = {
   type: 'object',
   properties: {
@@ -314,6 +316,29 @@ const analysisResults = await parallel(
   })
 )
 log(`Analysis: ${analysisResults.filter(Boolean).length}/${clonedSelection.length} analysts returned`)
+
+// Validate every expected report exists and is non-empty before synthesis
+const missingReports = []
+for (const c of clonedSelection) {
+  const dirName = c.fullName.replace('/', '__')
+  const reportPath = `${args.workspaceDir}/reports/${dirName}.md`
+  try {
+    // eslint-disable-next-line no-sync
+    if (!fs.existsSync(reportPath) || fs.statSync(reportPath).size === 0) {
+      missingReports.push(c.fullName)
+    }
+  } catch (_err) {
+    missingReports.push(c.fullName)
+  }
+}
+if (missingReports.length > 0) {
+  return {
+    status: 'blocked',
+    reason: 'missing_reports',
+    missing: missingReports,
+    notes: `Analysis completed but reports are missing/empty for: ${missingReports.join(', ')}`,
+  }
+}
 
 phase('Synthesis')
 const synthesis = await agent(synthesisPrompt(args.workspaceDir, args.focusArea, args.fingerprint, ranking.rejected), {
