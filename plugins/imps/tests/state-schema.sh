@@ -279,8 +279,24 @@ const badPostingMode = sample()
 badPostingMode.posting_mode = 7
 assert('negative/posting_mode-wrong-type', validate(S, badPostingMode).length > 0, 'validator accepted posting_mode: 7')
 
+// The other three schema-4 fields carry the free text the whole review-discipline feature
+// depends on (persona findings, ruling rationales) and, unlike posting_mode, had no
+// wrong-type control of their own — a truncated patchState() round-trip that turned one of
+// them into a string or a bare object would slip through unnoticed.
+const badParkedFindings = sample()
+badParkedFindings.parked_findings = 'not an array'
+assert('negative/parked_findings-wrong-type', validate(S, badParkedFindings).length > 0, 'validator accepted parked_findings: "not an array"')
+
+const badWontfixRulings = sample()
+badWontfixRulings.wontfix_rulings = 'not an array'
+assert('negative/wontfix_rulings-wrong-type', validate(S, badWontfixRulings).length > 0, 'validator accepted wontfix_rulings: "not an array"')
+
+const badVerdictsPending = sample()
+badVerdictsPending.verdicts_pending = 'not an object'
+assert('negative/verdicts_pending-wrong-type', validate(S, badVerdictsPending).length > 0, 'validator accepted verdicts_pending: "not an object"')
+
 // A truncated run must not pass silently.
-const EXPECTED_ASSERTS = 48
+const EXPECTED_ASSERTS = 51
 if (asserts !== EXPECTED_ASSERTS) {
   console.log('FAIL state-schema/assertion-count')
   console.log('     ran ' + asserts + ' assertions, expected ' + EXPECTED_ASSERTS)

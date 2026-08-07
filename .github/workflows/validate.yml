@@ -185,6 +185,13 @@ jobs:
           done
           for v in 'override findings:' 'retry findings'; do check "$W" "$v"; check "$C" "$v"; done
           for f in "$C" "$A"; do check "$f" '## Global Constraints'; check "$f" '## Parked findings'; done
+          # $W is the file that actually depends on both section names at runtime — the
+          # constraints pointer reads "Global Constraints" as a quoted section name (never as
+          # markdown heading syntax, since the open-model sandbox can't follow a pointer to
+          # read the literal "## " heading), while writeParkedFindings() locates its section
+          # by the literal markdown heading "## Parked findings". Check each in the form $W
+          # actually uses, not the docs' "## " form for both.
+          check "$W" 'Global Constraints'; check "$W" '## Parked findings'
           [ "$fail" = 0 ]
 
       - name: Check for bundled-asset path leaks
