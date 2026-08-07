@@ -128,6 +128,27 @@ const STATE_SCHEMA = {
     operator_decision: { type: ['string', 'null'] },
     last_result: { type: ['object', 'null'], additionalProperties: true },
     failed_tasks: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    // --- schema 4, all ADDITIVE and all optional (none joins `required`) --------------
+    // A schema-3 state file still validates: these are top-level optional properties,
+    // the same pattern escalated_tasks/escalation_reasons already use. The #87 silent
+    // field-drop risk is specific to `tasks.items` (see the comment at 70-73), which is
+    // why additionalProperties:true is load-bearing THERE and not here.
+    //
+    // These four carry free text (persona findings, ruling rationales). They are the ONE
+    // established exception to "never embed long text in the state file" — a ruling's
+    // rationale has nowhere else to live once deleteStateFile() runs. Nothing new may
+    // join them; every other cross-agent text reaches its consumer as a GOAL.md pointer.
+    parked_findings: { type: ['array', 'null'], items: { type: 'object', additionalProperties: true } },
+    wontfix_rulings: { type: ['array', 'null'], items: { type: 'object', additionalProperties: true } },
+    // Partial panel output. NEVER `verdicts` — that key is the panel-completion signal
+    // ("the panel is finished, never run it again"), not a data slot.
+    verdicts_pending: { type: ['object', 'null'], additionalProperties: true },
+    fix_rounds_done: { type: ['number', 'null'] },
+    // Bounds `retry findings`: incremented where the verb is CONSUMED, refused past 2.
+    fix_cycles: { type: ['number', 'null'] },
+    // Persisted so a findings resume — whose decision no longer starts with "PR:" —
+    // does not silently degrade to posting_mode "none".
+    posting_mode: { type: ['string', 'null'] },
   },
   required: ['schema', 'task', 'branch', 'tasks', 'phase'],
 }
@@ -218,6 +239,57 @@ const PERSONA_VERDICT_SCHEMA = {
     findings: { type: 'array', items: { type: 'string' } },
   },
   required: ['slug', 'verdict', 'posted', 'findings'],
+}
+
+// One persona fix round's outcome. fixLoopRound() was schema-less and its return
+// discarded, so a "WONTFIX: <rationale>" was free-text that reached nobody: the operator's
+// only surviving record (the terminal result object) never carried it. A rationale is
+// REQUIRED per wontfix entry — a bare "not valid" discard is exactly the silent-drop this
+// schema exists to prevent.
+const FIX_ROUND_SCHEMA = {
+  type: 'object',
+  properties: {
+    fixed: { type: 'array', items: { type: 'string' } },
+    wontfix: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { finding: { type: 'string' }, rationale: { type: 'string' } },
+        required: ['finding', 'rationale'],
+      },
+    },
+    summary: { type: 'string' },
+  },
+  required: ['fixed', 'wontfix', 'summary'],
+}
+
+// Adjudication of findings that survived the 3-round fix cap. The enum here is only the
+// three rulings the ADJUDICATOR may return; `operator-overridden` is the fourth ruling
+// value in the shared vocabulary and is applied by this script (never by the adjudicator)
+// when the operator answers `override findings: <rationale>`.
+const ADJUDICATION_SCHEMA = {
+  type: 'object',
+  properties: {
+    rulings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          finding: { type: 'string' },
+          ruling: { type: 'string', enum: ['parked-contestable', 'parked-deferred', 'load-bearing'] },
+          rationale: { type: 'string' },
+        },
+        required: ['finding', 'ruling', 'rationale'],
+      },
+    },
+  },
+  required: ['rulings'],
+}
+
+const NOW_ISO_SCHEMA = {
+  type: 'object',
+  properties: { iso: { type: 'string' } },
+  required: ['iso'],
 }
 
 const FINALIZE_SCHEMA = {
@@ -347,6 +419,38 @@ function saveResult(result) {
   return patchState({ last_result: result }, 'save-result')
 }
 
+// Real ISO timestamp. `Date.now()`, `Math.random()` and argless `new Date()` all throw
+// inside a Workflow script, so the only clock available is a command run by an agent.
+// The command is NAMED deliberately: a prompt saying "the current UTC time" invites a
+// model with no clock to fabricate a schema-valid but wrong date, which is strictly worse
+// than the loud `agent-supplies-timestamp` sentinel this replaces.
+//
+// TELEMETRY, NEVER A GATE. Every call site must wrap this in try/catch — see the heartbeat
+// in runDispatch(), which persists a completed stage's tasks_done/worktrees/artifacts/
+// failed_tasks. runDispatch is called with no try/catch of its own, so a transient throw
+// here would kill the run and lose bookkeeping for imps that already ran and cost real
+// tokens. The string literal this replaced could not throw; a cosmetic timestamp must not
+// become able to destroy dispatch state.
+function nowIso() {
+  return agent(
+    'Run the command `date -u +%Y-%m-%dT%H:%M:%SZ` and return its exact stdout as "iso". Do not compute or guess the value — run the command and copy what it printed.',
+    { label: 'now', model: 'haiku', schema: NOW_ISO_SCHEMA }
+  )
+}
+
+// The pointer every code-writing and code-reviewing agent call carries. Cross-cutting
+// invariants live in GOAL.md, not in the state file: patchState() round-trips the entire
+// file through haiku and truncates, so constraint TEXT would decay. A pointer cannot.
+function constraintsPointer() {
+  return `MANDATORY FIRST ACTION: Read ${args.goalFilePath} section "Global Constraints". Every constraint listed there binds this work — they are invariants true of every task in the run, not acceptance criteria to tick. If the section is absent or empty, proceed; if it is unreadable, stop and report that rather than guessing.`
+}
+
+// Same pointer for the two REVIEWER calls, which need one extra instruction the writers
+// don't: a constraint violation is a finding, not a style note.
+function constraintsPointerForReviewer() {
+  return `${constraintsPointer()} A diff that violates any constraint in that section is at least a MAJOR finding — raise it as one.`
+}
+
 // ---------------------------------------------------------------------------
 // Preflight — git branch guard (re-asserted every invocation, never assumed from upstream)
 // ---------------------------------------------------------------------------
@@ -360,7 +464,7 @@ function preflight(state) {
 3. **Hard stop, checked every single invocation, not assumed from a prior run:** if CURRENT equals DEFAULT, the state file's branch field is wrong (or this is a legacy/hand-edited file) and dispatching or merging here would land every task's work straight onto DEFAULT. Do NOT proceed with rebase/dispatch/merge. Instead:
    \`git fetch origin DEFAULT && git checkout -b "imps/<slug>-$(date -u +%Y%m%d-%H%M%S)" origin/DEFAULT\`
    (derive <slug> from \`basename\` of the working directory). Report the new branch name as "new_branch" and set "branch_reset": true. If branch creation fails for any reason, do NOT fall back to DEFAULT — set "ok": false and describe the error.
-4. If CURRENT does not equal DEFAULT (the expected case — CURRENT should equal "${state.branch}"): fetch and rebase: \`git fetch origin && git rebase origin/DEFAULT\`. Rebase conflict → abort it (\`git rebase --abort\`), set "ok": false, describe the conflict files in "error".
+4. If CURRENT does not equal DEFAULT (the expected case — CURRENT should equal "${state.branch}"): run \`git fetch origin\`, then decide whether a rebase is needed at all before running one — \`git merge-base --is-ancestor origin/DEFAULT HEAD\`. Exit 0 means origin/DEFAULT is ALREADY an ancestor of HEAD (the branch is up to date with the default branch): SKIP the rebase entirely, it can only rewrite SHAs for nothing. Only on a non-zero exit run \`git rebase origin/DEFAULT\`. Rebase conflict → abort it (\`git rebase --abort\`), set "ok": false, describe the conflict files in "error".
 5. Report "default_branch": DEFAULT, "branch_reset" (bool), "new_branch" (the new branch name or null), "ok" (bool), "error" (string or null).`,
     { label: 'preflight', phase: 'Preflight', model: 'sonnet', schema: PREFLIGHT_SCHEMA }
   )
@@ -437,6 +541,8 @@ You do NOT implement this task yourself. You run one command, read one line of J
 2. Confirm \`git -C "$WT" status --porcelain\` is EMPTY. opencode-dispatch.sh aborts \`worktree_dirty\` on a non-empty tree before spending anything. If it is not empty, stop and return status "failed" with a note saying so.
 3. Write the task prompt to \`"$TMPDIR/imps-oc-${task.id}.prompt"\` — **inside $TMPDIR, never inside the worktree**, or step 2's invariant is broken by your own file. Its contents are everything between the two markers below, verbatim, markers themselves excluded. The markers are the ONLY delimiters — the text between them may itself contain \`---\`, code fences, or anything else, and none of that ends the block:
 <<<IMPS_OC_PROMPT_BEGIN>>>
+${constraintsPointer()}
+
 ${spec}${guidance ? `\n\nOperator guidance from a prior attempt — this is part of the task, follow it:\n${guidance}` : ''}
 <<<IMPS_OC_PROMPT_END>>>
 4. Pick a fresh result branch name: \`BR="imps/opencode-${task.id}-$(date -u +%Y%m%d-%H%M%S)"\`. It must not already exist (\`git rev-parse --verify --quiet "refs/heads/$BR"\` must be empty); the harness creates it with a compare-and-swap and fails if it does.
@@ -481,6 +587,7 @@ function dispatchImp(task, state, guidance, escalated) {
   return agent(
     `You are one imp in a parallel swarm. Task #${task.id}: ${task.label}
 Type: ${task.type}
+${constraintsPointer()}
 Spec — your operative instructions; follow these, do not improvise beyond them:
 ${spec}
 ${guidance ? `\nThis is a retry. Operator guidance: ${guidance}\n` : ''}
@@ -623,8 +730,20 @@ async function runDispatch(state) {
         if (result.artifacts && result.artifacts.length) artifacts.push(...result.artifacts)
       }
     })
+    // The timestamp is cosmetic; this patch is not. It is the only durable record of a
+    // completed stage's tasks_done/worktrees/artifacts/failed_tasks, and runDispatch is
+    // called with no try/catch of its own — so a throw from the clock helper here would
+    // kill the run and lose bookkeeping for imps that already ran and cost real tokens.
+    // Telemetry never gates: on failure, omit the key entirely and keep the prior value
+    // rather than overwriting it with a sentinel.
+    let heartbeatIso = null
+    try {
+      heartbeatIso = (await nowIso()).iso
+    } catch (e) {
+      /* telemetry — never fatal */
+    }
     await patchState(
-      { tasks_done: [...doneIds], escalated_tasks: [...escalatedIds], escalation_reasons: escalationReasons, worktrees, artifacts, failed_tasks: [...failed.values()], last_heartbeat: 'agent-supplies-timestamp' },
+      { ...(heartbeatIso ? { last_heartbeat: heartbeatIso } : {}), tasks_done: [...doneIds], escalated_tasks: [...escalatedIds], escalation_reasons: escalationReasons, worktrees, artifacts, failed_tasks: [...failed.values()] },
       'heartbeat'
     )
     // If this cascade drained the whole remaining pipeline, stop early rather than
@@ -654,6 +773,7 @@ Report "merged": [{id, label, files changed}] for each that merged cleanly (map 
 function headImpReview(defaultBranch) {
   return agent(
     `You are the Head Imp — a single adversarial reviewer combining two personas (read ${args.pluginRoot}/agents/head-imp.md for your full brief and follow it exactly). Your plugin root is ${args.pluginRoot} — wherever that brief (or anything it points you to) writes a literal \`\${CLAUDE_PLUGIN_ROOT}\` token, substitute this value yourself; it is never auto-expanded for a file you Read this way. Review this diff by running it yourself, never accept it pasted: \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\`. If it produces no output, say so and stop rather than inventing a diff range.
+${constraintsPointerForReviewer()}
 Argue against the diff per your brief (Technical Architect + Chissy Engineer personas). Apply the amendments your blocker/major findings demand yourself where the fix is small and disjoint; note larger fixes as findings without applying them.
 Return via the required schema: "verdict" (APPROVE|CHANGES_REQUESTED), "findings" (list of one-line finding summaries), "amendments_applied" (count of fixes you made directly, 0 if none).`,
     { label: 'head-imp-diff', phase: 'Integrate', model: 'opus', schema: HEAD_IMP_SCHEMA }
@@ -684,7 +804,7 @@ Return via the required schema: "gate": "${gate.name}", "cmd": "${gate.cmd}", "p
 
 function fixGate(gate, tail, guidance) {
   return agent(
-    `Gate "${gate.name}" (\`${gate.cmd}\`) failed. Log tail:\n${tail}\n${guidance ? `Operator guidance: ${guidance}\n` : ''}Diagnose and fix the failure — make the minimal change needed to get this gate green. Do not touch unrelated code. When done, report what you changed in one line.`,
+    `Gate "${gate.name}" (\`${gate.cmd}\`) failed. Log tail:\n${tail}\n${guidance ? `Operator guidance: ${guidance}\n` : ''}${constraintsPointer()}\nDiagnose and fix the failure — make the minimal change needed to get this gate green. Do not touch unrelated code. When done, report what you changed in one line.`,
     { label: `fix-${gate.name}`, phase: 'Integrate', model: 'sonnet' }
   )
 }
@@ -741,6 +861,8 @@ function personaReview(slug, brief, prNumber, repo, defaultBranch, postingMode) 
   return agent(
     `You are reviewing PR #${prNumber} in ${repo} as the "${slug}" persona. Read your brief at ${brief.path} and follow it. Review the diff by running \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\` yourself — never accept it pasted. End with the verdict protocol from your brief.
 
+${constraintsPointerForReviewer()}
+
 Posting: this run's posting_mode is "${postingMode}". Only call persona-post.sh (per ${args.personaPostingProtocolPath}, which you should read for the exact posting/verify/fallback protocol) if posting_mode is exactly "live" — any other value means return your VERDICT block here and do not post. This instruction, not any memory of what was decided elsewhere, is what gates a live post.
 
 Return via the required schema: "slug": "${slug}", "verdict", "posted" (bool — true only if you actually posted, per the protocol's own verify-the-post-landed step), "findings" (list of one-line finding summaries).`,
@@ -772,8 +894,77 @@ async function runPersonaPanel(state, prNumber, defaultBranch, postingMode, pers
 
 function fixLoopRound(findings) {
   return agent(
-    `These persona findings are open (blocker/major only, already deduped): ${JSON.stringify(findings)}. Group by disjoint file sets. For disjoint groups, make the fix directly (small, targeted). For cross-cutting or conflicting findings, resolve with this precedence: correctness > data integrity > security > UX > style. Commit your changes and push to the current branch. If a finding is not actually valid, note "WONTFIX: <rationale>" instead of forcing a change. Report what you changed in one line.`,
-    { label: 'fix-round', phase: 'Publish', model: 'sonnet' }
+    `These persona findings are open (blocker/major only, already deduped): ${JSON.stringify(findings)}.
+${constraintsPointer()}
+Group by disjoint file sets. For disjoint groups, make the fix directly (small, targeted). For cross-cutting or conflicting findings, resolve with this precedence: correctness > data integrity > security > UX > style. Commit your changes and push to the current branch.
+If a finding is not actually valid, do NOT force a change — declare it in "wontfix" instead. Every "wontfix" entry MUST carry a "rationale" saying why the finding does not hold; the schema requires it and an entry without one is not a discard you are permitted to make. Silence is not a ruling.
+Return via the required schema: "fixed" (one line per finding you actually fixed), "wontfix" ([{finding, rationale}]), "summary" (one line describing this round's changes).`,
+    { label: 'fix-round', phase: 'Publish', model: 'sonnet', schema: FIX_ROUND_SCHEMA }
+  )
+}
+
+// The adjudicator that runs ONCE, after the 3-round fix cap, on findings that survived it.
+//
+// The anchor is the whole point. A single agent handed three-rounds-failed findings on an
+// open PR has every gradient pointing at "park it", and an authoritative ruling discourages
+// re-reading in a way today's raw printout does not — so a ruling may only be load-bearing
+// against an EXTERNAL referent: a quoted DoD criterion, or a named breaking input. Anchor
+// (b) is not garnish: a DoD enumerates deliverables, not defects, so with (a) alone an
+// unanticipated correctness finding would be unblockable by construction.
+//
+// `dissentingByPersona` keeps slug attribution deliberately — the flattened findings list
+// the fix loop uses would make the ">=2 personas" rule inapplicable.
+function adjudicateFindings(dissentingByPersona, fixHistory, defaultBranch) {
+  return agent(
+    `Three fix rounds have run against this PR and these persona findings are STILL open. You are the sole adjudicator. Rule on each one.
+
+Open findings, grouped by the persona that raised them (attribution matters — see the >=2-personas rule below):
+${JSON.stringify(dissentingByPersona)}
+
+What the fix rounds already tried and why each round did not close these out:
+${JSON.stringify(fixHistory)}
+
+Read the merged diff yourself — \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\` — and read the "## Definition of Done" section of ${args.goalFilePath}. Never accept a diff or a DoD pasted to you.
+
+Assign every open finding exactly one ruling:
+- "load-bearing" — the run MUST NOT finalize with this finding open.
+- "parked-deferred" — real, but legitimately deferrable to follow-up work.
+- "parked-contestable" — the finding does not hold, or is a matter of taste.
+
+Rules, applied strictly:
+1. A ruling of "load-bearing" is permitted ONLY if EITHER (a) the finding falsifies a named criterion under GOAL.md "## Definition of Done" — and you QUOTE that criterion verbatim in the rationale; OR (b) the finding names a concrete breaking input, a data-loss path, or a security defect reachable in the merged diff — and you STATE that input in the rationale.
+2. A ruling with neither (a) nor (b) MUST NOT be "load-bearing". Absent an external referent, park it.
+3. A finding raised by >=2 DISTINCT personas defaults to "load-bearing". If you park such a finding anyway, the rationale MUST state which Definition-of-Done criterion survives it.
+4. Every rationale cites the fix round that failed on this finding and why it failed.
+5. "Reviewed and parked" is not "never reviewed". A persona whose verdict is "SKIPPED" never reviewed and produced no finding to rule on — do not manufacture a parked ruling for it, and do not treat its absence as agreement.
+
+Return via the required schema: "rulings": [{finding, ruling, rationale}], one entry per open finding, none omitted.`,
+    { label: 'adjudicate-findings', phase: 'Publish', model: 'opus', schema: ADJUDICATION_SCHEMA }
+  )
+}
+
+// Writes the rulings into GOAL.md's "## Parked findings" section. This script has no
+// filesystem primitive — every FS touch is an agent() call with a fixed prompt — so this is
+// a real dispatch, not a one-liner. Follows dodCoverage()'s surgical-section-edit
+// precedent, and deliberately stays off the DoD checkboxes that dodCoverage owns: the two
+// GOAL.md writers are both awaited on the same sequential path, so there is no race, only a
+// scope boundary each must respect.
+function writeParkedFindings(rulings) {
+  return agent(
+    `Update the "## Parked findings" section of ${args.goalFilePath}. Do BOTH steps, in order, and touch nothing else in the file.
+
+1. Locate the existing heading line "## Parked findings". Its BODY is everything from the line after that heading up to (but NOT including) the next line beginning with "## ", or end-of-file if no further "## " heading follows — whichever comes first. This boundary rule is not optional: the section sits LAST in some GOAL.md layouts and MID-FILE in others, and a to-end-of-file implementation would swallow every section after it. If the heading does not exist, add it at the end of the file and treat its body as empty.
+
+2. REPLACE that body — do not append, and never emit a second "## Parked findings" heading — with one bullet per ruling below, formatted \`- **<ruling>** — <finding> — <rationale>\`. If the list below is empty, the body must be exactly \`_None._\` and nothing else.
+
+Rulings to render (JSON):
+${JSON.stringify(rulings)}
+
+Hard rules:
+- The section must contain NO markdown checkboxes ("- [ ]" or "- [x]"). A stray unticked checkbox outside "## Definition of Done" is read elsewhere as a phantom task. Use plain bullets.
+- Do NOT touch the "## Definition of Done" section, its checkbox characters, or any other section's prose. Another step owns those boxes.
+- Every ruling gets rendered, labelled by its ruling value verbatim — including "operator-overridden" ones, which are not parked but have no other home in this document.`,
+    { label: 'write-parked-findings', phase: 'Publish', model: 'sonnet' }
   )
 }
 
@@ -828,12 +1019,12 @@ function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria
   const advisoryNotes = [surfaceDetectionError, dodCoverageError].filter(Boolean).join('; ').replace(/[`"$\\]/g, '')
   return agent(
     `Finalize this /imps run. State file: ${args.stateFilePath}. GOAL.md: ${args.goalFilePath}.
-1. You MUST run this now, before any other step below (the script itself is fail-soft — a missing \`jq\` or unwritable log dir just warns and exits 0 — but calling it is not optional): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms> --scope <project-or-user> --notes "<one-line summary>"\`. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, backtick, dollar sign, or backslash, since any of those would break out of or reinterpret this command's own double-quoted argument.
+1. You MUST run this now, before any other step below (the script itself is fail-soft — a missing \`jq\` or unwritable log dir just warns and exits 0 — but calling it is not optional): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms; omit this flag entirely if dispatched_at is not a real timestamp — see step 6> --scope <project-or-user> --notes "<one-line summary>"\`. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, backtick, dollar sign, or backslash, since any of those would break out of or reinterpret this command's own double-quoted argument.
 2. If a PR exists (${prInfo ? `#${prInfo.number}` : 'none'}), flip it to ready: \`gh pr ready ${prInfo ? prInfo.number : ''}\`. Skip if no PR.
 3. Collect artifact links from the state file's "artifacts" field into the result.
 4. If the state file's "source_discussion" is non-null AND "discussion_comment_url" is still null, post a short outcome comment (≤150 words: what shipped, PR/artifact URLs, unresolved findings — persona verdicts/findings for reference: ${JSON.stringify(verdicts)}; DoD acceptance-criteria coverage for reference, mention any unsatisfied ones: ${JSON.stringify(dodCoverageCriteria || [])}${dodCoverageError ? `, noting the coverage check itself did not complete: ${dodCoverageError}` : ''}) via \`gh api graphql\` addDiscussionComment using source_discussion.id verbatim. Write the returned comment URL into the state file's discussion_comment_url field immediately (patch the state file yourself) — a non-null URL means never post again on a future invocation.
 5. If a PR was opened, write ~/.claude/imps/runs/<slug>.prs.json (derive slug from the state file path) with: repo, pr_number, pr_url, branch, base_branch, poll_interval_seconds (from state file), started_at (now, ISO), handled_comment_ids: [], ci_fix_attempts: {}, max_age_hours: 48.
-6. Assemble run_stats: dispatched_at (from state file), elapsed (now minus dispatched_at, "Xm Ys"), tokens_spent and model_counts (from: ${JSON.stringify(dispatchStats)}), tasks ([{id, model}] for every task), achieved (≤5 one-liners in plain value terms — what changed for the user, not implementation detail), decision_points (one line per pivot: Head Imp amendments, conflicts resolved, skipped gates/tasks${advisoryNotes ? `, the advisory-check note(s) above` : ''} — omit if none).
+6. Assemble run_stats: dispatched_at (from state file), elapsed (now minus dispatched_at, "Xm Ys" — but FIRST check that dispatched_at is a real ISO-8601 timestamp. A state file written before this run's clock helper existed, or one whose timestamp call failed, carries the literal placeholder "agent-supplies-timestamp" there. If dispatched_at is that placeholder, absent, or otherwise not parseable as a date, set elapsed to "unknown" and do not guess or fabricate a duration), tokens_spent and model_counts (from: ${JSON.stringify(dispatchStats)}), tasks ([{id, model}] for every task), achieved (≤5 one-liners in plain value terms — what changed for the user, not implementation detail), decision_points (one line per pivot: Head Imp amendments, conflicts resolved, skipped gates/tasks${advisoryNotes ? `, the advisory-check note(s) above` : ''} — omit if none).
 7. Set the state file's "phase" to "final" (NOT deleted yet — deletion happens only after the learnings step, so a death here still resumes gracefully).
 
 Return via the required schema: pr_ready (bool), discussion_comment_url (string or null), prs_monitor (object or null: {state_file, pr_number}), run_stats (object), learnings_candidates (array of ≤10 concise "rule to apply next time" strings — surprising, wrong, or notably effective things about this run; empty array if trivial/no surprises).`,
@@ -919,9 +1110,60 @@ if (lastStatus === 'final' && decision && decision.startsWith('learnings:')) {
   return { status: 'done', learnings_saved: appended.saved }
 }
 
-if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('PR:')) {
-  const postingMode = decision === 'PR: yes' ? 'live' : decision === 'PR: yes, no-post' ? 'no-post' : 'none'
+// A `blocked/unresolved_findings` resume re-enters the SAME Publish block by widening its
+// guard — it is deliberately NOT a new top-level `if` further down. The next top-level `if`
+// is reachable only when this one declines, and control there falls through to
+// phase('Dispatch'): a branch placed down there would re-run merge, a fresh opus
+// headImpReview, and every gate before emitting a duplicate awaiting_authorization on a PR
+// that already exists.
+const resumingFindings = !!(
+  lastStatus === 'blocked' &&
+  state.last_result.reason === 'unresolved_findings' &&
+  decision &&
+  (decision === 'retry findings' || decision.startsWith('override findings:'))
+)
+if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith('PR:')) || resumingFindings) {
+  // On a findings resume the decision no longer starts with "PR:", so the ternary alone
+  // would evaluate to "none" — silently un-pushing the fix rounds' commits, telling the
+  // re-review not to post, and changing findings_inline's shape. Read the persisted value
+  // first; the ternary is only the first-entry derivation.
+  const postingMode =
+    state.posting_mode || (decision === 'PR: yes' ? 'live' : decision === 'PR: yes, no-post' ? 'no-post' : 'none')
+  const overriding = resumingFindings && decision.startsWith('override findings:')
   phase('Publish')
+
+  // Cycle bound. Incremented HERE — where the `retry findings` verb is consumed — not where
+  // the blocked result is re-emitted: `fix_cycles: (state.fix_cycles || 1)` written at the
+  // return site is a floor, not an increment, so it writes 1 forever and this refusal is
+  // unreachable. Each granted cycle costs a five-persona panel, three fix rounds, an opus
+  // dodCoverage recompute and an opus adjudicator.
+  if (resumingFindings && decision === 'retry findings') {
+    const cycles = (state.fix_cycles || 1) + 1
+    if (cycles > 2) {
+      // Re-return the PRIOR blocked result. It is already field-complete from the last
+      // invocation; do not try to rebuild its shape here — coverageCriteria,
+      // parkedFindings and wontfixRulings are all declared inside the panel block far
+      // below this point and are out of scope.
+      const result = {
+        ...state.last_result,
+        detail: {
+          ...state.last_result.detail,
+          note: 'retry findings refused after two cycles — only `override findings:` or `abort` remain',
+        },
+      }
+      await saveResult(result)
+      return result
+    }
+    // NO `state = ` here, deliberately. Nothing in THIS invocation reads state.fix_cycles;
+    // the write exists only so the next invocation's refusal check sees it. Taking the
+    // return would swap the sonnet-validated `state` for an unvalidated haiku round-trip
+    // immediately before the reseed reads state.verdicts_pending — the largest free-text
+    // field in the file. A truncated read there yields current={} -> results=[] ->
+    // dissenting=[] -> the fix loop never enters -> verdicts={} is persisted as the
+    // panel-completion signal -> the run finalizes with the load-bearing finding gone.
+    await patchState({ fix_cycles: cycles }, 'grant-retry-cycle')
+  }
+
   let prInfo = state.pr
   if (postingMode !== 'none' && !prInfo) {
     prInfo = await pushAndOpenPR(state, state.last_result.default_branch)
@@ -930,7 +1172,39 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
   // `verdicts` stores {slug: {verdict, findings}} — full content, not just the verdict
   // label, so a no-post/findings-inline run still has each persona's actual findings to
   // show the operator (a bare verdict word is not "the review record").
-  let verdicts = state.verdicts
+  //
+  // On `override findings:` the operator has accepted the open findings, so the withheld
+  // verdicts_pending is PROMOTED to verdicts. That is the whole mechanism of the override:
+  // a non-null `verdicts` closes the panel/fix-loop block below and drops control straight
+  // to phase('Finalize'). prInfo is guaranteed non-null on this path — the block below only
+  // ever runs when prInfo is set, so no path that reaches the unresolved_findings return
+  // can have state.pr unset.
+  let verdicts = state.verdicts || (overriding ? state.verdicts_pending : null)
+  // Rulings carry across invocations: the adjudicator's output persisted before the blocked
+  // return, plus every WONTFIX rationale the fix rounds accumulated. Declared out here (not
+  // inside the panel block) because both terminal result objects below read them, and the
+  // override path mutates them without ever entering that block.
+  let parkedFindings = state.parked_findings || []
+  const wontfixRulings = [...(state.wontfix_rulings || [])]
+  if (overriding) {
+    // `load-bearing` is the only ruling an override changes; a parked ruling was never
+    // blocking, so re-labelling it would erase the adjudicator's actual judgment.
+    const operatorRationale = decision.slice('override findings:'.length).trim()
+    parkedFindings = parkedFindings.map((r) =>
+      r && r.ruling === 'load-bearing'
+        ? { ...r, ruling: 'operator-overridden', operator_rationale: operatorRationale }
+        : r
+    )
+    await patchState(
+      { verdicts, verdicts_pending: null, parked_findings: parkedFindings, posting_mode: postingMode },
+      'operator-override'
+    )
+    try {
+      await writeParkedFindings(parkedFindings)
+    } catch (e) {
+      /* GOAL.md rendering is a record, not a gate — the rulings are in the result object */
+    }
+  }
   // Persisted alongside verdicts (not just a local var) so a resumed invocation that skips
   // the panel below (verdicts already saved) still has this for the finalizeRun call further
   // down — set only when detection itself errors, so a persistently-flaking classifier is
@@ -953,46 +1227,59 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
     coverageStatus = state.dod_coverage_status_final
   }
   if (!verdicts && prInfo) {
-    // Surface-detection skip (change B): only the ux-designer (browser) persona depends on
-    // a browser-renderable surface being in the diff. Cheaply classify the changed paths and,
-    // if none is a browser surface, drop ux-designer from the INITIAL panel only (the dissenter
-    // re-review below is an orthogonal filter and is left untouched). Fail toward MORE review:
-    // has_surface true, or ANY error in classification, runs all five personas.
-    let personaFilter
-    let uxSkipFinding = null
-    try {
-      const surface = await detectBrowserSurface(state.last_result.default_branch)
-      if (surface && surface.has_surface === false) {
-        // Derived from each roster entry's own `requires` tags, not a hardcoded slug — a
-        // future persona (browser or non-browser) is handled by its roster entry, not by
-        // editing this filter.
-        personaFilter = Object.entries(args.personaBriefPaths)
-          .filter(([, brief]) => !(brief.requires || []).includes('browser-surface'))
-          .map(([slug]) => slug)
-        uxSkipFinding = `ux-designer skipped — no browser-renderable surface: ${surface.reason}`
-        surfaceDetectionError = null // clean detection — clear any stale error from a prior invocation
-      } else if (!surface || typeof surface.has_surface !== 'boolean') {
-        // Non-throwing but malformed (missing/mistyped has_surface) resolves to the same
-        // fail-open "run all personas" outcome as the catch below — but without this branch
-        // it left no record of why, defeating the flaking-classifier visibility this field
-        // exists for. Describe the fields rather than JSON.stringify-ing the whole object —
-        // a raw JSON blob can carry double quotes that break the shell `--notes "..."`
-        // argument finalizeRun's audit-log call later builds from this string.
-        surfaceDetectionError = `surface-detection returned a malformed result, ran all personas: has_surface=${surface ? String(surface.has_surface) : 'undefined'}, reason=${surface && surface.reason ? surface.reason : 'none given'}`
-      } else {
-        surfaceDetectionError = null // clean detection (surface found) — clear any stale error
+    let results
+    let current
+    if (resumingFindings && decision === 'retry findings') {
+      // Reseed from the withheld panel output instead of re-running it. A literal
+      // implementation of `retry findings` would re-dispatch all five personas — posting
+      // five more GitHub reviews in `live` mode before the re-review rounds add yet more —
+      // and would discard verdicts_pending along with its `posted` flags and the SKIPPED
+      // ux-designer entry. The fix loop below then starts over at round 0 against the
+      // dissenters recorded there.
+      current = state.verdicts_pending || {}
+      results = Object.entries(current).map(([slug, v]) => ({ slug, ...v }))
+    } else {
+      // Surface-detection skip (change B): only the ux-designer (browser) persona depends on
+      // a browser-renderable surface being in the diff. Cheaply classify the changed paths and,
+      // if none is a browser surface, drop ux-designer from the INITIAL panel only (the dissenter
+      // re-review below is an orthogonal filter and is left untouched). Fail toward MORE review:
+      // has_surface true, or ANY error in classification, runs all five personas.
+      let personaFilter
+      let uxSkipFinding = null
+      try {
+        const surface = await detectBrowserSurface(state.last_result.default_branch)
+        if (surface && surface.has_surface === false) {
+          // Derived from each roster entry's own `requires` tags, not a hardcoded slug — a
+          // future persona (browser or non-browser) is handled by its roster entry, not by
+          // editing this filter.
+          personaFilter = Object.entries(args.personaBriefPaths)
+            .filter(([, brief]) => !(brief.requires || []).includes('browser-surface'))
+            .map(([slug]) => slug)
+          uxSkipFinding = `ux-designer skipped — no browser-renderable surface: ${surface.reason}`
+          surfaceDetectionError = null // clean detection — clear any stale error from a prior invocation
+        } else if (!surface || typeof surface.has_surface !== 'boolean') {
+          // Non-throwing but malformed (missing/mistyped has_surface) resolves to the same
+          // fail-open "run all personas" outcome as the catch below — but without this branch
+          // it left no record of why, defeating the flaking-classifier visibility this field
+          // exists for. Describe the fields rather than JSON.stringify-ing the whole object —
+          // a raw JSON blob can carry double quotes that break the shell `--notes "..."`
+          // argument finalizeRun's audit-log call later builds from this string.
+          surfaceDetectionError = `surface-detection returned a malformed result, ran all personas: has_surface=${surface ? String(surface.has_surface) : 'undefined'}, reason=${surface && surface.reason ? surface.reason : 'none given'}`
+        } else {
+          surfaceDetectionError = null // clean detection (surface found) — clear any stale error
+        }
+      } catch (e) {
+        // fail-open on the skip = fail-closed on review: personaFilter stays undefined, all
+        // five personas run — but record why, for finalize/audit visibility.
+        surfaceDetectionError = `surface-detection errored, ran all personas: ${e && e.message ? e.message : e}`
       }
-    } catch (e) {
-      // fail-open on the skip = fail-closed on review: personaFilter stays undefined, all
-      // five personas run — but record why, for finalize/audit visibility.
-      surfaceDetectionError = `surface-detection errored, ran all personas: ${e && e.message ? e.message : e}`
-    }
-    const results = await runPersonaPanel(state, prInfo.number, state.last_result.default_branch, postingMode, personaFilter)
-    let current = Object.fromEntries(results.map((v) => [v.slug, { verdict: v.verdict, posted: v.posted, findings: v.findings }]))
-    // Record the skip as a ux-designer finding so it surfaces in findings_inline / the final
-    // report. "SKIPPED" is not "CHANGES_REQUESTED", so the dissenter fix-loop never re-reviews it.
-    if (uxSkipFinding) {
-      current['ux-designer'] = { verdict: 'SKIPPED', findings: [uxSkipFinding] }
+      results = await runPersonaPanel(state, prInfo.number, state.last_result.default_branch, postingMode, personaFilter)
+      current = Object.fromEntries(results.map((v) => [v.slug, { verdict: v.verdict, posted: v.posted, findings: v.findings }]))
+      // Record the skip as a ux-designer finding so it surfaces in findings_inline / the final
+      // report. "SKIPPED" is not "CHANGES_REQUESTED", so the dissenter fix-loop never re-reviews it.
+      if (uxSkipFinding) {
+        current['ux-designer'] = { verdict: 'SKIPPED', findings: [uxSkipFinding] }
+      }
     }
 
     // Fix loop, max 3 rounds. Deliberately does NOT persist `verdicts` to the state file
@@ -1001,10 +1288,22 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
     // rounds and finalizing with unaddressed persona findings.
     let round = 0
     let dissenting = results.filter((v) => v.verdict === 'CHANGES_REQUESTED')
+    // Each round's own account of itself. Kept LOCAL, never persisted: the adjudicator is
+    // the only consumer and it runs in this same invocation, and the state file's free-text
+    // budget is already spent on the four fields that have nowhere else to live.
+    const fixHistory = []
     while (dissenting.length && round < 3) {
       round += 1
       const findings = dissenting.flatMap((v) => v.findings)
-      await fixLoopRound(findings)
+      // The return was previously discarded, which made the WONTFIX invitation in this
+      // prompt a black hole: a rationale the operator never saw. Capture both halves.
+      const fixRound = await fixLoopRound(findings)
+      if (fixRound) {
+        fixHistory.push({ round, summary: fixRound.summary || '', fixed: fixRound.fixed || [] })
+        for (const w of fixRound.wontfix || []) {
+          if (w && w.finding) wontfixRulings.push({ round, finding: w.finding, rationale: w.rationale || '' })
+        }
+      }
       if (postingMode !== 'none') {
         await agent(`Push fix-round ${round}'s commits to the PR branch: git push.`, { label: `push-fix-${round}`, phase: 'Publish', model: 'haiku' })
       }
@@ -1032,10 +1331,91 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
         coverageStatus = 'failed'
       }
     }
+
+    // Adjudication at the cap. The loop above stops at 3 rounds whether or not anything
+    // converged; before this, survivors were printed and the run finalized anyway.
+    if (dissenting.length) {
+      const adjudication = await adjudicateFindings(
+        // Per-persona shape, NOT the flattened list the fix loop uses: flattening discards
+        // the attribution the ">=2 distinct personas defaults to load-bearing" rule needs.
+        dissenting.map((v) => ({ slug: v.slug, findings: v.findings })),
+        fixHistory,
+        state.last_result.default_branch
+      )
+      const rulings = (adjudication && adjudication.rulings) || []
+      const loadBearing = rulings.filter((r) => r && r.ruling === 'load-bearing')
+      parkedFindings = [...parkedFindings, ...rulings.filter((r) => r && r.ruling !== 'load-bearing')]
+      // Runs on BOTH exits below — the parked-only path continues to finalize and must
+      // still leave the rulings in GOAL.md, not only in a state file that is about to be
+      // deleted. Never fatal: the rulings also travel in the result object.
+      try {
+        await writeParkedFindings(parkedFindings)
+      } catch (e) {
+        /* GOAL.md rendering is a record, not a gate */
+      }
+      if (loadBearing.length) {
+        // `verdicts` stays UNSET here, deliberately. Its guard encloses the whole panel and
+        // fix loop, so persisting it would make the next resume skip both, fall through to
+        // finalizeRun, and finalize with the load-bearing finding untouched while looking
+        // like another round had happened. Partial panel output goes to verdicts_pending.
+        // fix_cycles is NOT written here either — it is incremented where the retry verb is
+        // consumed, at the top of this block.
+        await patchState(
+          {
+            verdicts_pending: current,
+            parked_findings: parkedFindings,
+            wontfix_rulings: wontfixRulings,
+            fix_rounds_done: round,
+            posting_mode: postingMode,
+            // Carried across the block the same way it is on the converged path: the
+            // reseed below skips surface detection entirely, so without this a flaking
+            // classifier recorded in this cycle would vanish on the next one.
+            surface_detection_error: surfaceDetectionError,
+          },
+          'save-adjudication'
+        )
+        // Field-complete by construction. This result becomes `state.last_result` for the
+        // resume that re-enters this same block, and eight reads of state.last_result.<field>
+        // live between the block's guard and its final return — all written under the old
+        // guarantee that lastStatus was 'awaiting_authorization'. default_branch is the fatal
+        // one: personaReview tells each persona to run `git diff origin/<branch>..HEAD`
+        // itself, so `undefined` means five personas review a failed command and return
+        // plausible verdicts on nothing.
+        const result = {
+          status: 'blocked',
+          reason: 'unresolved_findings',
+          default_branch: state.last_result.default_branch,
+          diff_stat: state.last_result.diff_stat,
+          dispatch: state.last_result.dispatch,
+          dod_coverage: coverageCriteria,
+          dod_coverage_error: coverageError,
+          dod_coverage_status: coverageStatus,
+          parked_findings: parkedFindings,
+          wontfix_rulings: wontfixRulings,
+          detail: {
+            parked_findings: parkedFindings,
+            wontfix_rulings: wontfixRulings,
+            load_bearing: loadBearing,
+            fix_rounds_done: round,
+          },
+        }
+        await saveResult(result)
+        return result
+      }
+    }
+
     verdicts = current
     await patchState(
       {
         verdicts,
+        // The panel is finished; nothing is pending any more. A `cat` of the state file is
+        // what README.md tells operators to do for progress — leaving a stale
+        // verdicts_pending alongside a populated verdicts makes that read a lie.
+        verdicts_pending: null,
+        parked_findings: parkedFindings,
+        wontfix_rulings: wontfixRulings,
+        fix_rounds_done: round,
+        posting_mode: postingMode,
         surface_detection_error: surfaceDetectionError,
         dod_coverage_final: coverageCriteria,
         dod_coverage_error_final: coverageError,
@@ -1073,6 +1453,14 @@ if (lastStatus === 'awaiting_authorization' && decision && decision.startsWith('
     // flaking surface-detection classifier was indistinguishable from a healthy run once the
     // state file was deleted.
     surface_detection_error: surfaceDetectionError,
+    // Rendered in the terminal result, not only in the state file: deleteStateFile() removes
+    // that file at the end of a completed run, so without these two the operator's surviving
+    // record would lose every ruling and every WONTFIX rationale the run produced. They are
+    // NOT folded into `verdicts` — that map is {slug: {verdict, posted, findings}}, a
+    // {finding, rationale} pair has no slug, and findings_inline below would silently drop
+    // any extra key it grew.
+    parked_findings: parkedFindings,
+    wontfix_rulings: wontfixRulings,
     discussion_comment_url: finalized.discussion_comment_url,
     prs_monitor: finalized.prs_monitor,
     run_stats: finalized.run_stats,
@@ -1121,7 +1509,17 @@ if (!state.dispatched_at) {
   if (pre.branch_reset) {
     state = await patchState({ branch: pre.new_branch }, 'branch-reset')
   }
-  await patchState({ dispatched_at: 'agent-supplies-timestamp', segment: 'dispatch' }, 'claim-run')
+  // Same fail-soft rule as the heartbeat: a clock failure must not abort a run that is
+  // about to dispatch. `dispatched_at` gates `if (!state.dispatched_at)` above, so it must
+  // stay truthy — fall back to the old loud sentinel, which finalizeRun knows to read as
+  // "elapsed unknown" rather than computing a duration from a non-date.
+  let dispatchIso = null
+  try {
+    dispatchIso = (await nowIso()).iso
+  } catch (e) {
+    /* telemetry — never fatal */
+  }
+  await patchState({ dispatched_at: dispatchIso || 'agent-supplies-timestamp', segment: 'dispatch' }, 'claim-run')
 }
 
 const dispatchOutcome = await runDispatch(state)
@@ -1250,6 +1648,12 @@ const result = {
   dod_coverage: (coverage && coverage.criteria) || [],
   dod_coverage_error: dodCoverageError,
   dod_coverage_status: dodCoverageStatus,
+  // Carried through the operator gate as well as the final result. A run that already went
+  // through a findings cycle and came back round for another integrate pass would otherwise
+  // present the operator a clean-looking authorization prompt with its prior rulings and
+  // WONTFIX rationales nowhere in sight.
+  parked_findings: state.parked_findings || [],
+  wontfix_rulings: state.wontfix_rulings || [],
   dispatch: {
     model_counts: modelCounts,
     tokens_spent: null,

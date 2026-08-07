@@ -14,7 +14,9 @@
 #   - `oracle` and `executor` exist in the task item's properties, both OPTIONAL
 #   - `escalated_tasks` is a TOP-LEVEL property (patchState merges top-level keys only,
 #     so a result fact on the task item would be written at plan time and never again)
-#   - a schema-3 state object carrying all three validates
+#   - the six schema-4 review-discipline fields are TOP-LEVEL and correctly shaped
+#   - a schema-4 state object validates, AND a hand-written schema-3 one still does
+#     (the schema-4 fields are additive; none of them joined `required`)
 #   - negative controls: bad enum / missing required / wrong item type all FAIL to validate
 #     (without these, a no-op validator would make every positive assertion vacuous)
 set -uo pipefail
@@ -136,6 +138,38 @@ assert(
   'escalation_reasons must be an object|null map of id -> reason string, got ' + JSON.stringify(P.escalation_reasons)
 )
 
+// --- Schema 4: the review-discipline fields ------------------------------------------
+// All six are TOP-LEVEL for the same reason escalated_tasks is: patchState() merges
+// top-level keys only, so a field on the task item is writable at plan time and never
+// again. All six are additive and OPTIONAL — a schema-3 state file must still load, which
+// the legacy assertion below proves.
+const SCHEMA4 = {
+  parked_findings: (s) =>
+    Array.isArray(s.type) && s.type.indexOf('array') !== -1 && s.type.indexOf('null') !== -1 &&
+    !!s.items && s.items.type === 'object',
+  wontfix_rulings: (s) =>
+    Array.isArray(s.type) && s.type.indexOf('array') !== -1 && s.type.indexOf('null') !== -1 &&
+    !!s.items && s.items.type === 'object',
+  verdicts_pending: (s) =>
+    Array.isArray(s.type) && s.type.indexOf('object') !== -1 && s.type.indexOf('null') !== -1,
+  fix_rounds_done: (s) =>
+    Array.isArray(s.type) && s.type.indexOf('number') !== -1 && s.type.indexOf('null') !== -1,
+  fix_cycles: (s) =>
+    Array.isArray(s.type) && s.type.indexOf('number') !== -1 && s.type.indexOf('null') !== -1,
+  posting_mode: (s) =>
+    Array.isArray(s.type) && s.type.indexOf('string') !== -1 && s.type.indexOf('null') !== -1,
+}
+const topRequired = S.required || []
+for (const k of Object.keys(SCHEMA4)) {
+  const present = Object.prototype.hasOwnProperty.call(P, k)
+  assert('schema4/top-level/' + k, present, 'no top-level `' + k + '` — schema 4 is additive at the top level')
+  assert(
+    'schema4/shape/' + k,
+    present && SCHEMA4[k](P[k]) && topRequired.indexOf(k) < 0,
+    '`' + k + '` is ' + JSON.stringify(P[k]) + ' (and must stay OUT of top-level required)'
+  )
+}
+
 // --- Minimal validator (type/enum/properties/required/items/additionalProperties) -----
 function validate(schema, value, path, errs) {
   path = path || '$'
@@ -166,7 +200,7 @@ function validate(schema, value, path, errs) {
 
 function sample() {
   return {
-    schema: 3,
+    schema: 4,
     task: 'finish the opencode execute tier',
     repo: 'seankoji/claude-plugins',
     branch: 'imps/claude-plugins-20260728-000000',
@@ -194,17 +228,28 @@ function sample() {
     operator_decision: null,
     last_result: null,
     failed_tasks: [],
+    parked_findings: [{ finding: 'the retry bound is unreachable', ruling: 'parked-deferred', rationale: 'no DoD criterion falsified; fix round 2 could not reproduce it' }],
+    wontfix_rulings: [{ round: 1, finding: 'rename the helper', rationale: 'style only, no criterion depends on the name' }],
+    verdicts_pending: { 'grumpy-engineer': { verdict: 'CHANGES_REQUESTED', posted: true, findings: ['still open'] } },
+    fix_rounds_done: 3,
+    fix_cycles: 1,
+    posting_mode: 'live',
   }
 }
 
 let errs = validate(S, sample())
-assert('sample-schema-3-validates', errs.length === 0, errs.join('; '))
+assert('sample-schema-4-validates', errs.length === 0, errs.join('; '))
 
-// Legacy state file: no oracle, no executor, no escalated_tasks anywhere.
+// A hand-written SCHEMA-3 state file: no oracle, no executor, no escalated_tasks, and none
+// of the six schema-4 fields. `schema` is set explicitly — it derives from sample() above,
+// which now says 4, so without this line this assertion would be checking a schema-4 object
+// and could never fail in the way it exists to catch.
 const legacy = sample()
+legacy.schema = 3
 legacy.tasks = legacy.tasks.map((t) => { const c = { ...t }; delete c.oracle; delete c.executor; return c })
 delete legacy.escalated_tasks
-assert('legacy-state-still-validates', validate(S, legacy).length === 0, validate(S, legacy).join('; '))
+for (const k of Object.keys(SCHEMA4)) delete legacy[k]
+assert('legacy-schema-3-state-still-validates', validate(S, legacy).length === 0, validate(S, legacy).join('; '))
 
 // --- Negative controls: prove the validator is not a no-op ----------------------------
 const badEnum = sample()
@@ -227,8 +272,15 @@ const missingTop = sample()
 delete missingTop.phase
 assert('negative/missing-top-level-required', validate(S, missingTop).length > 0, 'validator accepted a state file with no phase')
 
+// Proves the schema-4 shapes above are actually enforced, not just declared: without this,
+// a `posting_mode: {}` or `posting_mode: 7` typed by a patchState() round-trip would slip
+// through and the six positive assertions would be vacuous.
+const badPostingMode = sample()
+badPostingMode.posting_mode = 7
+assert('negative/posting_mode-wrong-type', validate(S, badPostingMode).length > 0, 'validator accepted posting_mode: 7')
+
 // A truncated run must not pass silently.
-const EXPECTED_ASSERTS = 35
+const EXPECTED_ASSERTS = 48
 if (asserts !== EXPECTED_ASSERTS) {
   console.log('FAIL state-schema/assertion-count')
   console.log('     ran ' + asserts + ' assertions, expected ' + EXPECTED_ASSERTS)
