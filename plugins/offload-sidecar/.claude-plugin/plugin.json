@@ -1,6 +1,6 @@
 {
   "name": "offload-sidecar",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "MCP tool that offloads file transforms, log triage, and vision tasks so Claude passes file paths, not content — deterministic in-process where possible, else routed across local Ollama tiers (deep/fast, private) or Gemini via the agy CLI (flash/pro, budget-gated so quota exhaustion rejects up front instead of failing mid-call). Formerly ollama-sidecar.",
   "author": {
     "name": "seankoji",
