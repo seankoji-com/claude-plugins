@@ -965,8 +965,9 @@ Rules, applied strictly:
 3. A finding raised by >=2 DISTINCT personas defaults to "load-bearing". If you park such a finding anyway, the rationale MUST state which Definition-of-Done criterion survives it.
 4. Every rationale cites the fix round that failed on this finding and why it failed.
 5. "Reviewed and parked" is not "never reviewed". A persona whose verdict is "SKIPPED" never reviewed and produced no finding to rule on — do not manufacture a parked ruling for it, and do not treat its absence as agreement.
+6. The "finding" field of every ruling MUST be copied byte-for-byte from the open findings list above — do not paraphrase, summarize, retitle, or re-wrap it, even to shorten or clarify it. A later cycle matches rulings back to findings by exact string equality; a reworded finding silently defeats that match and the same finding can be handed back to another fix round or double-listed in GOAL.md.
 
-Return via the required schema: "rulings": [{finding, ruling, rationale}], one entry per open finding, none omitted.`,
+Return via the required schema: "rulings": [{finding, ruling, rationale}], one entry per open finding, "finding" copied verbatim from the input (see rule 6), none omitted.`,
     { label: 'adjudicate-findings', phase: 'Publish', model: 'opus', schema: ADJUDICATION_SCHEMA }
   )
 }
@@ -1032,26 +1033,26 @@ function detectBrowserSurface(defaultBranch) {
   )
 }
 
-function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria, dodCoverageError, surfaceDetectionError, heartbeatClockError, dispatchClockError) {
-  // All four are advisory-pass failures (surface-detection, dod-coverage, and now the two
-  // clock helpers behind last_heartbeat/dispatched_at) that must reach the audit trail the
-  // same way — none is fatal to the run, but a silent null on any of them would hide a
-  // degraded advisory check behind a clean-looking finalize. Their source text (a haiku
-  // classifier's freeform "reason", or a thrown error's .message) is untrusted — it can
-  // legitimately contain backticks around a file path, `$(...)`-shaped text, or other
-  // shell metacharacters — and this string ends up inside a shell `--notes "..."` argument
-  // the agent constructs below. Stripping only `"` (as an earlier version of this line did)
-  // still let backticks/`$(` reach that argument verbatim, a real command-injection path via
-  // the finalize agent dutifully copying it in "verbatim". Strip every shell-meaningful
-  // character here (not just at each call site) rather than relying on the agent's own
-  // quoting discipline to neutralize untrusted text.
-  const advisoryNotes = [surfaceDetectionError, dodCoverageError, heartbeatClockError, dispatchClockError]
+function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria, dodCoverageError, surfaceDetectionError, heartbeatClockError, dispatchClockError, parkedFindingsWriteError) {
+  // All five are advisory-pass failures (surface-detection, dod-coverage, the two clock
+  // helpers behind last_heartbeat/dispatched_at, and a failed GOAL.md parked-findings write)
+  // that must reach the audit trail the same way — none is fatal to the run, but a silent
+  // null on any of them would hide a degraded advisory check behind a clean-looking
+  // finalize. Their source text (a haiku classifier's freeform "reason", or a thrown
+  // error's .message) is untrusted — it can legitimately contain backticks around a file
+  // path, `$(...)`-shaped text, or other shell metacharacters — and this string ends up
+  // inside a shell `--notes "..."` argument the agent constructs below. Stripping only `"`
+  // (as an earlier version of this line did) still let backticks/`$(` reach that argument
+  // verbatim, a real command-injection path via the finalize agent dutifully copying it in
+  // "verbatim". Strip every shell-meaningful character here (not just at each call site)
+  // rather than relying on the agent's own quoting discipline to neutralize untrusted text.
+  const advisoryNotes = [surfaceDetectionError, dodCoverageError, heartbeatClockError, dispatchClockError, parkedFindingsWriteError]
     .filter(Boolean)
     .join('; ')
     .replace(/[`"$\\]/g, '')
   return agent(
     `Finalize this /imps run. State file: ${args.stateFilePath}. GOAL.md: ${args.goalFilePath}.
-1. You MUST run this now, before any other step below (the script itself is fail-soft — a missing \`jq\` or unwritable log dir just warns and exits 0 — but calling it is not optional): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms; omit this flag entirely if dispatched_at is not a real timestamp — see step 6> --scope <project-or-user> --notes "<one-line summary>"\`. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, backtick, dollar sign, or backslash, since any of those would break out of or reinterpret this command's own double-quoted argument.
+1. You MUST run this now, before any other step below (the script itself is fail-soft about a missing \`jq\` or unwritable log dir — but \`--duration-ms\` itself is a required, strictly-validated argument: passing anything non-numeric, including omitting the flag, makes the script exit 1 and drop this mandatory line entirely): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms; if dispatched_at is not a real timestamp — see step 6 — pass 0 here instead of omitting the flag> --scope <project-or-user> --notes "<one-line summary>"\`. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, backtick, dollar sign, or backslash, since any of those would break out of or reinterpret this command's own double-quoted argument.
 2. If a PR exists (${prInfo ? `#${prInfo.number}` : 'none'}), flip it to ready: \`gh pr ready ${prInfo ? prInfo.number : ''}\`. Skip if no PR.
 3. Collect artifact links from the state file's "artifacts" field into the result.
 4. If the state file's "source_discussion" is non-null AND "discussion_comment_url" is still null, post a short outcome comment (≤150 words: what shipped, PR/artifact URLs, unresolved findings — persona verdicts/findings for reference: ${JSON.stringify(verdicts)}; DoD acceptance-criteria coverage for reference, mention any unsatisfied ones: ${JSON.stringify(dodCoverageCriteria || [])}${dodCoverageError ? `, noting the coverage check itself did not complete: ${dodCoverageError}` : ''}) via \`gh api graphql\` addDiscussionComment using source_discussion.id verbatim. Write the returned comment URL into the state file's discussion_comment_url field immediately (patch the state file yourself) — a non-null URL means never post again on a future invocation.
@@ -1231,6 +1232,12 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
   // override path mutates them without ever entering that block.
   let parkedFindings = state.parked_findings || []
   const wontfixRulings = [...(state.wontfix_rulings || [])]
+  // Carried the same way surfaceDetectionError/heartbeatClockError/dispatchClockError are:
+  // a stale value from a PRIOR invocation survives via the state field read here, and a
+  // failure written by THIS invocation (at either writeParkedFindings call site below)
+  // updates this local directly so it reaches advisoryNotes/finalizeRun/the terminal result
+  // without waiting for a resume to re-read the state file.
+  let parkedFindingsWriteError = state.parked_findings_write_error || null
   if (overriding) {
     // `load-bearing` is the only ruling an override changes. A parked ruling was never
     // blocking, so re-labelling it would erase the adjudicator's actual judgment — which is
@@ -1278,7 +1285,8 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
       // GOAL.md rendering is a record, not a gate — the rulings are in the result object.
       // But a silent drop here is still a silently-missing durable record, so leave a
       // breadcrumb an operator reading the state file (or a future finalize) can see.
-      await patchState({ parked_findings_write_error: `write-parked-findings failed after operator override: ${e && e.message ? e.message : e}` }, 'parked-findings-write-error').catch(() => {})
+      parkedFindingsWriteError = `write-parked-findings failed after operator override: ${e && e.message ? e.message : e}`
+      await patchState({ parked_findings_write_error: parkedFindingsWriteError }, 'parked-findings-write-error').catch(() => {})
     }
   }
   // Persisted alongside verdicts (not just a local var) so a resumed invocation that skips
@@ -1330,6 +1338,14 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
         ...v,
         findings: (v.findings || []).filter((f) => !alreadyParked.has(f)),
       }))
+      // `current` itself must carry the same filtering as `results`, not just the derived
+      // array — `current` (not `results`) is what later becomes `verdicts` once the loop
+      // below converges. Left unfiltered, a persona whose findings were ALL already parked
+      // is correctly excluded from `dissenting` (by the findings.length>0 guard below) and
+      // so never gets re-reviewed or updated in `current` — it would otherwise survive into
+      // the final `verdicts` still reporting CHANGES_REQUESTED with findings GOAL.md already
+      // has rulings for, i.e. already-resolved findings reported back to the operator as open.
+      current = Object.fromEntries(results.map((v) => [v.slug, { verdict: v.verdict, posted: v.posted, findings: v.findings }]))
       // verdicts_pending is the state file's largest free-text field — the one most exposed
       // to a haiku patchState() round-trip truncating it (see the retry-cycle commentary
       // above). An empty or fully-filtered reseed must never be mistaken for "the panel
@@ -1431,7 +1447,11 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
         dissenting.map((v) => v.slug) // only re-review personas that dissented — not the whole panel
       )
       for (const v of reReview) current[v.slug] = { verdict: v.verdict, posted: v.posted, findings: v.findings }
-      dissenting = reReview.filter((v) => v.verdict === 'CHANGES_REQUESTED')
+      // Same guard as the initial `dissenting` assignment above (and for the same reason):
+      // without it, a re-reviewed persona that came back CHANGES_REQUESTED with an empty
+      // findings array still loops back through fixLoopRound([]) and, at the round cap,
+      // hands opus an adjudication with nothing to rule on.
+      dissenting = reReview.filter((v) => v.verdict === 'CHANGES_REQUESTED' && (v.findings || []).length > 0)
     }
     if (round > 0) {
       // The fix loop just pushed real commits — the Integrate-phase coverage snapshot
@@ -1451,13 +1471,67 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     // Adjudication at the cap. The loop above stops at 3 rounds whether or not anything
     // converged; before this, survivors were printed and the run finalized anyway.
     if (dissenting.length) {
-      const adjudication = await adjudicateFindings(
-        // Per-persona shape, NOT the flattened list the fix loop uses: flattening discards
-        // the attribution the ">=2 distinct personas defaults to load-bearing" rule needs.
-        dissenting.map((v) => ({ slug: v.slug, findings: v.findings })),
-        fixHistory,
-        state.last_result.default_branch
-      )
+      let adjudication
+      let adjudicationError = null
+      try {
+        adjudication = await adjudicateFindings(
+          // Per-persona shape, NOT the flattened list the fix loop uses: flattening discards
+          // the attribution the ">=2 distinct personas defaults to load-bearing" rule needs.
+          dissenting.map((v) => ({ slug: v.slug, findings: v.findings })),
+          fixHistory,
+          state.last_result.default_branch
+        )
+      } catch (e) {
+        adjudicationError = `adjudicate-findings errored: ${e && e.message ? e.message : e}`
+      }
+      if (adjudicationError) {
+        // This is the one new agent call in the block with no try/catch until now — an
+        // uncaught throw here left NOTHING persisted for the cycle: `verdicts` correctly
+        // stays unset (see the load-bearing branch's own comment on that), but so did
+        // `verdicts_pending`, so a resumed invocation fell straight back to the top of this
+        // `if (!verdicts && prInfo)` guard and re-ran the FULL five-persona panel — five more
+        // live GitHub reviews — just to reproduce the exact `dissenting` set already sitting
+        // in memory when adjudicateFindings threw. Persist verdicts_pending here exactly as
+        // the load-bearing branch below does, so `retry findings` reseeds from the withheld
+        // panel output (resumingFindings' existing path) instead of re-dispatching personas.
+        await patchState(
+          {
+            verdicts_pending: current,
+            parked_findings: parkedFindings,
+            wontfix_rulings: wontfixRulings,
+            fix_rounds_done: round,
+            posting_mode: postingMode,
+            surface_detection_error: surfaceDetectionError,
+          },
+          'save-adjudication-error'
+        )
+        const result = {
+          status: 'blocked',
+          // Reuses the existing `unresolved_findings` reason (not a new one) so this resumes
+          // through the already-documented `resumingFindings` gate and operator verbs (`retry
+          // findings` / `override findings:` / `abort`) instead of requiring a parallel state
+          // machine branch for a failure that, from the operator's chair, looks the same:
+          // findings are still open and unresolved, just for a different reason.
+          reason: 'unresolved_findings',
+          default_branch: state.last_result.default_branch,
+          diff_stat: state.last_result.diff_stat,
+          dispatch: state.last_result.dispatch,
+          dod_coverage: coverageCriteria,
+          dod_coverage_error: coverageError,
+          dod_coverage_status: coverageStatus,
+          parked_findings: parkedFindings,
+          wontfix_rulings: wontfixRulings,
+          detail: {
+            parked_findings: parkedFindings,
+            wontfix_rulings: wontfixRulings,
+            load_bearing: [],
+            adjudication_error: adjudicationError,
+            fix_rounds_done: round,
+          },
+        }
+        await saveResult(result)
+        return result
+      }
       const rulings = (adjudication && adjudication.rulings) || []
       const loadBearing = rulings.filter((r) => r && r.ruling === 'load-bearing')
       parkedFindings = [...parkedFindings, ...rulings.filter((r) => r && r.ruling !== 'load-bearing')]
@@ -1470,7 +1544,8 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
         // GOAL.md rendering is a record, not a gate — the rulings are in the result object.
         // But a silent drop here means the durable record README.md promises silently does
         // not exist; leave a breadcrumb rather than discarding the exception outright.
-        await patchState({ parked_findings_write_error: `write-parked-findings failed after adjudication: ${e && e.message ? e.message : e}` }, 'parked-findings-write-error').catch(() => {})
+        parkedFindingsWriteError = `write-parked-findings failed after adjudication: ${e && e.message ? e.message : e}`
+        await patchState({ parked_findings_write_error: parkedFindingsWriteError }, 'parked-findings-write-error').catch(() => {})
       }
       if (loadBearing.length) {
         // `verdicts` stays UNSET here, deliberately. Its guard encloses the whole panel and
@@ -1561,7 +1636,8 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     coverageError,
     surfaceDetectionError,
     heartbeatClockError,
-    dispatchClockError
+    dispatchClockError,
+    parkedFindingsWriteError
   )
   const result = {
     status: 'final',
@@ -1587,6 +1663,10 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     // healthy run once the state file is deleted.
     heartbeat_clock_error: heartbeatClockError,
     dispatch_clock_error: dispatchClockError,
+    // Same reasoning again — deleteStateFile() removes the only other copy of this field,
+    // so a failed GOAL.md parked-findings write must be visible here too, not just as a
+    // breadcrumb inside the state file it is about to outlive.
+    parked_findings_write_error: parkedFindingsWriteError,
     // Rendered in the terminal result, not only in the state file: deleteStateFile() removes
     // that file at the end of a completed run, so without these two the operator's surviving
     // record would lose every ruling and every WONTFIX rationale the run produced. They are

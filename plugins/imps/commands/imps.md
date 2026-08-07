@@ -548,18 +548,25 @@ current branch.
 
 `verdicts_pending`, `parked_findings`, `wontfix_rulings`, `fix_rounds_done`,
 `fix_cycles`, and `posting_mode` are new in **schema 4** (persona-panel adjudication) —
-additive only, in the same style as schema 3 below: six new top-level fields, nothing
-existing removed or repurposed, none of them required, so a hand-written schema-3 file
-still loads. All six are written by the script during the persona panel and fix loop;
-you never write them at plan time beyond the empty values above. `verdicts_pending` holds
-panel output that is *not yet complete* — `verdicts` staying `null` is the script's
-"the panel has not finished, run it again" signal, so partial output must never be
-promoted into it. `parked_findings` and `wontfix_rulings` carry the adjudicator's rulings
-and each fix round's declined findings; `fix_rounds_done` and `fix_cycles` bound the fix
-loop and the `retry findings` verb; `posting_mode` persists the operator's posting choice
-so a resume that no longer carries a `PR:` decision string does not silently fall back to
-"post nothing". See Phase 4's `unresolved_findings` entry for what an operator does with
-them.
+additive only, in the same style as schema 3 below: nothing existing removed or
+repurposed, none of them required, so a hand-written schema-3 file still loads. (Schema 4
+also added three fail-soft breadcrumb fields not listed above — `heartbeat_clock_error`,
+`dispatch_clock_error`, `parked_findings_write_error` — each `null` unless its own helper
+just failed; they carry no operator-facing behavior of their own and exist only to reach
+the audit trail, so they're covered by "See Phase 4's `unresolved_findings` entry" below
+only incidentally.) All six of the named fields are written by the script during the
+persona panel and fix loop; you never write them at plan time beyond the empty values
+above. `verdicts_pending` holds panel output that is *not yet complete* — `verdicts`
+staying `null` is the script's "the panel has not finished, run it again" signal, so
+partial output must never be promoted into it. `parked_findings` and `wontfix_rulings`
+carry the adjudicator's rulings and each fix round's declined findings. `fix_cycles`
+bounds the `retry findings` verb (refused past two granted cycles); `fix_rounds_done` is
+a record of how many fix rounds the most recently completed cycle ran (surfaced in the
+result, not itself a bound) — each cycle's own fix loop always restarts counting from
+round 0, it does not resume a prior cycle's round count. `posting_mode` persists the
+operator's posting choice so a resume that no longer carries a `PR:` decision string does
+not silently fall back to "post nothing". See Phase 4's `unresolved_findings` entry for
+what an operator does with them.
 
 `gate_commands`, `learnings_saved`, `operator_decision`, and `last_result` are new in
 schema 3 (the Workflow-script rewrite) — additive only, nothing existing was removed or
@@ -816,12 +823,16 @@ the decision, re-invoke:
 
   A **ruling** is the adjudicator's verdict on one surviving finding, and it is one of
   exactly four values:
-  - `load-bearing` — the finding blocks. The adjudicator had to anchor it to either a
-    verbatim-quoted criterion under GOAL.md's `## Definition of Done` or a named concrete
-    breaking input, data-loss path, or security defect reachable in the merged diff. A
-    ruling with neither anchor cannot be load-bearing, so a `load-bearing` ruling without
-    a quote or a named input is a malformed ruling, not a stricter one — treat it as
-    suspect and read the finding yourself.
+  - `load-bearing` — the finding blocks. The adjudicator had to anchor it to at least one
+    of: a verbatim-quoted criterion under GOAL.md's `## Definition of Done`; a named
+    concrete breaking input, data-loss path, or security defect reachable in the merged
+    diff; or a verbatim-quoted constraint under GOAL.md's `## Global Constraints`. A
+    ruling with none of the three anchors cannot be load-bearing, so a `load-bearing`
+    ruling that quotes neither a DoD criterion nor a Global Constraint and names no
+    breaking input is a malformed ruling, not a stricter one — treat it as suspect and
+    read the finding yourself. A ruling that DOES quote a Global Constraint is fully
+    anchored on that basis alone; do not second-guess it just because it lacks a DoD
+    criterion or a named breaking input too — the constraint anchor stands on its own.
   - `parked-contestable` — reviewed, judged non-blocking, and the adjudicator's reasoning
     is the thing you might disagree with. This is the ruling to re-read: a finding raised
     by two or more distinct personas defaults to `load-bearing`, so parking one of those

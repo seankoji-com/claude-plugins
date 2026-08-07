@@ -203,9 +203,10 @@ terminal result, not just the state file.
 ### When findings still don't converge
 
 If dissenting findings remain after the three-round cap, one opus adjudicator rules on each,
-anchored to either a named `## Definition of Done` criterion (quoted verbatim) or a concrete
-breaking input, data-loss path, or security defect in the merged diff — a finding meeting
-neither anchor cannot be ruled `load-bearing`. Each ruling is one of `parked-contestable`,
+anchored to at least one of: a named `## Definition of Done` criterion (quoted verbatim); a
+concrete breaking input, data-loss path, or security defect in the merged diff; or a named
+`## Global Constraints` violation (quoted verbatim) — a finding meeting none of the three
+anchors cannot be ruled `load-bearing`. Each ruling is one of `parked-contestable`,
 `parked-deferred`, `load-bearing`, or `operator-overridden`. A `load-bearing` ruling blocks the
 run: the Workflow script returns a `blocked` result with `reason: "unresolved_findings"`, and you
 choose `retry findings` (one more capped fix cycle, refused after two cycles) or
