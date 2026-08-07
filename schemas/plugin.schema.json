@@ -13,7 +13,7 @@
     },
     "version": {
       "type": "string",
-      "description": "Semantic version string (e.g. 0.1.0)."
+      "description": "Per-PR patch counter in MAJOR.MINOR.PATCH format (not semver — see CONTRIBUTING.md)."
     },
     "description": {
       "type": "string",
