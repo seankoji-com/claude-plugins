@@ -353,7 +353,7 @@ quote or reason about its contents. Then:
     unauthorized GitHub issues filed as the deliverable.
   - **Model** — assign by reasoning complexity (see
     [Model selection reference](#model-selection-reference)). Always set `model:` explicitly.
-  - **Type** — `code` (file changes, worktree-isolated) · `query` (read-only) ·
+  - **Type** — `code` (file changes, worktree-isolated) · `query` (read-only by default; add `MUTATIONS_ALLOWED` to the task spec to authorize live mutations — e.g. SSH restarts, API state changes, config edits) ·
     `publish` (GitHub artifacts; use `gh api graphql` for Discussions, not REST)
   - **Executor** *(optional, `code` tasks only)* — **STATUS: EXPERIMENTAL. Do not set
     `"executor": "opencode"` unless the operator asked for it on this run.** The
