@@ -151,6 +151,12 @@ const STATE_SCHEMA = {
     // clock-error fields, so the durable-record promise it broke is at least visible
     // somewhere other than a silently-eaten catch block.
     parked_findings_write_error: { type: ['string', 'null'] },
+    // One-line failure message from the most recent adjudicateFindings() call, if it threw.
+    // Same fail-soft/carry-forward pattern as parked_findings_write_error: it must survive
+    // an `override findings:` resume (which skips the panel block entirely) and reach
+    // finalizeRun's advisoryNotes / the terminal result, so a run that shipped despite the
+    // adjudicator never running is not indistinguishable from a healthy one.
+    adjudication_error: { type: ['string', 'null'] },
     wontfix_rulings: { type: ['array', 'null'], items: { type: 'object', additionalProperties: true } },
     // Partial panel output. NEVER `verdicts` — that key is the panel-completion signal
     // ("the panel is finished, never run it again"), not a data slot.
@@ -1033,11 +1039,12 @@ function detectBrowserSurface(defaultBranch) {
   )
 }
 
-function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria, dodCoverageError, surfaceDetectionError, heartbeatClockError, dispatchClockError, parkedFindingsWriteError) {
-  // All five are advisory-pass failures (surface-detection, dod-coverage, the two clock
-  // helpers behind last_heartbeat/dispatched_at, and a failed GOAL.md parked-findings write)
-  // that must reach the audit trail the same way — none is fatal to the run, but a silent
-  // null on any of them would hide a degraded advisory check behind a clean-looking
+function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria, dodCoverageError, surfaceDetectionError, heartbeatClockError, dispatchClockError, parkedFindingsWriteError, adjudicationError) {
+  // All six are advisory-pass failures (surface-detection, dod-coverage, the two clock
+  // helpers behind last_heartbeat/dispatched_at, a failed GOAL.md parked-findings write, and
+  // an adjudicate-findings call that never completed) that must reach the audit trail the
+  // same way — none is fatal to the run (an `override findings:` can still finalize it), but
+  // a silent null on any of them would hide a degraded advisory check behind a clean-looking
   // finalize. Their source text (a haiku classifier's freeform "reason", or a thrown
   // error's .message) is untrusted — it can legitimately contain backticks around a file
   // path, `$(...)`-shaped text, or other shell metacharacters — and this string ends up
@@ -1046,7 +1053,7 @@ function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria
   // verbatim, a real command-injection path via the finalize agent dutifully copying it in
   // "verbatim". Strip every shell-meaningful character here (not just at each call site)
   // rather than relying on the agent's own quoting discipline to neutralize untrusted text.
-  const advisoryNotes = [surfaceDetectionError, dodCoverageError, heartbeatClockError, dispatchClockError, parkedFindingsWriteError]
+  const advisoryNotes = [surfaceDetectionError, dodCoverageError, heartbeatClockError, dispatchClockError, parkedFindingsWriteError, adjudicationError]
     .filter(Boolean)
     .join('; ')
     .replace(/[`"$\\]/g, '')
@@ -1238,6 +1245,10 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
   // updates this local directly so it reaches advisoryNotes/finalizeRun/the terminal result
   // without waiting for a resume to re-read the state file.
   let parkedFindingsWriteError = state.parked_findings_write_error || null
+  // Same carry-forward reasoning: a prior invocation's blocked `adjudication_error` result
+  // must survive into this one, including an `override findings:` resume that skips the
+  // panel block below entirely (verdicts is already set by the promotion a few lines down).
+  let adjudicationError = state.adjudication_error || null
   if (overriding) {
     // `load-bearing` is the only ruling an override changes. A parked ruling was never
     // blocking, so re-labelling it would erase the adjudicator's actual judgment — which is
@@ -1263,24 +1274,50 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
       await saveResult(result)
       return result
     }
-    const loadBearingFromLastResult =
-      (state.last_result && state.last_result.detail && state.last_result.detail.load_bearing) || []
+    const lastDetail = (state.last_result && state.last_result.detail) || {}
+    const loadBearingFromLastResult = lastDetail.load_bearing || []
     const overridden = loadBearingFromLastResult.map((r) => ({
       ...r,
       ruling: 'operator-overridden',
       operator_rationale: operatorRationale,
     }))
+    // The adjudication-error and fix-round-error blocked paths both hardcode
+    // detail.load_bearing to [] — neither ever reached a load-bearing ruling, so there is
+    // nothing there to override — but the findings that were AWAITING that ruling
+    // (verdicts_pending, promoted to `verdicts` above) are exactly what the operator is
+    // choosing to override here. Without recording that explicitly, `overridden` above is a
+    // guaranteed no-op on these paths and nothing in parked_findings, GOAL.md, or the
+    // terminal result shows the failure happened and an override was made anyway.
+    const unresolvedErrorReason = lastDetail.adjudication_error || lastDetail.fix_round_error || null
+    const adjudicationErrorOverride = unresolvedErrorReason
+      ? Object.entries(state.verdicts_pending || {}).flatMap(([slug, v]) =>
+          (v.findings || []).map((finding) => ({
+            slug,
+            finding,
+            ruling: 'operator-overridden-adjudication-error',
+            operator_rationale: operatorRationale,
+            note: `the panel never fully adjudicated this finding: ${unresolvedErrorReason}`,
+          }))
+        )
+      : []
     // Dedupe by finding text — a resumed override invocation must not re-append the same
-    // load-bearing findings a second time if this block ever runs twice against the same
-    // saved state.
+    // findings a second time if this block ever runs twice against the same saved state.
     const alreadyRecorded = new Set(parkedFindings.map((r) => r && r.finding))
-    parkedFindings = [...parkedFindings, ...overridden.filter((r) => !alreadyRecorded.has(r.finding))]
+    parkedFindings = [
+      ...parkedFindings,
+      ...[...overridden, ...adjudicationErrorOverride].filter((r) => !alreadyRecorded.has(r.finding)),
+    ]
+    // Clear the carried adjudication_error now that the override recorded it durably above —
+    // otherwise it would keep reporting "adjudicator never ran" in advisoryNotes/the terminal
+    // result on every subsequent invocation even after the operator explicitly ruled on it.
+    adjudicationError = null
     await patchState(
-      { verdicts, verdicts_pending: null, parked_findings: parkedFindings, posting_mode: postingMode },
+      { verdicts, verdicts_pending: null, parked_findings: parkedFindings, posting_mode: postingMode, adjudication_error: null },
       'operator-override'
     )
     try {
       await writeParkedFindings(parkedFindings)
+      parkedFindingsWriteError = null
     } catch (e) {
       // GOAL.md rendering is a record, not a gate — the rulings are in the result object.
       // But a silent drop here is still a silently-missing durable record, so leave a
@@ -1315,6 +1352,11 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     coverageError = state.dod_coverage_error_final || null
     coverageStatus = state.dod_coverage_status_final
   }
+  // Hoisted above the panel/fix-loop block (not declared `let round = 0` inside it) so the
+  // terminal `status: 'final'` result below can read it even on a path that skips the block
+  // entirely (verdicts already set, e.g. an `override findings:` resume) — falls back to the
+  // persisted count from a prior invocation's fix loop rather than always reporting 0.
+  let round = state.fix_rounds_done || 0
   if (!verdicts && prInfo) {
     let results
     let current
@@ -1354,8 +1396,19 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
       // was blocking it in the first place.
       const priorLoadBearing =
         (state.last_result && state.last_result.detail && state.last_result.detail.load_bearing) || []
+      // The adjudication-error and fix-round-error blocked paths (see the `if
+      // (adjudicationError)` / `if (fixRoundError)` branches below) hardcode
+      // detail.load_bearing to [] — neither ever reached a load-bearing verdict, which made
+      // priorLoadBearing.length alone a false negative on those paths: a truncated
+      // verdicts_pending reseeding to current={} -> dissenting=[] looked identical to a
+      // legitimately empty panel and finalized the run clean with the original findings
+      // erased. Gate on both error breadcrumbs too.
+      const priorAdjudicationError =
+        (state.last_result && state.last_result.detail && state.last_result.detail.adjudication_error) || null
+      const priorFixRoundError =
+        (state.last_result && state.last_result.detail && state.last_result.detail.fix_round_error) || null
       const stillDissenting = results.some((v) => v.verdict === 'CHANGES_REQUESTED' && (v.findings || []).length > 0)
-      if (priorLoadBearing.length && !stillDissenting) {
+      if ((priorLoadBearing.length || priorAdjudicationError || priorFixRoundError) && !stillDissenting) {
         const result = {
           ...state.last_result,
           detail: {
@@ -1414,7 +1467,14 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     // until the whole loop (or a resume of it) is done — persisting early made a crash
     // mid-loop look "done" to a resumed invocation, silently skipping the remaining
     // rounds and finalizing with unaddressed persona findings.
-    let round = 0
+    // Reassigned (not redeclared) — `round` is hoisted above this block so the terminal
+    // result can still read it on a path that skips this block entirely. Every entry into
+    // this block starts a fresh cycle's round count at 0, same as before hoisting.
+    round = 0
+    // The cycle this fix loop is running under — read once, before `grant-retry-cycle` above
+    // increments state.fix_cycles for the NEXT cycle, so entries recorded in wontfixRulings
+    // below are tagged with the cycle whose rounds actually produced them.
+    const fixCycle = state.fix_cycles || 1
     // `findings.length > 0` matters only on the retry-reseed path (a fresh panel's
     // CHANGES_REQUESTED verdicts always carry findings) — it excludes a persona whose
     // findings were entirely already-parked and just filtered to empty above, so the fix
@@ -1429,11 +1489,59 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
       const findings = dissenting.flatMap((v) => v.findings)
       // The return was previously discarded, which made the WONTFIX invitation in this
       // prompt a black hole: a rationale the operator never saw. Capture both halves.
-      const fixRound = await fixLoopRound(findings)
+      let fixRound = null
+      let fixRoundError = null
+      try {
+        fixRound = await fixLoopRound(findings)
+      } catch (e) {
+        // Unlike adjudicateFindings (which has had a try/catch since the adjudication-error
+        // fix above), this call was previously unguarded: a schema-validation throw here left
+        // `current`/`verdicts_pending` unset entirely, so a resumed invocation fell back to
+        // the top of the `if (!verdicts && prInfo)` guard and re-ran and re-posted the FULL
+        // five-persona panel just to reproduce the exact `dissenting` set already in memory.
+        fixRoundError = `fix-round ${round} errored: ${e && e.message ? e.message : e}`
+      }
+      if (fixRoundError) {
+        await patchState(
+          {
+            verdicts_pending: current,
+            parked_findings: parkedFindings,
+            wontfix_rulings: wontfixRulings,
+            fix_rounds_done: round,
+            posting_mode: postingMode,
+            surface_detection_error: surfaceDetectionError,
+          },
+          'save-fix-round-error'
+        )
+        const result = {
+          status: 'blocked',
+          // Same reuse of the existing `unresolved_findings` reason as the adjudication-error
+          // path just below, for the same operator-facing reason: findings are still open,
+          // just for a different underlying cause.
+          reason: 'unresolved_findings',
+          default_branch: state.last_result.default_branch,
+          diff_stat: state.last_result.diff_stat,
+          dispatch: state.last_result.dispatch,
+          dod_coverage: coverageCriteria,
+          dod_coverage_error: coverageError,
+          dod_coverage_status: coverageStatus,
+          parked_findings: parkedFindings,
+          wontfix_rulings: wontfixRulings,
+          detail: {
+            parked_findings: parkedFindings,
+            wontfix_rulings: wontfixRulings,
+            load_bearing: [],
+            fix_round_error: fixRoundError,
+            fix_rounds_done: round,
+          },
+        }
+        await saveResult(result)
+        return result
+      }
       if (fixRound) {
         fixHistory.push({ round, summary: fixRound.summary || '', fixed: fixRound.fixed || [] })
         for (const w of fixRound.wontfix || []) {
-          if (w && w.finding) wontfixRulings.push({ round, finding: w.finding, rationale: w.rationale || '' })
+          if (w && w.finding) wontfixRulings.push({ cycle: fixCycle, round, finding: w.finding, rationale: w.rationale || '' })
         }
       }
       if (postingMode !== 'none') {
@@ -1472,7 +1580,11 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     // converged; before this, survivors were printed and the run finalized anyway.
     if (dissenting.length) {
       let adjudication
-      let adjudicationError = null
+      // Reuses the outer-scoped `adjudicationError` (declared above the override block, seeded
+      // from state.adjudication_error) rather than shadowing it with a fresh local — this is
+      // the one place that can produce a NEW adjudication error, and both the blocked-return
+      // patchState below and finalizeRun further down need the same variable to see it.
+      adjudicationError = null
       try {
         adjudication = await adjudicateFindings(
           // Per-persona shape, NOT the flattened list the fix loop uses: flattening discards
@@ -1502,6 +1614,10 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
             fix_rounds_done: round,
             posting_mode: postingMode,
             surface_detection_error: surfaceDetectionError,
+            // Must survive a resume (including `override findings:`, which skips this whole
+            // panel block) so it reaches finalizeRun's advisoryNotes / the terminal result
+            // instead of vanishing the moment control leaves this invocation.
+            adjudication_error: adjudicationError,
           },
           'save-adjudication-error'
         )
@@ -1534,12 +1650,27 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
       }
       const rulings = (adjudication && adjudication.rulings) || []
       const loadBearing = rulings.filter((r) => r && r.ruling === 'load-bearing')
-      parkedFindings = [...parkedFindings, ...rulings.filter((r) => r && r.ruling !== 'load-bearing')]
+      // Dedupe by finding text — same guard as the override block's alreadyRecorded Set. The
+      // reseed's `alreadyParked` filter (above, at the top of the retry-findings branch) only
+      // covers a fresh reseed at cycle start; it does NOT cover a finding that comes back
+      // verbatim through the unfiltered reReview overwrite (`for (const v of reReview) current[v.slug]
+      // = ...` in the fix loop above) and reaches this adjudication a second time. Without this,
+      // a previously-parked finding re-raised in a later cycle is re-adjudicated and double-listed.
+      const alreadyRecordedRulings = new Set(parkedFindings.map((r) => r && r.finding))
+      parkedFindings = [
+        ...parkedFindings,
+        ...rulings.filter((r) => r && r.ruling !== 'load-bearing' && !alreadyRecordedRulings.has(r.finding)),
+      ]
       // Runs on BOTH exits below — the parked-only path continues to finalize and must
       // still leave the rulings in GOAL.md, not only in a state file that is about to be
       // deleted. Never fatal: the rulings also travel in the result object.
       try {
         await writeParkedFindings(parkedFindings)
+        // Clear a stale write-error carried from an earlier cycle now that a write has
+        // actually succeeded — unlike surfaceDetectionError/heartbeatClockError, this field
+        // was never reset on the success path, so a cycle-1 failure kept reporting itself in
+        // advisoryNotes/the terminal result even after a cycle-2 write succeeded.
+        parkedFindingsWriteError = null
       } catch (e) {
         // GOAL.md rendering is a record, not a gate — the rulings are in the result object.
         // But a silent drop here means the durable record README.md promises silently does
@@ -1565,6 +1696,11 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
             // reseed below skips surface detection entirely, so without this a flaking
             // classifier recorded in this cycle would vanish on the next one.
             surface_detection_error: surfaceDetectionError,
+            // Adjudication just succeeded on this cycle, so both must be persisted as
+            // cleared — otherwise a stale value from an earlier cycle's blocked result
+            // survives in the state file and keeps reporting a resolved problem.
+            adjudication_error: adjudicationError,
+            parked_findings_write_error: parkedFindingsWriteError,
           },
           'save-adjudication'
         )
@@ -1611,6 +1747,8 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
         fix_rounds_done: round,
         posting_mode: postingMode,
         surface_detection_error: surfaceDetectionError,
+        adjudication_error: adjudicationError,
+        parked_findings_write_error: parkedFindingsWriteError,
         dod_coverage_final: coverageCriteria,
         dod_coverage_error_final: coverageError,
         dod_coverage_status_final: coverageStatus,
@@ -1637,7 +1775,8 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     surfaceDetectionError,
     heartbeatClockError,
     dispatchClockError,
-    parkedFindingsWriteError
+    parkedFindingsWriteError,
+    adjudicationError
   )
   const result = {
     status: 'final',
@@ -1667,6 +1806,15 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     // so a failed GOAL.md parked-findings write must be visible here too, not just as a
     // breadcrumb inside the state file it is about to outlive.
     parked_findings_write_error: parkedFindingsWriteError,
+    // Same reasoning again — an override that happened despite the adjudicator never running
+    // must be visible in the operator's only surviving record once deleteStateFile() runs,
+    // not just as a parked_findings breadcrumb (see the override block's
+    // operator-overridden-adjudication-error entries above).
+    adjudication_error: adjudicationError,
+    // commands/imps.md documents this as "surfaced in the result" — previously it was written
+    // to the state file on every blocked/resumed cycle but omitted here, so on a converged run
+    // deleteStateFile() removed the only surviving copy.
+    fix_rounds_done: round,
     // Rendered in the terminal result, not only in the state file: deleteStateFile() removes
     // that file at the end of a completed run, so without these two the operator's surviving
     // record would lose every ruling and every WONTFIX rationale the run produced. They are
