@@ -539,30 +539,29 @@ You do NOT implement this task yourself. You run one command, read one line of J
 
 1. \`WT="$(git rev-parse --show-toplevel)"\` — this isolated worktree is the only code path the open model may edit.
 2. Confirm \`git -C "$WT" status --porcelain\` is EMPTY. opencode-dispatch.sh aborts \`worktree_dirty\` on a non-empty tree before spending anything. If it is not empty, stop and return status "failed" with a note saying so.
-3. Write the task prompt to \`"$TMPDIR/imps-oc-${task.id}.prompt"\` — **inside $TMPDIR, never inside the worktree**, or step 2's invariant is broken by your own file. Its contents are everything between the two markers below, verbatim, markers themselves excluded. The markers are the ONLY delimiters — the text between them may itself contain \`---\`, code fences, or anything else, and none of that ends the block:
+3. Read the "Global Constraints" section of ${args.goalFilePath} yourself, NOW. **You are the only participant who can.** The open model runs under the harness's own sandbox, whose \`external_directory\` permission is \`deny\`, so a pointer to that path would be unreadable to it — every constraint must reach it as literal text you paste, or not at all. If the section is missing, empty, or reads \`_None._\`, there are no constraints and you skip the CONSTRAINTS block below entirely; if the file itself is unreadable, stop and return status "failed" saying so rather than dispatching an unconstrained task.
+4. Write the task prompt to \`"$TMPDIR/imps-oc-${task.id}.prompt"\` — **inside $TMPDIR, never inside the worktree**, or step 2's invariant is broken by your own file. Its contents are, in order: (a) unless step 3 said to skip it, one line reading \`Global constraints — invariants every change in this task must satisfy:\` followed by that section's literal text and a blank line; then (b) everything between the two markers below, verbatim, markers themselves excluded. The markers are the ONLY delimiters — the text between them may itself contain \`---\`, code fences, or anything else, and none of that ends the block:
 <<<IMPS_OC_PROMPT_BEGIN>>>
-${constraintsPointer()}
-
 ${spec}${guidance ? `\n\nOperator guidance from a prior attempt — this is part of the task, follow it:\n${guidance}` : ''}
 <<<IMPS_OC_PROMPT_END>>>
-4. Pick a fresh result branch name: \`BR="imps/opencode-${task.id}-$(date -u +%Y%m%d-%H%M%S)"\`. It must not already exist (\`git rev-parse --verify --quiet "refs/heads/$BR"\` must be empty); the harness creates it with a compare-and-swap and fails if it does.
-5. The oracle is everything between these two markers, verbatim (same rule as step 3 — the markers are the only delimiters):
+5. Pick a fresh result branch name: \`BR="imps/opencode-${task.id}-$(date -u +%Y%m%d-%H%M%S)"\`. It must not already exist (\`git rev-parse --verify --quiet "refs/heads/$BR"\` must be empty); the harness creates it with a compare-and-swap and fails if it does.
+6. The oracle is everything between these two markers, verbatim (same rule as step 4 — the markers are the only delimiters):
 <<<IMPS_OC_ORACLE_BEGIN>>>
 ${task.oracle}
 <<<IMPS_OC_ORACLE_END>>>
    Pass it to \`--oracle\` as ONE shell argument. Shell-quote it yourself — it is an arbitrary command line and may contain quotes, \`$\`, or spaces; a mis-quoted oracle silently measures the wrong thing.
-6. Run this ONCE, with Bash \`dangerouslyDisableSandbox: true\` (required — the harness applies its own Seatbelt sandbox and Seatbelt does not nest) AND \`timeout: 600000\` (the Bash tool's maximum; its 120s DEFAULT would kill the dispatch mid-attempt), substituting the quoted oracle for <ORACLE>:
+7. Run this ONCE, with Bash \`dangerouslyDisableSandbox: true\` (required — the harness applies its own Seatbelt sandbox and Seatbelt does not nest) AND \`timeout: 600000\` (the Bash tool's maximum; its 120s DEFAULT would kill the dispatch mid-attempt), substituting the quoted oracle for <ORACLE>:
    \`bash ${args.pluginRoot}/scripts/opencode-dispatch.sh --worktree "$WT" --prompt-file "$TMPDIR/imps-oc-${task.id}.prompt" --oracle <ORACLE> --expect-oracle red --result-branch "$BR" --max-attempts 2 --attempt-timeout 180 --oracle-timeout 60 2>"$TMPDIR/imps-oc-${task.id}.err" | tail -n 1\`
    The budget flags are NOT optional and must not be raised without also raising \`timeout\`. The script's own defaults (3 attempts x 300s + 4 oracle runs x 120s) worst-case at ~1380s — more than double the Bash ceiling — so with defaults the tool kills the call mid-attempt, no contract line is ever read, and the wrapper reports "no output". That failure is indistinguishable from the open model failing, which would silently record this tier as 0% capable when nothing was ever measured. These values (60 + 2x180 + 2x60 = 540s) fit inside the ceiling with headroom.
    Keep stderr in the file and read only the LAST line of stdout — that line is the contract JSON. Do not merge stderr into stdout; interleaving can displace it.
    Do NOT pass \`--model\`: the script's own default open model applies, and routing an Anthropic model through opencode is forbidden.
    Do NOT run gates, linters, formatters, or \`git add\`/\`git commit\` yourself at any point. The harness owns the commit; anything you write into the worktree breaks step 2's invariant.
-7. **Hard rule — a denied, prompted, or timed-out sandbox-off Bash call is an ABORT, not a retry.** Do not retry it, do not re-run it sandboxed, do not look for another way to invoke the script. This is a headless run: there is no operator to answer a prompt and stalling burns the run's dispatch budget. Return status "failed" immediately with a note naming the denial. A normal Claude imp will be dispatched to do the work instead — that fallback is the designed behaviour, not a loss.
-8. Report:
+8. **Hard rule — a denied, prompted, or timed-out sandbox-off Bash call is an ABORT, not a retry.** Do not retry it, do not re-run it sandboxed, do not look for another way to invoke the script. This is a headless run: there is no operator to answer a prompt and stalling burns the run's dispatch budget. Return status "failed" immediately with a note naming the denial. A normal Claude imp will be dispatched to do the work instead — that fallback is the designed behaviour, not a loss.
+9. Report:
    - contract \`"status":"pass"\` → return status "done", \`branch\` = "$BR", and put attempts / cost_usd / commit_sha / oracle_start_state in "notes".
-   - ANY other outcome (\`"status":"fail"\`, unparseable output, no output, non-zero exit with no contract line, or the abort in step 7) → status "failed", \`branch\`: **null**, and put \`abort_reason\` plus the last few lines of the stderr file in "notes". This includes \`result_ref_failed\`, which carries a real commit_sha — do not try to recover that commit or invent a branch for it.
+   - ANY other outcome (\`"status":"fail"\`, unparseable output, no output, non-zero exit with no contract line, or the abort in step 8) → status "failed", \`branch\`: **null**, and put \`abort_reason\` plus the last few lines of the stderr file in "notes". This includes \`result_ref_failed\`, which carries a real commit_sha — do not try to recover that commit or invent a branch for it.
 
-Any operator retry guidance is already inside the prompt block at step 3 — it is the open
+Any operator retry guidance is already inside the prompt block at step 4 — it is the open
 model's to act on, not yours. You still run one command and report.
 Return via the required schema.`,
     {
@@ -1179,7 +1178,16 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
   // to phase('Finalize'). prInfo is guaranteed non-null on this path — the block below only
   // ever runs when prInfo is set, so no path that reaches the unresolved_findings return
   // can have state.pr unset.
-  let verdicts = state.verdicts || (overriding ? state.verdicts_pending : null)
+  // `|| {}` is load-bearing, not defensive padding. If verdicts_pending came back null or
+  // absent — a patchState() haiku round-trip truncating the file's largest free-text field
+  // is the exact failure this module keeps calling out — a bare promotion leaves `verdicts`
+  // null, and the next patchState below then writes `verdicts: null` AND `verdicts_pending:
+  // null`, destroying the withheld panel record. Control would then fall into the panel
+  // block and re-dispatch all five personas, posting five more GitHub reviews in `live`
+  // mode and re-entering the fix loop — i.e. `override findings:` would not override.
+  // An empty map still closes the block; the rulings the operator overrode survive in
+  // parked_findings and in the result object.
+  let verdicts = state.verdicts || (overriding ? state.verdicts_pending || {} : null)
   // Rulings carry across invocations: the adjudicator's output persisted before the blocked
   // return, plus every WONTFIX rationale the fix rounds accumulated. Declared out here (not
   // inside the panel block) because both terminal result objects below read them, and the

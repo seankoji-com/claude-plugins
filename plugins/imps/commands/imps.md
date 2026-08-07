@@ -750,9 +750,11 @@ Two verbs are new, and both resume only from an `unresolved_findings` block (bel
   the panel from `verdicts_pending` rather than re-running the five personas (which would
   post five more GitHub reviews in `live` mode and discard the existing `posted` flags and
   the SKIPPED entry), resets the round counter, and runs up to three more fix rounds
-  followed by a fresh adjudication. Bounded at **two cycles** by `fix_cycles`: a third
-  `retry findings` is refused, and only `override findings:` or `abort` remain. It takes
-  no guidance argument — anything after the verb is ignored.
+  followed by a fresh adjudication. Bounded at **two cycles** by `fix_cycles`, where the
+  initial panel run is cycle 1: exactly **one** `retry findings` is granted (it makes
+  cycle 2), and the **second** `retry findings` is refused — only `override findings:` or
+  `abort` remain after that. It takes no guidance argument — anything after the verb is
+  ignored.
 - **`override findings: <rationale>`** — accept the load-bearing findings as they stand
   and finalize anyway. Every `load-bearing` ruling is rewritten to `operator-overridden`
   with your rationale recorded on it, `verdicts_pending` is promoted to `verdicts`, and
