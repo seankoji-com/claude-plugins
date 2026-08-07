@@ -34,28 +34,29 @@
 set -euo pipefail
 
 DOC="${1:-elephant.md}"
-REPORT_OUT="${REPORT_OUT:-}"                 # optional: also write the combined report here
-GEMINI_MODEL="${GEMINI_MODEL:-gemini-2.5-pro}"  # VERIFY: any Gemini model name
-OLLAMA_MODEL="${OLLAMA_MODEL:-}"             # optional: any model name accepted by `ollama run`
-                                             # honors OLLAMA_HOST for a remote instance
-OLLAMA_NO_THINK="${OLLAMA_NO_THINK:-true}"  # prepend /no_think to suppress the <think> block on
-                                             # qwen3 and other thinking models so VERDICT: is the
-                                             # first output line; set false for non-thinking models
-JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-180}"       # seconds; guards gemini/ollama against hanging forever
-                                             # (auth prompt, network stall, model load)
+REPORT_OUT="${REPORT_OUT:-}"                   # optional: also write the combined report here
+GEMINI_MODEL="${GEMINI_MODEL:-gemini-2.5-pro}" # VERIFY: any Gemini model name
+OLLAMA_MODEL="${OLLAMA_MODEL:-}"               # optional: any model name accepted by `ollama run`
+# honors OLLAMA_HOST for a remote instance
+OLLAMA_NO_THINK="${OLLAMA_NO_THINK:-true}" # prepend /no_think to suppress the <think> block on
+# qwen3 and other thinking models so VERDICT: is the
+# first output line; set false for non-thinking models
+JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-180}" # seconds; guards gemini/ollama against hanging forever
+# (auth prompt, network stall, model load)
 
-# Portable timeout wrapper: prefers GNU coreutils `timeout`, falls back to `gtimeout`
-# (Homebrew coreutils on macOS). If neither is on PATH, judge calls run unguarded — a warning
-# is printed rather than refusing to run, since the fail-closed VERDICT-line check below still
-# catches a hang's empty/partial output as ERROR once the process is eventually killed some
-# other way; this only loses the bounded-wait guarantee, not the fail-closed correctness.
+# Portable timeout wrapper: requires GNU coreutils `timeout` (Linux) or `gtimeout`
+# (Homebrew coreutils on macOS). Refuses to run if neither is on PATH — fail-closed
+# per AGENTS.md invariants since JUDGE_TIMEOUT is ineffective without a bounded-wait tool.
 TIMEOUT_CMD=()
 if command -v timeout >/dev/null 2>&1; then
   TIMEOUT_CMD=(timeout "$JUDGE_TIMEOUT")
 elif command -v gtimeout >/dev/null 2>&1; then
   TIMEOUT_CMD=(gtimeout "$JUDGE_TIMEOUT")
 else
-  echo "goldfish-judge: no 'timeout'/'gtimeout' on PATH — judge calls are NOT time-bounded." >&2
+  echo "goldfish-judge: 'timeout'/'gtimeout' is required but not on PATH." >&2
+  echo "  macOS:  brew install coreutils" >&2
+  echo "  Linux:  apt install coreutils  (or your distro's equivalent)" >&2
+  exit 2
 fi
 
 # Classify a report. Echoes one of: READY | NOT_READY | ERROR
@@ -63,11 +64,19 @@ fi
 # a CLI prints before it.
 classify() {
   local report="$1" verdict
-  if [ -z "${report//[[:space:]]/}" ]; then echo ERROR; return; fi
+  if [ -z "${report//[[:space:]]/}" ]; then
+    echo ERROR
+    return
+  fi
   verdict="$(printf '%s\n' "$report" | grep -m1 -iE 'VERDICT:[[:space:]]*(NOT[[:space:]]+)?READY' || true)"
-  if [ -z "$verdict" ]; then echo ERROR; return; fi
-  if   printf '%s' "$verdict" | grep -qiE 'NOT[[:space:]]+READY'; then echo NOT_READY
-  elif printf '%s' "$verdict" | grep -qiE 'READY';                then echo READY
+  if [ -z "$verdict" ]; then
+    echo ERROR
+    return
+  fi
+  if printf '%s' "$verdict" | grep -qiE 'NOT[[:space:]]+READY'; then
+    echo NOT_READY
+  elif printf '%s' "$verdict" | grep -qiE 'READY'; then
+    echo READY
   else echo ERROR; fi
 }
 
@@ -75,8 +84,14 @@ classify() {
 # running the judges below. Everything past this line is the "do the thing" tail.
 ${__SOURCED__:+false} : || return 0
 
-[ -f "$DOC" ] || { echo "goldfish-judge: doc not found: $DOC" >&2; exit 1; }
-command -v gemini >/dev/null 2>&1 || { echo "goldfish-judge: 'gemini' not on PATH" >&2; exit 2; }
+[ -f "$DOC" ] || {
+  echo "goldfish-judge: doc not found: $DOC" >&2
+  exit 1
+}
+command -v gemini >/dev/null 2>&1 || {
+  echo "goldfish-judge: 'gemini' not on PATH" >&2
+  exit 2
+}
 
 # Cold-read isolation: run from an EMPTY scratch dir so `gemini` doesn't pick up this
 # repo's own GEMINI.md/context files from cwd (some CLIs auto-load a context file at
@@ -86,7 +101,8 @@ SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/goldfish.XXXXXX")"
 trap 'rm -rf "$SCRATCH"' EXIT
 
 # Shared judging criteria + prompt framing used by all judges (doc inlined, no file access).
-JUDGE_SPEC="$(cat <<'SPEC_EOF'
+JUDGE_SPEC="$(
+  cat <<'SPEC_EOF'
 Decide whether this document ALONE lets a zero-context reader bootstrap the project —
 understand what it is and why, how it is architected and how the components relate,
 and where in the code each major component lives.
@@ -108,7 +124,8 @@ SPEC_EOF
 )"
 
 DOC_CONTENTS="$(cat "$DOC")"
-PROMPT="$(cat <<PROMPT_EOF
+PROMPT="$(
+  cat <<PROMPT_EOF
 You are a brand-new engineer with zero prior knowledge of this project. The ONLY
 information you have is the design document pasted below — you have NO access to the
 source repository or any other file. If the document does not tell you something, you do
@@ -131,7 +148,7 @@ combined="===== JUDGE 1: gemini / $GEMINI_MODEL =====
 $gemini_raw"
 
 # ── Judge 2: ollama (optional, sequential) ───────────────────────────────────────────────
-ollama_class="READY"   # neutral default when Ollama is disabled; doesn't affect consensus
+ollama_class="READY" # neutral default when Ollama is disabled; doesn't affect consensus
 if [ -n "$OLLAMA_MODEL" ]; then
   if command -v ollama >/dev/null 2>&1; then
     ollama_err="$(mktemp "${TMPDIR:-/tmp}/goldfish-ollama-err.XXXXXX")"
@@ -157,7 +174,7 @@ $ollama_raw"
   fi
 fi
 
-[ -n "$REPORT_OUT" ] && printf '%s\n' "$combined" > "$REPORT_OUT"
+[ -n "$REPORT_OUT" ] && printf '%s\n' "$combined" >"$REPORT_OUT"
 printf '%s\n' "$combined"
 
 # ── Fail-closed AND consensus ─────────────────────────────────────────────────────────────
