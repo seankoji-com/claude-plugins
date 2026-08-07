@@ -239,7 +239,12 @@ deleting a component is an operator decision, and imps must never auto-delete; r
 **exactly** this shape — `/imps:imps` checklist mode parses `- [ ]` lines and requires
 `Verify:` and `Done when:` on the two lines immediately after each checkbox; items
 missing either are skipped with a warning, so never omit them, and never put a `- [ ]`
-anywhere except under `## Definition of Done` (a stray one becomes a phantom task):
+anywhere except under `## Definition of Done` (a stray one becomes a phantom task).
+Section order is fixed — this template has no `## Status` heading, so `## Global
+Constraints` goes immediately after `## Definition of Done`, and `## Parked findings`
+goes immediately before `## Delete verdicts`; both are **checkbox-free** (no `- [ ]`
+anywhere in either — a stray one becomes a phantom task) and both render `_None._`
+when there is nothing to report:
 
 ```markdown
 # GOAL — audit remediation: <repo> @ <sha> — <date>
@@ -262,6 +267,20 @@ as a compact table.>
 - [ ] Gates green (per GATE_CMDS from the project profile)
   Verify: <the actual GATE_CMDS joined into ONE line with && — e.g. `npm run build && npm run lint && npm test`>
   Done when: all commands exit 0
+
+## Global Constraints
+<NO checkboxes. Cross-cutting invariants the fix must not violate, verbatim — never
+summarized. Only constraints a reviewer could verdict against from a diff, not
+aspirational goals; distinct from the Definition of Done, which is true once and ticked
+— these are true of every checklist item, never ticked. Feed from any finder note flagged
+as applying repo-wide rather than to one dimension. Render `_None._` when none surfaced.>
+
+## Parked findings
+<NO checkboxes. This audit's synthesis never adjudicates a finding down to "parked" —
+render `_None._` here. The heading exists so that when this file is later run through
+`/imps:imps` checklist mode, its fix loop has a section to write parked rulings into;
+that loop replaces this section's body in place and must never append a second
+`## Parked findings` heading.>
 
 ## Delete verdicts (operator decision — imps never auto-delete)
 <CONFIRMED delete-verdict findings as plain bullets — NO checkboxes. One per finding:

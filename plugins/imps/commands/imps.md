@@ -43,6 +43,27 @@ The main session holds **decisions, not data**. Its context is re-read every tur
 
 ---
 
+## Rationalizations you will produce, and what to do instead
+
+Every row below is a real failure from a real run, written in the voice you will hear it
+in — as a reasonable-sounding thought, not as a rule you are breaking. Recognising the
+sentence is the whole defence; each one is locally plausible and globally wrong.
+
+| The thought | What actually happens | Instead |
+| --- | --- | --- |
+| "No arguments were passed, so this is a fresh start." | An empty invocation is the *signature* of a cleared context mid-run. Skipping the guard starts a second run against a live state file. | Run the **Guard: resume check** on every invocation, empty or not. |
+| "The plan was approved while I was on this branch — I'll write it into the state file." | If that branch is the default branch, every task's work is dispatched, merged and gated straight onto production, and the PR step lands unreviewed or fails `head==base`. | Cut a fresh `imps/<slug>-<ts>` branch off a clean fetch of the default branch in Phase 2 Step 6, and write *that*. Never `git rev-parse --abbrev-ref HEAD`. |
+| "The imps ran in isolated worktrees, so the shared checkout is untouched." | Isolation is not airtight — imps have repeatedly committed to the shared main checkout's local default branch instead of their assigned worktree. | Check `git status --short` and `git log --oneline -3` in the *actual* main checkout after every worktree-isolated wave — every time, not only when something looks off. |
+| "I'll push the branch so this work isn't lost." | Pushing is the operator's gate, not a safety net. A publish imp that pushed and opened a PR on its own initiative bypassed the Push & PR gate entirely. | Nothing pushes before a `PR: yes` / `PR: yes, no-post` decision is persisted. Local commits are already durable. |
+| "While I'm here, this extra issue is obviously worth filing." | The auto-mode classifier denies GitHub writes beyond the operator's explicit selection — and it denies the *whole* imp, not just the extra artifact, forcing a re-dispatch. | Create and close exactly the artifacts the operator named. If another one is worth filing, ask; don't add it. |
+| "The audit/forage recommendation is minutes old, so the gap it names is real." | Fingerprints go stale immediately, and twice now a "missing capability" already existed in full in the target repo — the plan dispatched imps to rebuild it. | Grep or read the actual files for each claimed gap before writing a task around it. |
+| "The Head Imp approved after I applied its fixes — one review pass is enough." | Round-1 fixes introduce round-2 bugs; a "make this executable" fix once turned out to be platform-unsound on the actual dev machine. | After substantial fixes, budget a second adversarial pass. An approval of the *unfixed* plan is not an approval of the fixed one. |
+| "The diff is right here — pasting it into the reviewer's prompt is faster than a command." | The artifact enters this session's context, which is re-read every turn, and the reviewer reads a snapshot instead of the tree. | Pass artifacts by reference: a file path to `Read`, a command to run. See the Head Imp section. |
+| "The signing agent looks locked — `--no-gpg-sign` just this once." | Under concurrent swarm agents that lock is usually transient, and the unsigned commit is permanent. | Retry the commit a few times with a short pause; if it persists, surface it as blocked. Never bypass signing. |
+| "The PR is open, gates are green — the run is done." | The learnings gate has not run and the state file is still on disk. Stopping here loses the run's learnings and the `.prs.json` handoff. | The run ends at `done` — learnings persisted, state file deleted by the script. Not before. |
+
+---
+
 ## Mode detection
 
 `/imps:imps` has **four modes**, checked in this order:
@@ -136,6 +157,35 @@ Inline content is acceptable only for artifacts too small to matter (≲50 lines
 that exist nowhere on disk. **Imps may also consult the Head Imp** mid-task when they
 hit an ambiguous decision, correctness risk, or a cross-cutting change they're unsure
 about — one consultation per blocking question, not a rubber-stamp.
+
+### Never pre-judge a reviewer's findings inside its own prompt
+
+You hand-compose the Head Imp's plan-review prompt in Phase 2 Step 3. **Nothing in that
+prompt may tell the reviewer what to conclude.** Before sending it, read the composed
+string back and delete any sentence that:
+
+- pre-clears something — "the sizing objection is already settled", "task 1 is
+  deliberately large, don't flag it", "we've decided X is acceptable";
+- narrows the mandate — "only look at the DoD", "skip the task boundaries";
+- supplies the verdict — "this should APPROVE unless something is badly wrong",
+  "expect minor findings only".
+
+Facts are not pre-judgments. "The repo is `seankoji/claude-plugins`", "gates are
+`bash tests/run.sh`", "worktree isolation defeats a `deps` split here" are context the
+reviewer needs. The test is whether the sentence would change the reviewer's *verdict*
+without changing the artifact.
+
+**Overriding a finding is legitimate. Doing it invisibly is not.** The run has real,
+recorded override paths — `skip <gate>`, `skip tasks #N`, `integrate partial`,
+`override findings: <rationale>`, and the adjudicator's own rulings, all of which land
+in the state file or GOAL.md where an operator can read them afterwards. Steering the
+prompt has none of that: the finding is never made, so nothing records that it was
+overruled, and the resulting APPROVE reads as independent when it isn't. If you disagree
+with an expected finding, let it be raised and then override it on the record.
+
+This is a rule for you, not a check the script runs — **there is no script-side
+enforcement.** No reviewer function takes a guidance parameter, so there is no channel
+to police mechanically; the discipline is in what you type.
 
 ---
 
@@ -359,6 +409,11 @@ one-liner) — shell state doesn't carry across tool calls. Write with this stru
 - [ ] Persona panel reviewed; all blocker/major findings addressed
 - [ ] No merge conflicts with the default branch
 
+## Global Constraints
+- <constraint 1 — a rule EVERY task must satisfy, with its exact values written out>
+- <constraint 2>
+(_None._ if there are none — never leave this section empty)
+
 ## Task table
  #  Task                                      Model   Type     Depends On
  1  <label>                                   haiku   query    —
@@ -368,7 +423,39 @@ with synthetic tasks to make the table look bigger)
 
 ## Status
 Planned — handing to the Workflow script.
+
+## Parked findings
+_None._
 ```
+
+**`- [ ]` checkboxes appear ONLY under `## Definition of Done`.** Both new sections are
+checkbox-free — a stray checkbox anywhere else in GOAL.md is read as a phantom task. Both
+render the literal `_None._` when they have no content, so an empty section is
+distinguishable from a section that was never written.
+
+**Authoring `## Global Constraints`** — this is where discovery Q5 ("any constraints?")
+lands durably. It exists because independent worktree-isolated imps cannot see each
+other: a rule that has to hold across tasks has nowhere else to live, and when it lives
+only in this planning context, imps produce mutually contradictory output (two different
+import recipes for the same API; runtime env vars silently dropped by one task and
+required by another). The script delivers this section to every agent that writes or
+reviews code as a pointer — `Read <GOAL_PATH> section "Global Constraints"` — never as
+pasted text, so it must be readable standalone.
+
+- **Write exact values verbatim, never summarized.** "Use the field names in the schema"
+  is not a constraint; "the state fields are `parked_findings`, `wontfix_rulings`,
+  `verdicts_pending` — spelled exactly, in all three files" is.
+- **Only constraints a reviewer could return a verdict against from a diff.** If nothing
+  in a diff could ever falsify it, it is background, not a constraint. Aspirations
+  ("keep it clean", "be careful with the merge logic") belong nowhere.
+- **Not the DoD.** A DoD criterion is true *once*, gets ticked, and is verified by the
+  script's `dodCoverage` pass. A constraint is true of *every* task, is never ticked, and
+  is verified by whoever reviews any task's diff. If you catch yourself writing a
+  checkbox, it was a DoD line.
+
+**`## Parked findings`** is a placeholder you write as `_None._` and then leave alone —
+after handover it belongs to the script, which replaces its body with the adjudicator's
+rulings (see Phase 4's `unresolved_findings`). Place it last, after `## Status`.
 
 Discussion-seed mode: add `- [ ] Outcome comment posted to the source Discussion` to
 the Definition of Done — the script fulfills this at finalize; it is not a dispatched
@@ -425,7 +512,7 @@ current branch.
 
 ```json
 {
-  "schema": 3,
+  "schema": 4,
   "task": "<REFINED_TASK>",
   "repo": "<repo from discovery>",
   "branch": "<RUN_BRANCH>",
@@ -444,6 +531,12 @@ current branch.
   "artifacts": [],
   "pr": null,
   "verdicts": null,
+  "verdicts_pending": null,
+  "parked_findings": [],
+  "wontfix_rulings": [],
+  "fix_rounds_done": 0,
+  "fix_cycles": 0,
+  "posting_mode": null,
   "discussion_comment_url": null,
   "source_discussion": null,
   "gate_commands": null,
@@ -452,6 +545,33 @@ current branch.
   "last_result": null
 }
 ```
+
+`verdicts_pending`, `parked_findings`, `wontfix_rulings`, `fix_rounds_done`,
+`fix_cycles`, and `posting_mode` are new in **schema 4** (persona-panel adjudication) —
+additive only, in the same style as schema 3 below: nothing existing removed or
+repurposed, none of them required, so a hand-written schema-3 file still loads. (Schema 4
+also added four fail-soft breadcrumb fields not listed above — `heartbeat_clock_error`,
+`dispatch_clock_error`, `parked_findings_write_error`, and `adjudication_error` — each
+`null` unless the thing it names just failed. The first three exist only to reach the
+audit trail and carry no behavior of their own. **`adjudication_error` is different and is
+operator-facing:** it records that the adjudicator never returned a ruling, it travels in
+the blocked result's `detail`, and the `override findings:` path reads it to decide that
+the findings still awaiting a ruling are the ones being overridden — so an override on
+that path records them explicitly instead of silently no-opping. All four clear on
+recovery rather than latching, so a later healthy cycle is not reported as degraded.)
+All six of the named fields are written by the script during the
+persona panel and fix loop; you never write them at plan time beyond the empty values
+above. `verdicts_pending` holds panel output that is *not yet complete* — `verdicts`
+staying `null` is the script's "the panel has not finished, run it again" signal, so
+partial output must never be promoted into it. `parked_findings` and `wontfix_rulings`
+carry the adjudicator's rulings and each fix round's declined findings. `fix_cycles`
+bounds the `retry findings` verb (refused past two granted cycles); `fix_rounds_done` is
+a record of how many fix rounds the most recently completed cycle ran (surfaced in the
+result, not itself a bound) — each cycle's own fix loop always restarts counting from
+round 0, it does not resume a prior cycle's round count. `posting_mode` persists the
+operator's posting choice so a resume that no longer carries a `PR:` decision string does
+not silently fall back to "post nothing". See Phase 4's `unresolved_findings` entry for
+what an operator does with them.
 
 `gate_commands`, `learnings_saved`, `operator_decision`, and `last_result` are new in
 schema 3 (the Workflow-script rewrite) — additive only, nothing existing was removed or
@@ -626,6 +746,7 @@ jq --arg d '<the decision string, same vocabulary as today — see below>' \
 The decision vocabulary is almost unchanged from before: `resolved, continue` ·
 `retry <gate>: <guidance>` · `skip <gate>` · `reconciled, continue` ·
 `retry tasks #N,#M: <guidance>` · `skip tasks #N,#M` · `integrate partial` ·
+`retry findings` · `override findings: <rationale>` ·
 `PR: yes` · `PR: yes, no-post` · `PR: no` · `learnings: <json|none>` · `abort` — the
 delivery mechanism changed (from a `SendMessage` to a spawned subagent, to a state-file
 field read by a fresh script invocation), and one verb is dropped: `wait <hours>` existed
@@ -634,6 +755,35 @@ the design note) — there is no `dispatch_timeout` blocked reason for it to res
 either. `integrate partial` is still supported: it confirms every currently-unresolved
 task failure as an accepted omission (the same effect as naming them all in
 `skip tasks`), so re-dispatch doesn't re-block on the same failures.
+
+Two verbs are new, and both resume only from an `unresolved_findings` block (below):
+
+- **`retry findings`** — give the findings another capped fix cycle. The script reseeds
+  the panel from `verdicts_pending` rather than re-running the five personas (which would
+  post five more GitHub reviews in `live` mode and discard the existing `posted` flags and
+  the SKIPPED entry), resets the round counter, and runs up to three more fix rounds
+  followed by a fresh adjudication. Bounded at **two cycles** by `fix_cycles`, where the
+  initial panel run is cycle 1: exactly **one** `retry findings` is granted (it makes
+  cycle 2), and the **second** `retry findings` is refused — only `override findings:` or
+  `abort` remain after that. It takes no guidance argument — anything after the verb is
+  ignored.
+- **`override findings: <rationale>`** — accept the load-bearing findings as they stand
+  and finalize anyway. Every `load-bearing` ruling is rewritten to `operator-overridden`
+  with your rationale recorded on it, `verdicts_pending` is promoted to `verdicts`, and
+  the run proceeds to finalize. The rationale is not decoration: it is the only record
+  that a blocking finding was overruled rather than fixed, and it survives into GOAL.md's
+  `## Parked findings` section after the state file is deleted. Write one.
+
+**The anti-pre-judging rule applies to every guidance string you compose here** (see
+[Never pre-judge a reviewer's findings inside its own prompt](#never-pre-judge-a-reviewers-findings-inside-its-own-prompt)).
+`retry <gate>: <guidance>`, `retry tasks #N: <guidance>`, and `retry findings`'s fix
+rounds all put your text in front of an agent that will re-review the result. Guidance
+says *what to fix and how it failed*; it does not say what the reviewer should conclude —
+"this is fine now", "don't flag the sizing again", "just get it to APPROVE" are
+pre-judgments, not guidance. If you want a finding overruled, `override findings:` is the
+verb that does it **on the record**; `skip <gate>` and `skip tasks #N` are the equivalents
+at the other gates. All three leave a trace an operator can read afterwards. Steering the
+prompt leaves none.
 
 **If a result never arrives** (session lost, `/clear`, or the run legitimately needs
 picking up later): do nothing special here — the **Guard: resume check** at the top of
@@ -666,6 +816,47 @@ the decision, re-invoke:
   branch instead of their real one. Cross-check against the state file's own task
   table (the authoritative source for task identity) and `git branch --list` / `git
   worktree list` for the actual branch names.
+- `unresolved_findings` — the persona panel's fix loop hit its 3-round cap with findings
+  still standing, an opus adjudicator ruled on each survivor, and at least one ruling came
+  back `load-bearing`. This is the only blocked reason that arrives *after* the PR exists.
+  The result's `detail` carries the rulings; `parked_findings` and `wontfix_rulings` are
+  also in the state file and in the final result object. Surface every `load-bearing`
+  finding with its rationale, then agree one of: `retry findings` (another capped fix
+  cycle — refused after two), `override findings: <rationale>` (accept them and finalize,
+  on the record), or `abort`. **Do not fix them silently in this session** — that is the
+  self-review pattern the disclosure below exists for.
+
+  Those three strings are matched **verbatim and case-sensitively** — unlike the task and
+  gate verbs, which are case-insensitive. Persist exactly `retry findings`,
+  `override findings: <rationale>` (colon included), or `abort`. Anything else, including an
+  empty decision, makes the script re-emit the same blocked result with a `detail.note`
+  naming the vocabulary; nothing is re-run, so just persist a valid verb and re-invoke.
+
+  A **ruling** is the adjudicator's verdict on one surviving finding, and it is one of
+  exactly four values:
+  - `load-bearing` — the finding blocks. The adjudicator had to anchor it to at least one
+    of: a verbatim-quoted criterion under GOAL.md's `## Definition of Done`; a named
+    concrete breaking input, data-loss path, or security defect reachable in the merged
+    diff; or a verbatim-quoted constraint under GOAL.md's `## Global Constraints`. A
+    ruling with none of the three anchors cannot be load-bearing, so a `load-bearing`
+    ruling that quotes neither a DoD criterion nor a Global Constraint and names no
+    breaking input is a malformed ruling, not a stricter one — treat it as suspect and
+    read the finding yourself. A ruling that DOES quote a Global Constraint is fully
+    anchored on that basis alone; do not second-guess it just because it lacks a DoD
+    criterion or a named breaking input too — the constraint anchor stands on its own.
+  - `parked-contestable` — reviewed, judged non-blocking, and the adjudicator's reasoning
+    is the thing you might disagree with. This is the ruling to re-read: a finding raised
+    by two or more distinct personas defaults to `load-bearing`, so parking one of those
+    obliges the adjudicator to state which DoD criterion survives it.
+  - `parked-deferred` — real, non-blocking here, and worth doing later. It is not an
+    argument to reopen; it is a follow-up to file.
+  - `operator-overridden` — was `load-bearing` until you issued `override findings:`. The
+    rationale stored on it is yours, not the adjudicator's.
+
+  All four are written to GOAL.md's `## Parked findings` section except `load-bearing`,
+  which blocks instead. "Parked" always means *reviewed and ruled on* — it never means a
+  persona that was never run. A `SKIPPED` ux-designer is an unreviewed lens, not a parked
+  finding; say so distinctly when you summarise.
 
 If the user chooses abort at any gate, persist `abort` and re-invoke. The script posts
 any Discussion abort notice itself before returning, leaves the tree as-is, and returns
