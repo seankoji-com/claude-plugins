@@ -172,6 +172,21 @@ jobs:
             python3 -m py_compile "$f"
           done
 
+      - name: Contract names agree across imps files
+        run: |
+          fail=0
+          check() { grep -qF -- "$2" "$1" || { echo "MISSING: $2 in $1"; fail=1; }; }
+          W=plugins/imps/scripts/imps-run.workflow.js
+          C=plugins/imps/commands/imps.md
+          A=plugins/imps/agents/imp-agency.md
+          for n in parked_findings wontfix_rulings verdicts_pending unresolved_findings \
+                   parked-contestable parked-deferred load-bearing operator-overridden; do
+            check "$W" "$n"; check "$C" "$n"
+          done
+          for v in 'override findings:' 'retry findings'; do check "$W" "$v"; check "$C" "$v"; done
+          for f in "$C" "$A"; do check "$f" '## Global Constraints'; check "$f" '## Parked findings'; done
+          [ "$fail" = 0 ]
+
       - name: Check for bundled-asset path leaks
         run: |
           # Structural rule (not a hardcoded allowlist): any file shipped inside a
