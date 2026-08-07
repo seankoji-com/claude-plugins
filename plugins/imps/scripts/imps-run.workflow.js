@@ -609,7 +609,7 @@ Spec — your operative instructions; follow these, do not improvise beyond them
 ${spec}
 ${guidance ? `\nThis is a retry. Operator guidance: ${guidance}\n` : ''}
 ${isCode ? 'You run in an isolated git worktree, created from the default branch\'s last committed HEAD (not the run\'s working branch — in-progress commits on a side branch are not visible to you). Make the minimal change that satisfies the task. Resolve this repo\'s gate/lint commands yourself and run them (plus any autofix) before committing — fix failures you caused, note pre-existing ones. Stage and commit; do not push. Return the branch name.' : ''}
-${task.type === 'query' ? 'Read-only. No file changes. Return structured data. Cite sources (file paths, line numbers, URLs) for every claim.' : ''}
+${task.type === 'query' && !/\bMUTATIONS_ALLOWED\b/.test(spec) ? 'Read-only. No file changes. Return structured data. Cite sources (file paths, line numbers, URLs) for every claim.' : ''}
 ${task.type === 'publish' ? 'Create GitHub artifacts (PRs, issues, comments, Discussions) from the main working branch only, never from an isolated worktree branch. Use `gh api graphql` for Discussions. Confirm the artifact URL.' : ''}
 
 Do exactly this task. Nothing more — note anything else you notice but do not fix it.
