@@ -176,13 +176,37 @@ jobs:
         run: |
           fail=0
           check() { grep -qF -- "$2" "$1" || { echo "MISSING: $2 in $1"; fail=1; }; }
+          # Identifier check: the token must appear as a WHOLE token, not as a prefix of a
+          # longer one. A plain `grep -F operator-overridden` is satisfied by
+          # `operator-overridden-adjudication-error`, so the version of this step that used -F
+          # for identifiers passed a fifth ruling value straight through the check whose entire
+          # job is pinning that enum at four. \b is useless here (ERE treats `-` as a word
+          # boundary), hence the explicit neighbour class.
+          B='[^A-Za-z0-9_-]'
+          check_token() {
+            grep -qE -- "(^|$B)$2($B|\$)" "$1" || { echo "MISSING (as a whole token): $2 in $1"; fail=1; }
+          }
           W=plugins/imps/scripts/imps-run.workflow.js
           C=plugins/imps/commands/imps.md
           A=plugins/imps/agents/imp-agency.md
           for n in parked_findings wontfix_rulings verdicts_pending unresolved_findings \
                    parked-contestable parked-deferred load-bearing operator-overridden; do
-            check "$W" "$n"; check "$C" "$n"
+            check_token "$W" "$n"; check_token "$C" "$n"
           done
+          # The ruling vocabulary is closed at four. A presence check cannot catch a FIFTH value
+          # being coined, so assert the closure directly: every `ruling: '<value>'` the script
+          # assigns must be one of the four. Scoped to actual assignments, not prose — matching
+          # any hyphenated word would flag comments ("operator-facing") and patchState labels
+          # ("parked-findings-write-error"), which is how a broader version of this check became
+          # unusable noise.
+          undeclared=$(grep -oE "ruling: '[a-z-]+'" "$W" \
+            | sed -E "s/ruling: '([a-z-]+)'/\1/" | sort -u \
+            | grep -vxE 'parked-contestable|parked-deferred|load-bearing|operator-overridden' || true)
+          if [ -n "$undeclared" ]; then
+            echo "UNDECLARED ruling value(s) assigned in $W (the vocabulary is closed at four):"
+            echo "$undeclared"
+            fail=1
+          fi
           for v in 'override findings:' 'retry findings'; do check "$W" "$v"; check "$C" "$v"; done
           for f in "$C" "$A"; do check "$f" '## Global Constraints'; check "$f" '## Parked findings'; done
           # $W is the file that actually depends on both section names at runtime — the

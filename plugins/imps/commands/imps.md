@@ -550,11 +550,16 @@ current branch.
 `fix_cycles`, and `posting_mode` are new in **schema 4** (persona-panel adjudication) —
 additive only, in the same style as schema 3 below: nothing existing removed or
 repurposed, none of them required, so a hand-written schema-3 file still loads. (Schema 4
-also added three fail-soft breadcrumb fields not listed above — `heartbeat_clock_error`,
-`dispatch_clock_error`, `parked_findings_write_error` — each `null` unless its own helper
-just failed; they carry no operator-facing behavior of their own and exist only to reach
-the audit trail, so they're covered by "See Phase 4's `unresolved_findings` entry" below
-only incidentally.) All six of the named fields are written by the script during the
+also added four fail-soft breadcrumb fields not listed above — `heartbeat_clock_error`,
+`dispatch_clock_error`, `parked_findings_write_error`, and `adjudication_error` — each
+`null` unless the thing it names just failed. The first three exist only to reach the
+audit trail and carry no behavior of their own. **`adjudication_error` is different and is
+operator-facing:** it records that the adjudicator never returned a ruling, it travels in
+the blocked result's `detail`, and the `override findings:` path reads it to decide that
+the findings still awaiting a ruling are the ones being overridden — so an override on
+that path records them explicitly instead of silently no-opping. All four clear on
+recovery rather than latching, so a later healthy cycle is not reported as degraded.)
+All six of the named fields are written by the script during the
 persona panel and fix loop; you never write them at plan time beyond the empty values
 above. `verdicts_pending` holds panel output that is *not yet complete* — `verdicts`
 staying `null` is the script's "the panel has not finished, run it again" signal, so
@@ -820,6 +825,12 @@ the decision, re-invoke:
   cycle — refused after two), `override findings: <rationale>` (accept them and finalize,
   on the record), or `abort`. **Do not fix them silently in this session** — that is the
   self-review pattern the disclosure below exists for.
+
+  Those three strings are matched **verbatim and case-sensitively** — unlike the task and
+  gate verbs, which are case-insensitive. Persist exactly `retry findings`,
+  `override findings: <rationale>` (colon included), or `abort`. Anything else, including an
+  empty decision, makes the script re-emit the same blocked result with a `detail.note`
+  naming the vocabulary; nothing is re-run, so just persist a valid verb and re-invoke.
 
   A **ruling** is the adjudicator's verdict on one surviving finding, and it is one of
   exactly four values:

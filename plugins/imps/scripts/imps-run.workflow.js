@@ -1162,13 +1162,46 @@ const resumingFindings = !!(
   decision &&
   (decision === 'retry findings' || decision.startsWith('override findings:'))
 )
+// Fail-closed companion to the comment above. The widened guard covers the THREE recognised
+// verbs; every other decision string on this state — `override findings` with the colon
+// dropped, `Retry findings` capitalised (both verbs are matched case-SENSITIVELY, unlike
+// parseTaskDecision/parseGateDecision), a stray gate verb, or no decision at all because the
+// script was re-invoked before the operator answered — declines the guard and falls straight
+// through to phase('Dispatch'), which is exactly the path the comment above says must never
+// be taken from here: re-merge, a fresh opus headImpReview, every gate again, and a duplicate
+// awaiting_authorization on a PR that already exists — answering `PR: yes` at THAT gate then
+// finds `verdicts` still null and re-dispatches all five personas, posting five more live
+// GitHub reviews. `abort` is already returned far above, so re-emitting the prior blocked
+// result here loses no reachable path; it costs nothing and it tells the operator the exact
+// vocabulary. Not a new state machine branch — the same result object, re-surfaced.
+if (lastStatus === 'blocked' && state.last_result.reason === 'unresolved_findings' && !resumingFindings) {
+  const result = {
+    ...state.last_result,
+    detail: {
+      ...state.last_result.detail,
+      note: `unrecognized decision ${JSON.stringify(decision || null)} at the unresolved-findings gate — nothing was re-run. Resubmit exactly one of \`retry findings\`, \`override findings: <rationale>\`, or \`abort\` (verbatim, lower-case, colon included).`,
+    },
+  }
+  await saveResult(result)
+  return result
+}
 if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith('PR:')) || resumingFindings) {
   // On a findings resume the decision no longer starts with "PR:", so the ternary alone
   // would evaluate to "none" — silently un-pushing the fix rounds' commits, telling the
   // re-review not to post, and changing findings_inline's shape. Read the persisted value
   // first; the ternary is only the first-entry derivation.
-  const postingMode =
-    state.posting_mode || (decision === 'PR: yes' ? 'live' : decision === 'PR: yes, no-post' ? 'no-post' : 'none')
+  // Precedence matters: a decision that CARRIES a posting choice must beat the persisted one.
+  // With `state.posting_mode ||` first, an operator who answered `PR: yes, no-post` on one
+  // invocation and then deliberately re-answered `PR: yes` on the next would have the stale
+  // no-post win silently — the persisted value is a fallback for resumes whose decision says
+  // nothing about posting, not an override of an explicit answer.
+  const postingMode = decision && decision.startsWith('PR:')
+    ? decision === 'PR: yes'
+      ? 'live'
+      : decision === 'PR: yes, no-post'
+        ? 'no-post'
+        : 'none'
+    : state.posting_mode || 'none'
   const overriding = resumingFindings && decision.startsWith('override findings:')
   phase('Publish')
 
@@ -1177,6 +1210,11 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
   // return site is a floor, not an increment, so it writes 1 forever and this refusal is
   // unreachable. Each granted cycle costs a five-persona panel, three fix rounds, an opus
   // dodCoverage recompute and an opus adjudicator.
+  // In-memory mirror of state.fix_cycles for THIS invocation. `state` is deliberately never
+  // reassigned from the grant patch below (see its comment), so `state.fix_cycles` stays at the
+  // pre-grant value for the rest of the run — reading it later tags a granted cycle 2's rulings
+  // as cycle 1, colliding with cycle 1's own entries. Everything downstream reads this instead.
+  let currentFixCycle = state.fix_cycles || 1
   if (resumingFindings && decision === 'retry findings') {
     const cycles = (state.fix_cycles || 1) + 1
     if (cycles > 2) {
@@ -1188,11 +1226,13 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
         ...state.last_result,
         detail: {
           ...state.last_result.detail,
-          // "granted" not "ran": the patch below lands BEFORE the expensive cycle it
-          // grants, so a crash mid-cycle burns a grant without the cycle completing —
-          // this note must not claim two full cycles ran when it can only prove two were
-          // authorized.
-          note: 'retry findings refused — two retry cycles already granted (one may not have finished) — only `override findings:` or `abort` remain',
+          // Exactly ONE retry is ever granted: fix_cycles starts unset (-> 1, the initial
+          // panel), the first `retry findings` grants cycle 2, and the second computes 3 > 2
+          // and lands here. Saying "two retry cycles" contradicts commands/imps.md and
+          // overstates what the operator got. "Granted" not "ran", though: the patch lands
+          // BEFORE the cycle it authorizes, so a crash mid-cycle burns the grant without the
+          // cycle completing.
+          note: 'retry findings refused — the one retry cycle available was already granted (cycle 2 of 2; it may not have finished) — only `override findings:` or `abort` remain',
         },
       }
       await saveResult(result)
@@ -1206,6 +1246,8 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     // dissenting=[] -> the fix loop never enters -> verdicts={} is persisted as the
     // panel-completion signal -> the run finalizes with the load-bearing finding gone.
     await patchState({ fix_cycles: cycles }, 'grant-retry-cycle')
+    // The one thing that MUST be mirrored in memory, precisely because `state` is not.
+    currentFixCycle = cycles
   }
 
   let prInfo = state.pr
@@ -1294,9 +1336,18 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
           (v.findings || []).map((finding) => ({
             slug,
             finding,
-            ruling: 'operator-overridden-adjudication-error',
+            // `operator-overridden`, NOT a fifth enum value. The ruling vocabulary is pinned at
+            // four everywhere (STATE_SCHEMA, commands/imps.md, the CI contract check); a fifth
+            // value coined here reached GOAL.md verbatim and slipped the check, whose grep -F
+            // matched it as a substring of this one. What is special about these entries is WHY
+            // they were overridden, which belongs in the rationale text, not in the enum.
+            ruling: 'operator-overridden',
             operator_rationale: operatorRationale,
-            note: `the panel never fully adjudicated this finding: ${unresolvedErrorReason}`,
+            // Must be `rationale`: writeParkedFindings' format spec renders
+            // `- **<ruling>** — <finding> — <rationale>` and never reads `note`, so carrying the
+            // reason under `note` rendered a blank rationale and silently dropped the one fact
+            // this block exists to record.
+            rationale: `never fully adjudicated — ${unresolvedErrorReason}`,
           }))
         )
       : []
@@ -1471,10 +1522,13 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     // result can still read it on a path that skips this block entirely. Every entry into
     // this block starts a fresh cycle's round count at 0, same as before hoisting.
     round = 0
-    // The cycle this fix loop is running under — read once, before `grant-retry-cycle` above
-    // increments state.fix_cycles for the NEXT cycle, so entries recorded in wontfixRulings
-    // below are tagged with the cycle whose rounds actually produced them.
-    const fixCycle = state.fix_cycles || 1
+    // The cycle this fix loop is actually running under. Read from `currentFixCycle`, NOT from
+    // `state.fix_cycles`: `grant-retry-cycle` above patched the file but deliberately did not
+    // reassign `state`, so state.fix_cycles is still the pre-grant value here and would tag a
+    // granted cycle 2's wontfix_rulings as cycle 1 — indistinguishable from cycle 1's own
+    // entries, and with no dedupe on wontfixRulings the operator cannot tell a once-declined
+    // finding from a twice-declined one.
+    const fixCycle = currentFixCycle
     // `findings.length > 0` matters only on the retry-reseed path (a fresh panel's
     // CHANGES_REQUESTED verdicts always carry findings) — it excludes a persona whose
     // findings were entirely already-parked and just filtered to empty above, so the fix
@@ -1732,6 +1786,36 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
         await saveResult(result)
         return result
       }
+    } else {
+      // Converged cycle: nothing dissents. Both breadcrumbs above are cleared only INSIDE the
+      // dissenting branch, so without this a cycle-1 failure rode into advisoryNotes, the
+      // mandatory audit-log --notes line and the terminal result of a cycle that was actually
+      // healthy — permanently recording a clean run as degraded, the inverse of what every
+      // sibling breadcrumb (surface_detection_error, heartbeat_clock_error) does on recovery.
+      //
+      // The two are NOT symmetric, and clearing both unconditionally would trade one wrong
+      // report for a worse one:
+      //   - adjudication_error is genuinely resolved. Nothing is left unadjudicated when
+      //     nothing dissents, so a carried "the adjudicator never ran" is stale by definition.
+      //   - parked_findings_write_error may still be TRUE. writeParkedFindings() is called only
+      //     inside the dissenting branch, so a prior cycle's failed GOAL.md write has not been
+      //     retried by reaching here — clearing it blind would claim a durable record exists
+      //     when it does not. Retry the write instead, and clear only on a real success.
+      adjudicationError = null
+      if (parkedFindingsWriteError) {
+        if (parkedFindings.length) {
+          try {
+            await writeParkedFindings(parkedFindings)
+            parkedFindingsWriteError = null
+          } catch (e) {
+            parkedFindingsWriteError = `write-parked-findings retry failed on a converged cycle: ${e && e.message ? e.message : e}`
+          }
+        } else {
+          // Nothing to write, so nothing is missing from GOAL.md — the error described a write
+          // that is no longer owed.
+          parkedFindingsWriteError = null
+        }
+      }
     }
 
     verdicts = current
@@ -1808,8 +1892,8 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     parked_findings_write_error: parkedFindingsWriteError,
     // Same reasoning again — an override that happened despite the adjudicator never running
     // must be visible in the operator's only surviving record once deleteStateFile() runs,
-    // not just as a parked_findings breadcrumb (see the override block's
-    // operator-overridden-adjudication-error entries above).
+    // not just as a parked_findings breadcrumb (see the override block's `operator-overridden`
+    // entries whose rationale records that the panel never fully adjudicated them).
     adjudication_error: adjudicationError,
     // commands/imps.md documents this as "surfaced in the result" — previously it was written
     // to the state file on every blocked/resumed cycle but omitted here, so on a converged run
