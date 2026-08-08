@@ -697,3 +697,101 @@ disclosed under Items 0, 3, and 5 rather than silently trusted or silently re-me
 since closing it cleanly needs more live invocations than remained in budget). Per the
 brief's own PR-2-escalation rule: these limitations are recorded for the operator to
 decide on, not resolved unilaterally here.
+
+---
+
+## PR 2 re-verification
+
+Closes the four provisional findings PR 1 flagged. Run live in-session 2026-08-08 (the
+sandbox blocks `$HOME` writes and model-provider network calls, so these ran with the
+Bash sandbox disabled — same constraint PR 1 recorded). Machine-readable verdict tokens
+first; evidence beneath each.
+
+```
+AGY_INSTALL_MODE: copy
+ENV_PASSTHROUGH: supported:environment
+AGY_REGISTERED_AUTOLOAD: neither
+OPENCODE_BASH_GATE: unmeasured
+LIVE_INVOCATIONS: 5
+```
+
+**Budget: 5 live invocations against a cap of 5 — at cap, not exceeded.** Two `agy -p`
+(items 3, 3b), three `opencode run` (item 4 tests A/B/C). All other checks were free
+local CLI calls or static binary reads.
+
+### AGY_INSTALL_MODE: copy — re-confirmed (free)
+
+Installed a throwaway `spike2-testplugin`, mutated the source skill file afterward, and
+re-read the installed copy: source read `SPIKE2-MARKER-MUTATED`, installed copy still
+read `SPIKE2-MARKER-ORIGINAL`. Not a symlink (`test -L` negative). Reinstall over the
+same name silently overwrote at exit 0 and the installed copy then tracked the new
+content. **The "reinstall to update" story in PR 2 holds.**
+
+Two extras: a non-recognized `scripts/` subdirectory **is** copied (so bundled scripts
+ship with an Agy plugin), and the install summary enumerates `commands` as a recognized
+component alongside `skills`/`mcpServers`/`hooks` — the matrix's Agy component list
+(Item 1) omitted `commands/`.
+
+### ENV_PASSTHROUGH: supported:environment — answered free, no invocation
+
+Retracting the matrix Item 10 "unconfirmed" status. A `strings` pass over the `agy`
+binary yields the MCP server config struct keys as exact whole-string matches:
+`mcpServers`, `command`, `args`, `environment`, `headers`, `timeout`. **The env key is
+`environment`, not `env`.** Static-binary evidence, not a live round-trip — PR 2's
+offload-sidecar example should use `environment` and say it is binary-derived.
+
+### AGY_REGISTERED_AUTOLOAD: neither — measured twice
+
+PR 1 tested only bare cwd (neither loaded) and `--add-dir` (both loaded), and left the
+realistic already-registered case untested. Both halves now measured:
+
+1. In `…/claude-plugins/.claude/worktrees/gallant-morse-e8e221` (under the
+   `trustedWorkspaces` entry `/Users/seankoji/repos/claude-plugins`), with a temporary
+   `GEMINI.md` marker present alongside the existing `AGENTS.md` → `GEMINI=no AGENTS=no`.
+2. In `/Users/seankoji/repos/claude-plugins` itself — the exact `trustedWorkspaces`
+   entry, read-only, no file created → `AGENTS=no`.
+
+**Agy does not auto-load `AGENTS.md` or `GEMINI.md` from cwd, even in a registered
+workspace.** Only `--add-dir` loads them. Consequence for PR 2: repo-root instruction
+files do nothing for Agy users, so **`GEMINI.md` must not be created** and `AGENTS.md`
+cannot be relied on to reach Agy. `trustedWorkspaces` governs access, not context
+loading.
+
+### OPENCODE_BASH_GATE: unmeasured — the matrix's Item 9 verdict is refuted, not confirmed
+
+Item 9 recorded "silent 60s hang → **must refuse**" from one uncontrolled observation and
+flagged that a positive control was never run. Running it overturns the basis:
+
+| Test | Setup | Result |
+| --- | --- | --- |
+| A | `run --command` invoking bash, `permission.bash {"*":"ask"}`, `--print-logs --log-level DEBUG`, 90s bound | exit 124, 0 bytes stdout. Debug log ends at `message=init` — **no permission activity logged at all** |
+| B (positive control) | identical, plus `"echo *": "allow"` | exit 124, 0 bytes — **hangs with the allow-rule in place** |
+| C (isolation) | plain prompt, no `--command`, no tool call needed, same dir | exit 124, 0 bytes — **hangs with nothing to permit** |
+
+Test C is decisive: a run that needs no permission at all hangs identically. **The hang
+is environmental, not the permission gate**, so Item 9's "must refuse" verdict rests on a
+confounded observation and cannot be treated as measured OpenCode behavior.
+
+What is *not* known: the actual cause. The tests ran in `/tmp/spike2-ocproj`, a
+**non-git** directory with project-local `.opencode/` config — the leading hypothesis,
+since PR 1's Ledger #9 ran `--command` successfully in ~2s from inside a real git
+worktree. Budget was exhausted before that could be tested; `--auto` was never exercised
+either.
+
+Confirmed in passing: `opencode run` auto-provisioned a **62 MB**
+`.opencode/node_modules/` in the test project (matrix Item 12's finding, reproduced).
+
+**Consequence for PR 2:** OpenCode dispatch still refuses under an unauthorized bash
+call, but the refusal must be documented as a **known unknown**, not as measured
+platform behavior. The cheap follow-up is to repeat tests A/B inside a real git
+repository.
+
+### Mutations — all cleaned
+
+| Path | Status |
+| --- | --- |
+| `~/.gemini/config/plugins/spike2-testplugin/` | uninstalled — `agy plugin list` shows 0 spike entries |
+| `/tmp/spike2-testplugin/`, `/tmp/spike2-ocproj/` (incl. 62 MB node_modules) | removed |
+| `<worktree>/GEMINI.md` (temporary marker) | removed |
+| `/Users/seankoji/repos/claude-plugins` (main checkout) | never written — `git status` clean |
+| `~/.config/opencode/command(s)/` | never written this round (isolated project dir used instead, which also avoids PR 1's symlink caveat) |
