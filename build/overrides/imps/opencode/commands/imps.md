@@ -388,7 +388,9 @@ attempt cap; it returns a JSON result. Read it and record:
 `--model` to `opencode run -m`). It is never declared in frontmatter — matrix Item 3
 measured that OpenCode does not honor Claude Code's `model:` convention, and did not rule
 out some differently-named field, so this plugin emits none and resolves the tier at
-dispatch instead.
+dispatch instead. Resolve it through the order in
+[Model selection reference](#model-selection-reference) — operator env pin first, then the
+tier table, then the session model — and record the id you used with the task's result.
 
 Heartbeat `last_heartbeat` and `tasks_done` into the state file as each task returns, so
 an interrupted loop can be resumed by Step 1 rather than restarted.
@@ -551,6 +553,18 @@ emitting none is a deliberate safe default here rather than a settled platform f
 OpenCode model ids are provider-scoped strings (`provider/model`). Read the ids available
 in this session from `opencode models` rather than hardcoding any — and note that Claude
 Code's short tier aliases name no model on this platform at all.
+
+**Resolution order, and the documented override.** For each tier, in order:
+
+1. `$IMPS_TIER_MODEL_CHEAP` / `$IMPS_TIER_MODEL_STANDARD` / `$IMPS_TIER_MODEL_DEEP`, if
+   set — the operator's explicit pin. It is passed to `-m` verbatim; nothing is inferred
+   from it, and no tier is derived from its name.
+2. The tier's row in the table above, resolved against `opencode models`.
+3. The session model, for every tier — the safe fallback when nothing else resolves. Say
+   which tier fell back to it in the dispatch log rather than resolving silently.
+
+Never substitute a *stronger* model for a `cheap` task to make it pass; that hides a
+mis-tiered task. Re-tier it in the task table instead, where the operator can see it.
 <!-- END-SECTION -->
 
 <!-- REPLACE-SECTION: ## Constraints -->
