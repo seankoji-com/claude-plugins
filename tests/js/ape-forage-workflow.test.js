@@ -32,8 +32,8 @@ function baseArgs(overrides = {}) {
 function runWorkflow({ agent, parallel, phase, args, log }) {
   const source = fs.readFileSync(SCRIPT_PATH, 'utf8')
   const body = source.replace('export const meta', 'const meta')
-  const factory = new AsyncFunction('agent', 'parallel', 'phase', 'args', 'log', body)
-  return factory(agent, parallel, phase || (() => {}), args || baseArgs(), log || (() => {}))
+  const factory = new AsyncFunction('agent', 'parallel', 'phase', 'args', 'log', 'require', body)
+  return factory(agent, parallel, phase || (() => {}), args || baseArgs(), log || (() => {}), require)
 }
 
 // Mirrors the real Workflow tool's parallel(): each thunk runs independently; one
