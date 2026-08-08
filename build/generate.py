@@ -350,19 +350,66 @@ def plugin_sources(plugin: str) -> tuple[list[Path], list[Path]]:
 
 def port_config(plugin: str, platform_conf: dict) -> dict:
     path = OVERRIDES_DIR / plugin / "port.json"
-    config = {"asset_dirs": list(platform_conf["layout"]["asset_dirs_default"])}
+    config = {
+        "asset_dirs": list(platform_conf["layout"]["asset_dirs_default"]),
+        "asset_exclude": {},
+        "asset_replacements": {},
+        "manifest_overrides": {},
+    }
     if path.is_file():
         config.update(load_json(path))
     return config
 
 
-def asset_files(plugin: str, asset_dirs) -> list[Path]:
+def apply_asset_replacements(text: str, plugin: str, source_rel: str, table: dict) -> str:
+    """Per-file text fixes for copied assets, from build/overrides/<plugin>/port.json.
+
+    Assets are copied, not rendered, so they have no REPLACE-SECTION mechanism. This is
+    the narrow equivalent: {"<plugin-relative path>": [[find, replace], ...]}. A pair
+    whose `find` is absent is an error rather than a silent no-op, so an edit to the
+    Claude source cannot quietly strip a rewrite the generated artifact depends on.
+    """
+    pairs = table.get(source_rel)
+    if not pairs:
+        return text
+    for find, replace in pairs:
+        if find not in text:
+            raise GenerateError(
+                f"build/overrides/{plugin}/port.json: asset_replacements for "
+                f"{source_rel!r} expects {find!r}, which the current source no longer "
+                f"contains. Update the pair or drop it."
+            )
+        text = text.replace(find, replace)
+    return text
+
+
+def asset_files(plugin: str, asset_dirs, asset_exclude=None) -> list[Path]:
+    """Every file under asset_dirs, minus the plugin-relative paths in asset_exclude.
+
+    asset_exclude maps a plugin-relative POSIX path to the reason it does not ship — a
+    Claude-only harness script, or one whose content cannot satisfy the dist/ invariants.
+    A listed path that no longer exists is an error, so the list cannot silently rot into
+    shipping a file it was written to hold back.
+    """
+    excluded = dict(asset_exclude or {})
+    for relative, reason in sorted(excluded.items()):
+        if not (PLUGINS_DIR / plugin / relative).is_file():
+            raise GenerateError(
+                f"build/overrides/{plugin}/port.json: asset_exclude lists "
+                f"{relative!r} ({reason}), but plugins/{plugin}/{relative} does not "
+                f"exist. Remove the entry or fix the path."
+            )
     found: list[Path] = []
     for name in sorted(asset_dirs):
         directory = PLUGINS_DIR / plugin / name
         if not directory.is_dir():
             continue
-        found.extend(sorted(path for path in directory.rglob("*") if path.is_file()))
+        for path in sorted(directory.rglob("*")):
+            if not path.is_file():
+                continue
+            if path.relative_to(PLUGINS_DIR / plugin).as_posix() in excluded:
+                continue
+            found.append(path)
     return found
 
 
@@ -444,7 +491,9 @@ def generate_plugin(plugin: str, platform: str, platform_table: dict, outputs: d
         source_manifest = load_json(PLUGINS_DIR / plugin / ".claude-plugin" / "plugin.json")
         manifest = {}
         for field in sorted(platform_conf["manifest"]["fields"]):
-            value = source_manifest.get(field)
+            # A per-plugin override exists because the Claude manifest's own prose can
+            # name Claude-only machinery; there is no section mechanism for a JSON field.
+            value = config["manifest_overrides"].get(field, source_manifest.get(field))
             if not value:
                 raise GenerateError(
                     f"plugins/{plugin}/.claude-plugin/plugin.json: missing required "
@@ -457,10 +506,11 @@ def generate_plugin(plugin: str, platform: str, platform_table: dict, outputs: d
         )
         asset_prefix = f"agy/{plugin}"
 
-    for source in asset_files(plugin, config["asset_dirs"]):
+    for source in asset_files(plugin, config["asset_dirs"], config["asset_exclude"]):
         source_rel = rel(source)
         text = apply_mapping(read_text(source), platform_conf, invocation_pairs, source_rel)
         relative = source.relative_to(PLUGINS_DIR / plugin).as_posix()
+        text = apply_asset_replacements(text, plugin, relative, config["asset_replacements"])
         outputs[f"{asset_prefix}/{relative}"] = (text, file_mode(source))
 
 
