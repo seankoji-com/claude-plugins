@@ -181,9 +181,9 @@ the gate's handle, not a substitute for evidence.
       Verify: test -d dist && test -z "$(grep -rE '(^|[^_[:alnum:]])/(Users|home|opt|usr/local)/|[$]HOME' dist)" && test -z "$(grep -rE '^model:' dist)"
       Done when: both expect-empty checks hold — the invariant lives here, with resolution deferred to install time.
 
-- [ ] `build/dist-lint.sh` exists with a self-test proving each invariant catches a broken fixture — including a gate-stripped security fixture and an absolute-path fixture
+- [ ] `build/dist-lint.sh` exists with a self-test proving each invariant catches a broken fixture — and it is the **only** mechanical gate on generated output, since the reviewer diff excludes `dist/`
       Verify: test -x build/dist-lint.sh && bash build/dist-lint.sh --self-test
-      Done when: regen-diff, unsubstituted-ref, absolute-path, manifest, budget, mirrored-block, and gate-stripped fixtures each fail when broken and pass when correct.
+      Done when: fixtures for regen-diff, unsubstituted-ref, absolute-path, manifest, budget, mirrored-block, gate-stripped, **out-of-prefix uninstall path**, **frozen Claude sources**, and **README marker vs. generation-manifest agreement** each fail when broken and pass when correct. The last three are the only enforcement their constraints get anywhere in this run.
 
 - [ ] Claude sources are untouched except the two named exceptions
       Verify: test -d dist && test -z "$(git diff origin/master --name-only -- plugins/*/commands plugins/*/agents plugins/*/scripts | grep -vE 'imps-run\.workflow\.js|ape-forage\.workflow\.js')"
@@ -216,15 +216,15 @@ the gate's handle, not a substitute for evidence.
       Done when: expect-empty holds; remaining Workflow mentions are explicit "on Claude Code this uses…" comparisons. [JUDGMENT]
 
 - [ ] `install-agy.sh` is executable, installs to the corrected path, is manifest-tracked, idempotent, and fails closed
-      Verify: test -x install-agy.sh && bash -n install-agy.sh && grep -q 'command -v agy' install-agy.sh && grep -q -- '--uninstall' install-agy.sh && grep -q -- '--ref' install-agy.sh && ! grep -q 'dangerously-skip-permissions' install-agy.sh
+      Verify: test -x install-agy.sh && bash -n install-agy.sh && grep -q 'command -v agy' install-agy.sh && grep -q -- '--uninstall' install-agy.sh && grep -q -- '--ref' install-agy.sh && ! grep -q 'dangerously-skip-permissions' install-agy.sh && bash install-agy.sh --self-test
       Done when: iterates `dist/agy/*/`, exits clearly when `agy` is missing, records installed SHA + written paths, `--uninstall` reverses via `agy plugin uninstall`, `--ref` defaults to `master`.
 
-- [ ] **[OPERATOR-RUN — not dispatchable]** The npm channel survives `--ignore-scripts`: a `bin` CLI provides `install`, `uninstall`, and `doctor`, and `doctor` detects a package installed without its postinstall having run
-      Verify: python3 -c "import json;d=json.load(open('dist/opencode/package.json'));assert d.get('bin') and d.get('scripts',{}).get('postinstall')" && bash tests/npm-install-smoke.sh
-      Done when: the smoke test packs `dist/opencode`, installs the tarball into a throwaway prefix **both** normally and with `--ignore-scripts`, asserts commands land in the command dir in the first case and that `doctor` reports the gap in the second, then exercises `uninstall` and asserts nothing invocable remains. Cleans up after itself.
+- [ ] The npm channel source declares a `bin` CLI (`install`/`uninstall`/`doctor`) and a `postinstall`, so a `--ignore-scripts` install stays completable and detectable
+      Verify: python3 -c "import json;d=json.load(open('build/npm/package.json'));assert d.get('bin') and d.get('scripts',{}).get('postinstall')" && for f in build/npm/bin/*; do test -x "$f" && bash -n "$f" || exit 1; done && test -f tests/npm-install-smoke.sh
+      Done when: `build/npm/` carries the package source (`package.json` with `bin` + `postinstall`, executable `bin/` scripts that parse); `tests/npm-install-smoke.sh` exists and packs `dist/opencode`, installs the tarball into a throwaway prefix both normally and with `--ignore-scripts`, asserts commands land in the first case and `doctor` reports the gap in the second, exercises `uninstall`, and cleans up. **Executing that smoke test is OPERATOR-RUN** — it needs npm registry access an imp cannot reach; this item only requires that it exists and is well-formed.
 
 - [ ] The installer substitutes `__PLUGIN_ROOT__` and the substitution is idempotent
-      Verify: grep -q '__PLUGIN_ROOT__' dist/opencode/bin/* 2>/dev/null || grep -rq '__PLUGIN_ROOT__' dist/opencode
+      Verify: grep -rq '__PLUGIN_ROOT__' dist/opencode && grep -rqE '__PLUGIN_ROOT__' build/npm/bin/* && grep -rqE 'sed|replace' build/npm/bin/*
       Done when: the installer replaces every placeholder with the resolved absolute path in installed copies only, re-running produces the same result, and the manifest records what was written. Documented: relocating an install requires re-running it.
 
 - [ ] offload-sidecar gains per-platform MCP registration examples matching Phase A′'s env verdict; Python untouched
@@ -249,9 +249,9 @@ the gate's handle, not a substitute for evidence.
       Verify: grep -rqi 'response' dist/agy && grep -rqiE 'empty|length|content' dist/agy
       Done when: the dispatch path explicitly treats `EXIT=0` + `"status":"SUCCESS"` + empty `response` as a failed run, per matrix Item 8. [JUDGMENT]
 
-- [ ] Refusals match the measured verdicts: OpenCode dispatch refuses on Linux (Darwin-only sandbox), and refuses under an unauthorized bash gate to whatever scope Phase A′ item 2 established — each with a named reason
+- [ ] Refusals match the measured verdicts: OpenCode dispatch refuses when `uname -s != Darwin` (Seatbelt does not nest) with a named reason. The headless bash gate is `OPENCODE_BASH_GATE: unmeasured` — documented in prose as a known unknown, with **no** generated refusal branch
       Verify: grep -rqE 'uname -s|Darwin' dist/opencode && grep -rqiE 'refus|unsupported' dist/opencode && grep -rqi 'known unknown' dist/opencode
-      Done when: generated behavior implements exactly what the matrix supports, names the reason, exits cleanly, and never silently proceeds. Required allow-rules are documented, never added silently. [JUDGMENT]
+      Done when: the only generated refusal branch is the Darwin check; the bash gate appears as prose describing a known unknown and nothing else. Required allow-rules are documented, never added silently. [JUDGMENT]
 
 - [ ] Both workflow scripts carry platform-assumption headers and are otherwise byte-identical to master
       Verify: head -40 plugins/imps/scripts/imps-run.workflow.js | grep -qi 'platform' && head -40 plugins/ape/scripts/ape-forage.workflow.js | grep -qi 'platform' && test -z "$(git diff origin/master -- plugins/imps/scripts/imps-run.workflow.js plugins/ape/scripts/ape-forage.workflow.js | grep -E '^[+-][^+-]' | grep -vE '^[+-][[:space:]]*(//|/\*|\*)')"
@@ -264,7 +264,7 @@ the gate's handle, not a substitute for evidence.
       Done when: all three present.
 
 - [ ] Publishing is manual-only and nothing else can publish
-      Verify: test -f .github/workflows/release.yml && grep -q 'workflow_dispatch' .github/workflows/release.yml && grep -q 'NPM_TOKEN' .github/workflows/release.yml && test -z "$(grep -rln 'npm publish' build/ tests/ install-agy.sh .github/workflows/validate.yml 2>/dev/null)"
+      Verify: test -f .github/workflows/release.yml && grep -q 'workflow_dispatch' .github/workflows/release.yml && grep -q 'NPM_TOKEN' .github/workflows/release.yml && test -f install-agy.sh && test -z "$(grep -rln 'npm publish' build/ tests/ install-agy.sh .github/workflows/validate.yml)"
       Done when: `workflow_dispatch`-triggered (the repo has no tags), publishes committed `dist/opencode` as-is, and no other file in the repo invokes publish. `--access` / `--provenance` are set for a scoped first publish.
 
 - [ ] The Claude suite passes unweakened and new e2e gating uses the existing skip() convention
@@ -290,7 +290,7 @@ the gate's handle, not a substitute for evidence.
       Done when: all three present — matrix Item 12 found `opencode run` auto-provisions a ~62MB `.opencode/node_modules/` in any directory with project-local OpenCode config, hidden from `git status` by its own bundled `.gitignore`.
 
 - [ ] Versioning is bot-compatible and documented: no dist file embeds a per-plugin version, the npm version is hand-maintained, and AGENTS.md tells maintainers to edit sources and regenerate
-      Verify: test -z "$(grep -rl '"version"' dist/agy/ 2>/dev/null)" && python3 -c "import json,re;v=json.load(open('dist/opencode/package.json'))['version'];assert re.match(r'^\d+\.\d+\.\d+$',v) and v!='0.0.0'" && grep -qi 'regenerate' AGENTS.md && grep -qi 'npm version' docs/MAINTAINING.md
+      Verify: test -z "$(grep -rl '"version"' dist/agy/ 2>/dev/null)" && python3 -c "import json,re;v=json.load(open('build/npm/package.json'))['version'];assert re.match(r'^\d+\.\d+\.\d+$',v) and v!='0.0.0'" && python3 -c "import json;a=json.load(open('build/npm/package.json'))['version'];b=json.load(open('dist/opencode/package.json'))['version'];assert a==b" && grep -qi 'regenerate' AGENTS.md && grep -qi 'npm version' docs/MAINTAINING.md
       Done when: `version-bump.yml`'s bumps (they will fire — READMEs change) cannot desync `dist/`, and the npm version-bump procedure is written down.
 
 ---
