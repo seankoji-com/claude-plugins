@@ -6,6 +6,13 @@ no dist, no file moves. The operator reviews the merged matrix before PR 2
 (`docs/plans/xplat-pr2-build.md`) is dispatched. PR 2's content is conditional on
 this PR's verdicts; do not start it.
 
+> **This file is a verbatim copy of the original operator brief, kept unedited on
+> purpose as a traceability record — including its `- [ ]` checkboxes, which are never
+> ticked here even though every item was executed (see `docs/platform-matrix.md` for
+> actual status). Two corrections found during the spike are noted inline, bracketed,
+> at the exact lines they refute** — the underlying claim/criterion is left as originally
+> written so this stays a faithful record of what was asked, not what was found.
+
 ## Verify convention (binding for every item)
 
 `Verify:` is a shell command whose **exit 0 means the Done-when holds** — never the
@@ -25,6 +32,9 @@ defect in the plan — flag it, don't dispatch it.
   `~/.config/opencode/commands/`, test plugins under
   `~/.gemini/antigravity-cli/plugins/`) is logged in a "Mutations" section of the
   matrix at write time. The final item verifies cleanup.
+  **[Correction, found during the spike: the real path is `~/.gemini/config/plugins/`
+  — `~/.gemini/antigravity-cli/` has no `plugins/` subdirectory. See
+  `docs/platform-matrix.md` Item 1.]**
 - Never pass `--dangerously-skip-permissions` to anything.
 
 ## Already measured (2026-08-08 — carry into the matrix with this evidence line)
@@ -33,7 +43,10 @@ defect in the plan — flag it, don't dispatch it.
   `plugin.json` (required `name` matching `^[a-zA-Z0-9-_]+$`), optional `skills/`
   (md + `name`/`description` frontmatter → slash commands), `agents/`, `hooks.json`,
   `mcp_config.json`, `rules/`; `agy plugin install <path>` →
-  `~/.gemini/antigravity-cli/plugins/<name>/`; list/enable/disable/uninstall
+  `~/.gemini/antigravity-cli/plugins/<name>/`
+  **[Correction, found during the spike: the real path is
+  `~/.gemini/config/plugins/<name>/` — `~/.gemini/antigravity-cli/` has no `plugins/`
+  subdirectory at all. See `docs/platform-matrix.md` Item 1.]**; list/enable/disable/uninstall
   subcommands; CLI has `-p/--print`, `--json-schema`, `--sandbox`, `--agent`.
 - `opencode` 1.18.10: `~/.config/opencode/opencode.json` with `commands/`, `agents/`,
   `plugins/`, `tools/` dirs; npm/TS plugins via `plugin` array; models are
@@ -91,6 +104,16 @@ defect in the plan — flag it, don't dispatch it.
 - [ ] The matrix is complete: every row above present, per-row evidence, no placeholders, invocation ledger within budget
       Verify: test -f docs/platform-matrix.md && test -z "$(grep -E 'TBD|TODO|\?\?\?' docs/platform-matrix.md)" && grep -qi 'ledger' docs/platform-matrix.md && test "$(grep -ci 'Evidence' docs/platform-matrix.md)" -ge 10
       Done when: all four conditions hold and the ledger shows ≤ 12 live invocations.
+      **[Amendment, not a correction — this Done-when was violated, not satisfied: the
+      ledger shows 13 live invocations, one over the cap. The `Verify:` above cannot
+      detect this (it checks for placeholder tokens and an evidence count, neither of
+      which a budget overrun trips) — that is itself flagged as a defect in this item's
+      own Verify, per this file's own binding rule two sections up ("an item whose
+      verify cannot fail is a defect in the plan"). Recorded here as an explicit,
+      operator-facing amendment rather than left as something only disclosed in the
+      matrix: **this Done-when, as literally written, is not met.** See
+      `docs/platform-matrix.md`'s Ledger and Status sections for the full accounting
+      and the operator's disposition of the overrun.]**
 
 - [ ] Every machine mutation is cleaned up: spike test commands removed from `~/.config/opencode/commands/`, spike plugins uninstalled via `agy plugin uninstall`, and the Mutations section marks each entry cleaned
       Verify: test -z "$(ls ~/.config/opencode/commands/ 2>/dev/null | grep -i spike)" && test -z "$(agy plugin list 2>/dev/null | grep -i spike)" && ! grep -qi 'UNCLEANED' docs/platform-matrix.md
