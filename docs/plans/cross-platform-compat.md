@@ -183,7 +183,7 @@ the gate's handle, not a substitute for evidence.
 
 - [ ] `build/dist-lint.sh` exists with a self-test proving each invariant catches a broken fixture — and it is the **only** mechanical gate on generated output, since the reviewer diff excludes `dist/`
       Verify: test -x build/dist-lint.sh && bash build/dist-lint.sh --self-test
-      Done when: fixtures for regen-diff, unsubstituted-ref, absolute-path, manifest, budget, mirrored-block, gate-stripped, **out-of-prefix uninstall path**, **frozen Claude sources**, and **README marker vs. generation-manifest agreement** each fail when broken and pass when correct. The last three are the only enforcement their constraints get anywhere in this run.
+      Done when: fixtures for regen-diff, unsubstituted-ref, absolute-path, manifest, budget, mirrored-block, gate-stripped, **out-of-prefix uninstall path**, **frozen Claude sources**, and **README marker vs. generation-manifest agreement** each fail when broken and pass when correct. The last three are the only enforcement their constraints get anywhere in this run. The marker check validates only READMEs that **have** a marker — a missing marker is item 32's failure, not dist-lint's, so the lint is not red in the worktrees that precede it. `dist-lint.sh` also accepts `--scope <plugin>` to lint one plugin's output.
 
 - [ ] Claude sources are untouched except the two named exceptions
       Verify: test -d dist && test -z "$(git diff origin/master --name-only -- plugins/*/commands plugins/*/agents plugins/*/scripts | grep -vE 'imps-run\.workflow\.js|ape-forage\.workflow\.js')"
@@ -208,8 +208,8 @@ the gate's handle, not a substitute for evidence.
 ## Phase C — rollout and installers (Depends-on: B)
 
 - [ ] prompt-builder, imps, ape generate for both platforms and pass the lint
-      Verify: python3 build/generate.py && bash build/dist-lint.sh
-      Done when: exit 0 across the whole tree.
+      Verify: python3 build/generate.py ${XPLAT_ONLY:+--only "$XPLAT_ONLY"} && bash build/dist-lint.sh ${XPLAT_ONLY:+--scope "$XPLAT_ONLY"}
+      Done when: exit 0. `generate.py` must accept `--only <plugin>` and `dist-lint.sh` a `--scope <plugin>` flag, so a per-plugin override task can evaluate its own work; with `XPLAT_ONLY` unset both run whole-tree, which is how the post-merge re-assertion runs it.
 
 - [ ] Dispatch prose in generated artifacts comes from `build/overrides/` — no Claude Workflow mechanics presented as if they run there
       Verify: test -d dist/opencode && test -d dist/agy && test -z "$(grep -rlE "agent\(\)|isolation: 'worktree'" dist/opencode dist/agy)"
@@ -217,10 +217,10 @@ the gate's handle, not a substitute for evidence.
 
 - [ ] `install-agy.sh` is executable, installs to the corrected path, is manifest-tracked, idempotent, and fails closed
       Verify: test -x install-agy.sh && bash -n install-agy.sh && grep -q 'command -v agy' install-agy.sh && grep -q -- '--uninstall' install-agy.sh && grep -q -- '--ref' install-agy.sh && ! grep -q 'dangerously-skip-permissions' install-agy.sh && bash install-agy.sh --self-test
-      Done when: iterates `dist/agy/*/`, exits clearly when `agy` is missing, records installed SHA + written paths, `--uninstall` reverses via `agy plugin uninstall`, `--ref` defaults to `master`.
+      Done when: iterates `dist/agy/*/`, exits clearly when `agy` is missing, records installed SHA + written paths, `--uninstall` reverses via `agy plugin uninstall`, `--ref` defaults to `master`. **`--self-test` must at minimum feed the uninstaller a manifest path outside the install prefix and a path containing a space, assert it refuses the former and correctly removes the latter, and exit non-zero if either behaves wrongly** — a `--self-test) echo ok` stub does not satisfy this item.
 
 - [ ] The npm channel source declares a `bin` CLI (`install`/`uninstall`/`doctor`) and a `postinstall`, so a `--ignore-scripts` install stays completable and detectable
-      Verify: python3 -c "import json;d=json.load(open('build/npm/package.json'));assert d.get('bin') and d.get('scripts',{}).get('postinstall')" && for f in build/npm/bin/*; do test -x "$f" && bash -n "$f" || exit 1; done && test -f tests/npm-install-smoke.sh
+      Verify: python3 -c "import json;d=json.load(open('build/npm/package.json'));assert d.get('bin') and d.get('scripts',{}).get('postinstall')" && for f in build/npm/bin/*; do test -x "$f" || exit 1; case "$f" in *.js) node --check "$f" || exit 1;; *) bash -n "$f" || exit 1;; esac; done && test -f tests/npm-install-smoke.sh
       Done when: `build/npm/` carries the package source (`package.json` with `bin` + `postinstall`, executable `bin/` scripts that parse); `tests/npm-install-smoke.sh` exists and packs `dist/opencode`, installs the tarball into a throwaway prefix both normally and with `--ignore-scripts`, asserts commands land in the first case and `doctor` reports the gap in the second, exercises `uninstall`, and cleans up. **Executing that smoke test is OPERATOR-RUN** — it needs npm registry access an imp cannot reach; this item only requires that it exists and is well-formed.
 
 - [ ] The installer substitutes `__PLUGIN_ROOT__` and the substitution is idempotent
