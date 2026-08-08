@@ -1,6 +1,21 @@
+<!-- PLATFORM-SUPPORT: opencode=excluded agy=excluded -->
+
 # claude-tuneup
 
 A three-phase permission audit and settings tuneup command for [Claude Code](https://code.claude.com/) — scans recent transcripts to surface missing allowlist entries, classifies them by global vs project scope, deduplicates across settings files, and logs findings to a running notes file you can act on.
+
+## Platforms
+
+| Claude Code | OpenCode | Agy |
+| --- | --- | --- |
+| native (this README) | **excluded** | **excluded** |
+
+Not generated for OpenCode or Agy, and not planned. This plugin's entire subject is
+Claude Code's own `settings.json` files, permission-rule syntax, and transcript store —
+there is no equivalent surface on either target to port it to, so generating it would
+produce a command that cannot do its job (`build/generation-manifest.json`). See
+[`docs/plans/cross-platform-compat.md`](../../docs/plans/cross-platform-compat.md) for
+the generation matrix.
 
 ---
 
