@@ -35,9 +35,11 @@ and a zero-byte first attempt under Item 0) on the reasoning that they "produced
 data" — that is not what the binding rule above measures, and both dispatched a model.
 Corrected count: 13 of 12. This is disclosed as a real overrun, not re-derived to fit;
 see the Ledger for the full, honest list. No model provider was billed (`opencode
-stats` confirmed $0.00 total cost throughout — all calls used free-tier models,
-`opencode/deepseek-v4-flash-free` and `gemini-3.6-flash-low`), so the overrun's actual
-cost was time, not spend, but the cap itself was still exceeded and is reported as such.
+stats` confirmed $0.00 total cost throughout — all provider-billed calls used free-tier
+models, `opencode/deepseek-v4-flash-free` and `gemini-3.6-flash-low`; two calls (Ledger
+#2, #8) ran on the operator's self-hosted LiteLLM proxy instead, which is not
+provider-billed either), so the overrun's actual cost was time, not spend, but the cap
+itself was still exceeded and is reported as such.
 
 ---
 
@@ -71,7 +73,7 @@ at authoring time. This is the brief's first named candidate degradation branch 
 confirmed working for Agy, at the model-context layer (the skill's own prose
 instructions tell the model to do this derivation; there is no separate shell-level env
 var doing it automatically).
-Evidence: Ledger #10
+Evidence: Ledger #11
 
 **OpenCode: no working mechanism found, with a methodology caveat.** Two independent
 checks, in agreement: (1) directly asked (no tool call, pure model self-report), the
@@ -110,8 +112,8 @@ here because doing so needs live invocations this run's budget did not have (see
 honest budget overrun above). Flagged for the operator, per the brief's own
 PR-2-escalation rule, rather than silently re-measured or silently trusted.
 
-Evidence: Ledger #12 (Agy); Ledger #13 (OpenCode, model self-report) + static binary
-analysis (free, no ledger row — a read-only `strings` pass, not a model invocation)
+Evidence: Ledger #12 (OpenCode, model self-report) + static binary analysis (free, no
+ledger row — a read-only `strings` pass, not a model invocation)
 
 ---
 
@@ -136,7 +138,12 @@ and tracks them in `~/.gemini/config/import_manifest.json`.
   **and** the on-disk directory (`~/.gemini/config/plugins/<name>/` fully gone,
   verified with `test -d`).
 
-Evidence: Ledger #6, #7 (both `kind=free` — local CLI calls, no model invoked)
+Evidence: Ledger #6, #7 (both `kind=free` — local CLI calls, no model invoked). The
+`diff -r` and mutate-and-recheck steps for the copy-vs-symlink determination were run
+at measurement time but their own output was not separately captured into a ledger
+row — the plugin was uninstalled by the time this was noticed, so re-deriving would
+cost a fresh install/uninstall cycle; the conclusion itself (real copy, not symlink) is
+unambiguous from how it was tested, just not re-verifiable from this document alone.
 
 ---
 
@@ -198,13 +205,21 @@ compatibility (`OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_CLAUDE_CODE_SKI
 *"External skills (auto-loaded) | `~/.claude/skills/<name>/SKILL.md`,
 `~/.agents/skills/<name>/SKILL.md`"*. **This means a Claude Code plugin's own
 `skills/*/SKILL.md` files may already be readable by OpenCode with no generator
-involvement at all**, if installed (or symlinked) under one of those two paths. This
-was found via static analysis only — not independently confirmed by installing a real
-plugin under `~/.claude/skills/` and invoking it live, which would need one more
-invocation than this run had budget for. It directly changes what PR 2 should even try
-to build: before generating an OpenCode-native command file, check whether the
-plugin's existing Claude Code `skills/` directly satisfies the same need through this
-channel.
+involvement**, if installed (or symlinked) under one of those two paths. This was found
+via static analysis only — not independently confirmed by installing a real plugin
+under `~/.claude/skills/` and invoking it live, which would need one more invocation
+than this run had budget for.
+
+**Scope check on this finding (free — counted the marketplace directly rather than
+asserting reach):** this repo ships 10 `commands/*.md` files against only 2 `SKILL.md`
+files, both in a single plugin (`elephant-goldfish`) — five of six plugins ship no
+skills at all. And the scanned path is **user-level** (`~/.claude/skills/`), which does
+not exist on this machine and is not where a plugin marketplace install places files
+today — reaching this channel needs an installer to put or symlink files there, which
+is itself generator involvement, just a cheaper kind. **Revised consequence:** this is
+a real, free channel worth evaluating *for skill-shaped plugins specifically* (2 of 12
+command/skill artifacts in this marketplace today), not a general substitute for
+command-file generation.
 
 **Consequence for PR 2's command-file delivery (channel (a)):** since command files are
 loaded purely from the filesystem `commands/` directory with no plugin-system
@@ -263,7 +278,9 @@ convention.** First invocation attempt (a skill that ran a shell command) surfac
 significant finding in its own right — see Item 9. A second, tool-free version of the
 skill invoked cleanly and returned the expected marker.
 
-Evidence: Ledger #6 (free: install), #10 (live: skill invocation)
+Evidence: Ledger #6 (free: install), #10 (live: denied tool-call attempt — see Item
+9), #11 (live: successful tool-free invocation, the transcript that actually backs the
+"invoked cleanly" claim above)
 
 ---
 
@@ -295,7 +312,7 @@ supporting evidence only for the `--add-dir` case; treat the already-registered-
 case as an assumption to verify before relying on it, per the brief's own
 PR-2-escalation rule.
 
-Evidence: Ledger #11, #12
+Evidence: Ledger #13, #14
 
 ---
 
@@ -327,8 +344,8 @@ non-pre-authorized tool).
   enabled") rather than independently proven here. Flag as a follow-up for whoever owns
   PR 2's dispatch-tier design if this distinction becomes load-bearing.
 
-Evidence: Ledger #6/#10 (item 6's tool-call attempt, showing the exit-code caveat), #13
-(`--json-schema`), #14 (`--sandbox` acceptance)
+Evidence: Ledger #10 (item 6's tool-call attempt, showing the exit-code caveat), #15
+(`--json-schema`), #16 (`--sandbox` acceptance)
 
 ---
 
@@ -350,7 +367,7 @@ exists as a documented escape hatch this spike didn't evaluate. Whoever designs 
 OpenCode dispatch tier should re-run this specific test with debug logging and a
 positive control before treating "hangs silently" as settled platform behavior.
 
-Evidence: Ledger #6/#10 (Agy fail-closed, direct), #15 (OpenCode headless hang,
+Evidence: Ledger #10 (Agy fail-closed, direct), #17 (OpenCode headless hang,
 single uncontrolled observation)
 
 ---
@@ -432,7 +449,7 @@ contains no `spike-*` entries. See the Mutations table for the full per-artifact
 including one item the first draft of this matrix missed entirely: a 62MB
 `.opencode/node_modules/` tree that `opencode run` auto-provisioned inside the test
 worktree the first time it saw a `.opencode/` config directory there (confirmed via
-`strings` on the binary — it runs a background `npm install` of `@opencode-ai/plugin`
+`strings` on the binary — it runs a background `bun install` of `@opencode-ai/plugin`
 for any directory it treats as having project-local OpenCode config). That directory
 was git-ignored by its own bundled `.gitignore`, so it never appeared in `git status`
 and was caught only by this Head-Imp-prompted re-audit, not by the original cleanup
@@ -447,7 +464,8 @@ Evidence: Ledger #6, #7 (agy uninstall/list); direct filesystem checks (free)
 Format: `| N | kind=live\|free | exact command | purpose | UTC timestamp | exit=code |`
 followed by a fenced block of real stdout/stderr (or its meaningful tail). Renumbered
 chronologically from the first draft to include every live invocation honestly (two
-rows previously omitted as "no data produced" are restored as #8 and #13 below — see
+rows previously omitted as "no data produced" are restored as #8 below and as
+"attempt 1" folded inside row #12 (it never got its own row number — see
 the budget accounting at the top of this document).
 
 | 1 | kind=live | `opencode run "Reply with exactly the single word: OK" --model opencode/deepseek-v4-flash-free --format json` | Item 2: confirm headless invocation path exists | 2026-08-08T01:42:15Z | exit=0 |
@@ -480,6 +498,11 @@ OpenCode Go [api] · OpenRouter [api] · Google [api] — 3 credentials
 ```
 opencode/deepseek-v4-flash-free, ... (opencode/* provider = free tier, distinct
 from opencode-go/* which is quota-capped)
+```
+
+| 5b | kind=free | `opencode stats` | Confirm $0.00 total spend (cited under the budget accounting above and Item 3) | 2026-08-08T01:56:xxZ | exit=0 |
+```
+Total Cost  $0.00  ·  Avg Cost/Day  $0.00
 ```
 
 | 6 | kind=free | `agy plugin install "$TMPDIR/spike-testplugin-src"` (initial install + later reinstall) | Item 1: install semantics (copy check) | ≈2026-08-08T01:50:14Z | exit=0 |
@@ -561,8 +584,8 @@ was loaded from...\nSPIKE-OC-SELFRES-OK"}
 this single uncontrolled observation does not isolate the cause.)
 ```
 
-**Honest count reconciliation:** 17 ledger rows total. `kind=free`: #3, #4, #5, #6, #7
-(5 rows, unbudgeted, all local CLI calls with no model dispatched). `kind=live`,
+**Honest count reconciliation:** 18 ledger rows total. `kind=free`: #3, #4, #5, #5b, #6,
+#7 (6 rows, unbudgeted, all local CLI calls with no model dispatched). `kind=live`,
 counted against the 12-budget per the binding rule (every model-dispatching call,
 regardless of whether it produced data): #1, #2, #8, #9, #10, #11, #12 (both attempts
 inside this one row count as one dispatched call each — 2 total), #13, #14, #15, #16,
@@ -596,8 +619,9 @@ removed, including the late-caught `.opencode/` directory.)
 
 ## Status
 
-Complete, with disclosed limitations. 13/13 checklist items measured with real
-transcripts. Two rounds of Head Imp review (one on the plan before dispatch, one on
+Complete, with disclosed limitations. 13/13 checklist items measured — 10 with live
+invocation transcripts, 3 (Items 4, 10, 12) from direct file/binary inspection recorded
+inline rather than a live model call. Two rounds of Head Imp review (one on the plan before dispatch, one on
 this diff) each returned `CHANGES_REQUESTED` with real findings, all independently
 re-verified and folded in above — including one genuine budget overrun (13 live
 invocations against a 12 cap, honestly reported rather than re-derived to fit) and one
