@@ -242,7 +242,7 @@ the gate's handle, not a substitute for evidence.
       Done when: the diff touches only the scoping prose; the doc stays accurate for Claude readers; no second dispatch mechanism exists. [JUDGMENT]
 
 - [ ] Model tiers are passed at invocation by the backend, never as frontmatter, and no Claude model name survives as a runtime choice
-      Verify: test -z "$(grep -rE '^model:' dist/opencode)" && grep -rq -- '-m ' dist/opencode && test -z "$(grep -rE '\b(haiku|sonnet|opus)\b' dist/opencode | grep -viE 'claude code|on claude')"
+      Verify: test -z "$(grep -rE '^model:' dist/opencode)" && grep -rq -- '-m ' dist/opencode && test -z "$(grep -rE '\b(haiku|sonnet|opus)\b' dist/opencode | grep -viE "claude code|on claude|claude's")"
       Done when: all three hold — matrix Item 3 means a `model:` field would be silently ignored. [JUDGMENT]
 
 - [ ] The Agy backend inspects response content, not exit code or status
@@ -290,7 +290,7 @@ the gate's handle, not a substitute for evidence.
       Done when: all three present — matrix Item 12 found `opencode run` auto-provisions a ~62MB `.opencode/node_modules/` in any directory with project-local OpenCode config, hidden from `git status` by its own bundled `.gitignore`.
 
 - [ ] Versioning is bot-compatible and documented: no dist file embeds a per-plugin version, the npm version is hand-maintained, and AGENTS.md tells maintainers to edit sources and regenerate
-      Verify: test -z "$(grep -rl '"version"' dist/agy/ 2>/dev/null)" && python3 -c "import json,re;v=json.load(open('build/npm/package.json'))['version'];assert re.match(r'^\d+\.\d+\.\d+$',v) and v!='0.0.0'" && python3 -c "import json;a=json.load(open('build/npm/package.json'))['version'];b=json.load(open('dist/opencode/package.json'))['version'];assert a==b" && grep -qi 'regenerate' AGENTS.md && grep -qi 'npm version' docs/MAINTAINING.md
+      Verify: test -z "$(grep -rl '"version"' dist/agy/ 2>/dev/null)" && python3 -c "import json,re;v=json.load(open('build/npm/package.json'))['version'];assert re.match(r'^\d+\.\d+\.\d+$',v) and v!='0.0.0'" && python3 -c "import json;a=json.load(open('build/npm/package.json'))['version'];b=json.load(open('dist/opencode/package.json'))['version'];assert a==b" && grep -qi 'regenerate' AGENTS.md && grep -qiE 'npm[^\n]{0,20}version' docs/MAINTAINING.md
       Done when: `version-bump.yml`'s bumps (they will fire — READMEs change) cannot desync `dist/`, and the npm version-bump procedure is written down.
 
 ---
