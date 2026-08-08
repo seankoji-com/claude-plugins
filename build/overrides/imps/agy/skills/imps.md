@@ -526,6 +526,17 @@ establishes one for this platform, so model choice is made at the call site inst
 
 Read the model ids available to you from the CLI rather than hardcoding any — Claude
 Code's short tier aliases name no model on this platform.
+
+**Resolution order, and the documented override.** For each tier, in order:
+
+1. `$IMPS_TIER_MODEL_CHEAP` / `$IMPS_TIER_MODEL_STANDARD` / `$IMPS_TIER_MODEL_DEEP`, if
+   set — the operator's explicit pin, passed to `--model` verbatim.
+2. The tier's row in the table above.
+3. The session's default model, for every tier — the safe fallback when nothing else
+   resolves. Say which tier fell back to it rather than resolving silently.
+
+Never substitute a *stronger* model for a `cheap` task to make it pass; re-tier it in the
+task table instead, where the operator can see it.
 <!-- END-SECTION -->
 
 <!-- REPLACE-SECTION: ## Constraints -->
