@@ -45,7 +45,9 @@ class EnvHelpersTest(unittest.TestCase):
             self.assertEqual(sidecar._env("SIDECAR_TEST_VAR", "default"), "default")
 
     def test_env_falls_back_on_unexpanded_user_config_placeholder(self):
-        with mock.patch.dict(os.environ, {"SIDECAR_TEST_VAR": "${user_config.ollama_host}"}):
+        with mock.patch.dict(
+            os.environ, {"SIDECAR_TEST_VAR": "${user_config.ollama_host}"}
+        ):
             self.assertEqual(sidecar._env("SIDECAR_TEST_VAR", "default"), "default")
 
     def test_env_falls_back_on_unexpanded_claude_builtin_placeholder(self):
@@ -63,7 +65,9 @@ class EnvHelpersTest(unittest.TestCase):
         # doesn't recognize fails loudly here instead of silently shipping
         # a var the guard can no longer protect (exactly how the first cut
         # of this guard missed SIDECAR_ROOT's ${CLAUDE_PROJECT_DIR}).
-        mcp_path = os.path.join(_HERE, "..", "..", "plugins", "offload-sidecar", ".mcp.json")
+        mcp_path = os.path.join(
+            _HERE, "..", "..", "plugins", "offload-sidecar", ".mcp.json"
+        )
         with open(mcp_path, encoding="utf-8") as f:
             env = json.load(f)["mcpServers"]["offload-sidecar"]["env"]
         for key, val in env.items():
@@ -77,7 +81,9 @@ class EnvHelpersTest(unittest.TestCase):
 
     def test_env_returns_real_value(self):
         with mock.patch.dict(os.environ, {"SIDECAR_TEST_VAR": "http://box:11434"}):
-            self.assertEqual(sidecar._env("SIDECAR_TEST_VAR", "default"), "http://box:11434")
+            self.assertEqual(
+                sidecar._env("SIDECAR_TEST_VAR", "default"), "http://box:11434"
+            )
 
     def test_env_int_valid(self):
         with mock.patch.dict(os.environ, {"SIDECAR_TEST_INT": "42"}):
@@ -89,7 +95,9 @@ class EnvHelpersTest(unittest.TestCase):
 
     def test_resolve_tier_invalid_num_ctx_falls_back(self):
         with mock.patch.dict(os.environ, {"OLLAMA_NUM_CTX": "nope"}):
-            self.assertEqual(sidecar.resolve_tier("deep")["num_ctx"], sidecar.DEFAULT_NUM_CTX)
+            self.assertEqual(
+                sidecar.resolve_tier("deep")["num_ctx"], sidecar.DEFAULT_NUM_CTX
+            )
 
     def test_resolve_tier_fast_falls_back_to_deep(self):
         env = {
@@ -290,18 +298,30 @@ class CallOllamaTest(unittest.TestCase):
         cm.__exit__.return_value = False
         return cm
 
-    _CFG = {"tier": "deep", "host": "http://h:11434", "model": "m", "num_ctx": 1024, "timeout": 5}
+    _CFG = {
+        "tier": "deep",
+        "host": "http://h:11434",
+        "model": "m",
+        "num_ctx": 1024,
+        "timeout": 5,
+    }
 
     def test_call_ollama_success(self):
         with mock.patch.object(
-            sidecar.urllib.request, "urlopen", return_value=self._fake_response({"response": "ok"})
+            sidecar.urllib.request,
+            "urlopen",
+            return_value=self._fake_response({"response": "ok"}),
         ):
             result = sidecar.call_ollama(self._CFG, "sys", "user")
         self.assertEqual(result["response"], "ok")
 
     def test_call_ollama_http_error(self):
         err = urllib.error.HTTPError(
-            "http://h:11434/api/generate", 500, "boom", hdrs=None, fp=io.BytesIO(b"detail")
+            "http://h:11434/api/generate",
+            500,
+            "boom",
+            hdrs=None,
+            fp=io.BytesIO(b"detail"),
         )
         with mock.patch.object(sidecar.urllib.request, "urlopen", side_effect=err):
             with self.assertRaises(sidecar.OllamaError) as ctx:
@@ -330,13 +350,17 @@ class StatusDiagnosticTest(unittest.TestCase):
     def test_gather_status_reachable_with_models(self):
         def fake_get(url, timeout):
             if url.endswith("/api/tags"):
-                return {"models": [{"name": "qwen2.5-coder:14b"}, {"name": "llama3:8b"}]}
+                return {
+                    "models": [{"name": "qwen2.5-coder:14b"}, {"name": "llama3:8b"}]
+                }
             if url.endswith("/api/ps"):
                 return {"models": [{"name": "qwen2.5-coder:14b"}]}
             raise AssertionError(f"unexpected url {url}")
 
         with mock.patch.object(sidecar, "_http_get_json", side_effect=fake_get):
-            status = sidecar.gather_status("http://h:11434", "qwen2.5-coder:14b", timeout=1)
+            status = sidecar.gather_status(
+                "http://h:11434", "qwen2.5-coder:14b", timeout=1
+            )
 
         self.assertTrue(status["reachable"])
         self.assertIsNone(status["error"])
@@ -370,7 +394,9 @@ class StatusDiagnosticTest(unittest.TestCase):
         self.assertIn("not currently loaded", status["hint"])
 
     def test_gather_status_timeout_gives_cold_start_hint(self):
-        with mock.patch.object(sidecar, "_http_get_json", side_effect=TimeoutError("timed out")):
+        with mock.patch.object(
+            sidecar, "_http_get_json", side_effect=TimeoutError("timed out")
+        ):
             status = sidecar.gather_status("http://h:11434", "m1", timeout=1)
 
         self.assertFalse(status["reachable"])
@@ -388,7 +414,9 @@ class StatusDiagnosticTest(unittest.TestCase):
         self.assertIsNone(status["hint"])
 
     def test_gather_status_http_error_reported(self):
-        err = urllib.error.HTTPError("http://h:11434/api/tags", 503, "unavailable", hdrs=None, fp=None)
+        err = urllib.error.HTTPError(
+            "http://h:11434/api/tags", 503, "unavailable", hdrs=None, fp=None
+        )
         with mock.patch.object(sidecar, "_http_get_json", side_effect=err):
             status = sidecar.gather_status("http://h:11434", "m1", timeout=1)
 
@@ -444,19 +472,25 @@ class StatusDiagnosticTest(unittest.TestCase):
         with mock.patch.object(
             sidecar, "gather_status", return_value={"host": "h", "reachable": False}
         ):
-            with mock.patch.object(sidecar, "format_status_report", return_value="report"):
+            with mock.patch.object(
+                sidecar, "format_status_report", return_value="report"
+            ):
                 self.assertEqual(sidecar.cmd_status(), 1)
 
         with mock.patch.object(
             sidecar, "gather_status", return_value={"host": "h", "reachable": True}
         ):
-            with mock.patch.object(sidecar, "format_status_report", return_value="report"):
+            with mock.patch.object(
+                sidecar, "format_status_report", return_value="report"
+            ):
                 self.assertEqual(sidecar.cmd_status(), 0)
 
 
 class ValidatorsTest(unittest.TestCase):
     def test_validate_extract_json_rejects_bad_json(self):
-        ok, reason = sidecar._validate_extract_json("a\nb\nc", "not json", "out.json", "")
+        ok, reason = sidecar._validate_extract_json(
+            "a\nb\nc", "not json", "out.json", ""
+        )
         self.assertFalse(ok)
         self.assertIn("not valid JSON", reason)
 
@@ -469,7 +503,9 @@ class ValidatorsTest(unittest.TestCase):
 
     def test_validate_extract_json_rejects_gross_record_loss(self):
         input_text = "\n".join(f"line{i}" for i in range(10))
-        ok, reason = sidecar._validate_extract_json(input_text, json.dumps([{"a": 1}]), "out.json", "")
+        ok, reason = sidecar._validate_extract_json(
+            input_text, json.dumps([{"a": 1}]), "out.json", ""
+        )
         self.assertFalse(ok)
         self.assertIn("possible record loss", reason)
 
@@ -485,7 +521,9 @@ class ValidatorsTest(unittest.TestCase):
         self.assertTrue(ok)
 
     def test_validate_convert_format_csv_ragged_columns(self):
-        ok, reason = sidecar._validate_convert_format("x", "a,b\n1,2,3\n", "out.csv", "")
+        ok, reason = sidecar._validate_convert_format(
+            "x", "a,b\n1,2,3\n", "out.csv", ""
+        )
         self.assertFalse(ok)
         self.assertIn("inconsistent CSV column count", reason)
 
@@ -515,7 +553,10 @@ class ValidatorsTest(unittest.TestCase):
 
     def test_validate_redact_secrets_flags_surviving_secret(self):
         ok, reason = sidecar._validate_redact_secrets(
-            "key=sk-abcdefghijklmnopqrstuvwx", "key=sk-abcdefghijklmnopqrstuvwx", "out.txt", ""
+            "key=sk-abcdefghijklmnopqrstuvwx",
+            "key=sk-abcdefghijklmnopqrstuvwx",
+            "out.txt",
+            "",
         )
         self.assertFalse(ok)
         self.assertIn("secret-shaped pattern", reason)
@@ -528,9 +569,226 @@ class ValidatorsTest(unittest.TestCase):
         self.assertIsNone(reason)
 
     def test_validate_redact_secrets_empty_output_rejected(self):
-        ok, reason = sidecar._validate_redact_secrets("some secret text", "", "out.txt", "")
+        ok, reason = sidecar._validate_redact_secrets(
+            "some secret text", "", "out.txt", ""
+        )
         self.assertFalse(ok)
         self.assertIn("empty", reason)
+
+    # --- LLM validators for operations added for coverage (issue #113) ---
+
+    def test_validate_summarize_rejects_empty(self):
+        ok, reason = sidecar._validate_summarize("some input", "", "out.txt", "")
+        self.assertFalse(ok)
+        self.assertIn("empty", reason)
+
+    def test_validate_summarize_rejects_runaway(self):
+        ok, reason = sidecar._validate_summarize("a" * 5000, "a" * 5001, "out.txt", "")
+        self.assertFalse(ok)
+        self.assertIn("not smaller", reason)
+
+    def test_validate_summarize_accepts_normal(self):
+        ok, _ = sidecar._validate_summarize("a" * 5000, "short summary", "out.txt", "")
+        self.assertTrue(ok)
+
+    def test_validate_triage_ci_log_accepts_valid(self):
+        ok, _ = sidecar._validate_triage_ci_log(
+            "",
+            json.dumps(
+                {
+                    "verdict": "fail",
+                    "error_class": "build",
+                    "failing_step": "test",
+                    "error_excerpt": [],
+                    "summary": "build failed",
+                }
+            ),
+            "out.json",
+            "",
+        )
+        self.assertTrue(ok)
+
+    def test_validate_triage_ci_log_rejects_missing_key(self):
+        ok, reason = sidecar._validate_triage_ci_log(
+            "", '{"verdict": "fail"}', "out.json", ""
+        )
+        self.assertFalse(ok)
+        self.assertIn("missing required keys", reason)
+
+    def test_validate_summarize_test_run_accepts_valid(self):
+        ok, _ = sidecar._validate_summarize_test_run(
+            "",
+            json.dumps(
+                {
+                    "passed": 10,
+                    "failed": 2,
+                    "skipped": 0,
+                    "failure_clusters": [],
+                    "summary": "ok",
+                }
+            ),
+            "out.json",
+            "",
+        )
+        self.assertTrue(ok)
+
+    def test_validate_triage_service_log_accepts_valid(self):
+        ok, _ = sidecar._validate_triage_service_log(
+            "",
+            json.dumps(
+                {
+                    "healthy": True,
+                    "error_families": [],
+                    "anomaly_window": None,
+                    "summary": "all good",
+                }
+            ),
+            "out.json",
+            "",
+        )
+        self.assertTrue(ok)
+
+    def test_validate_digest_task_output_accepts_valid(self):
+        ok, _ = sidecar._validate_digest_task_output(
+            "",
+            json.dumps(
+                {
+                    "state": "completed",
+                    "last_action": None,
+                    "blockers": [],
+                    "summary": "done",
+                }
+            ),
+            "out.json",
+            "",
+        )
+        self.assertTrue(ok)
+
+    def test_validate_digest_review_comments_accepts_valid(self):
+        ok, _ = sidecar._validate_digest_review_comments(
+            "",
+            json.dumps(
+                {"actionable": [], "nits": [], "questions": [], "summary": "lgtm"}
+            ),
+            "out.json",
+            "",
+        )
+        self.assertTrue(ok)
+
+    def test_validate_security_scan_digest_accepts_valid(self):
+        ok, _ = sidecar._validate_security_scan_digest(
+            "",
+            json.dumps(
+                {
+                    "critical": [],
+                    "high": [],
+                    "lower_count": 0,
+                    "fixable": [],
+                    "summary": "clean",
+                }
+            ),
+            "out.json",
+            "",
+        )
+        self.assertTrue(ok)
+
+    def test_validate_draft_commit_message_accepts_conventional(self):
+        ok, _ = sidecar._validate_draft_commit_message(
+            "diff", "fix: repair the broken thing\n\nIt was broken.", "out.txt", ""
+        )
+        self.assertTrue(ok)
+
+    def test_validate_draft_commit_message_rejects_empty(self):
+        ok, reason = sidecar._validate_draft_commit_message("diff", "", "out.txt", "")
+        self.assertFalse(ok)
+        self.assertIn("empty", reason)
+
+    def test_validate_draft_commit_message_rejects_code_fence(self):
+        ok, reason = sidecar._validate_draft_commit_message(
+            "diff", "```\nfix: thing\n```", "out.txt", ""
+        )
+        self.assertFalse(ok)
+        self.assertIn("code fence", reason)
+
+    def test_validate_draft_pr_body_accepts_valid(self):
+        ok, _ = sidecar._validate_draft_pr_body(
+            "diff",
+            "## Summary\nWhat I did.\n\n## Changes\n- fixed a thing",
+            "out.md",
+            "",
+        )
+        self.assertTrue(ok)
+
+    def test_validate_draft_pr_body_rejects_missing_sections(self):
+        ok, reason = sidecar._validate_draft_pr_body(
+            "diff", "no sections here", "out.md", ""
+        )
+        self.assertFalse(ok)
+        self.assertIn("## Summary", reason)
+
+    def test_validate_changelog_from_commits_accepts_valid(self):
+        ok, _ = sidecar._validate_changelog_from_commits(
+            "log", "- added a feature\n- fixed a bug\n", "out.md", ""
+        )
+        self.assertTrue(ok)
+
+    def test_validate_changelog_from_commits_rejects_no_bullets(self):
+        ok, reason = sidecar._validate_changelog_from_commits(
+            "log", "just a paragraph\n", "out.md", ""
+        )
+        self.assertFalse(ok)
+        self.assertIn("no markdown bullet", reason)
+
+    def test_validate_html_extract_accepts_nonempty(self):
+        ok, _ = sidecar._validate_html_extract(
+            "<div>x</div>", "extracted data", "out.txt", "find x"
+        )
+        self.assertTrue(ok)
+
+    def test_validate_html_extract_rejects_empty(self):
+        ok, reason = sidecar._validate_html_extract(
+            "<div>x</div>", "", "out.txt", "find x"
+        )
+        self.assertFalse(ok)
+        self.assertIn("empty", reason)
+
+    def test_validate_describe_image_accepts_nonempty(self):
+        ok, _ = sidecar._validate_describe_image(
+            "", "A screenshot of a button", "out.txt", ""
+        )
+        self.assertTrue(ok)
+
+    def test_validate_describe_image_rejects_empty(self):
+        ok, reason = sidecar._validate_describe_image("", "", "out.txt", "")
+        self.assertFalse(ok)
+        self.assertIn("empty", reason)
+
+    def test_validate_verify_screenshot_accepts_valid(self):
+        ok, _ = sidecar._validate_verify_screenshot(
+            "",
+            json.dumps({"pass": True, "observed": "button is blue", "mismatches": []}),
+            "out.json",
+            "button is blue",
+        )
+        self.assertTrue(ok)
+
+    def test_validate_verify_screenshot_rejects_missing_pass(self):
+        ok, reason = sidecar._validate_verify_screenshot(
+            "", '{"observed": "x"}', "out.json", ""
+        )
+        self.assertFalse(ok)
+        self.assertIn("boolean", reason)
+
+    def test_validate_pdf_to_structured_accepts_json(self):
+        ok, _ = sidecar._validate_pdf_to_structured(
+            "", '{"pages": [{"text": "hello"}]}', "out.json", ""
+        )
+        self.assertTrue(ok)
+
+    def test_validate_pdf_to_structured_rejects_bad_json(self):
+        ok, reason = sidecar._validate_pdf_to_structured("", "not json", "out.json", "")
+        self.assertFalse(ok)
+        self.assertIn("not valid JSON", reason)
 
 
 class DeterministicOperationsTest(unittest.TestCase):
@@ -539,7 +797,9 @@ class DeterministicOperationsTest(unittest.TestCase):
         self.assertEqual(out, b"a\nb\nc\n")
 
     def test_dedupe_lines_case_insensitive(self):
-        out = sidecar._det_dedupe_lines(b"A\na\nb\n", {"case_insensitive": True}, "", "out.txt")
+        out = sidecar._det_dedupe_lines(
+            b"A\na\nb\n", {"case_insensitive": True}, "", "out.txt"
+        )
         self.assertEqual(out, b"A\nb\n")
 
     def test_val_dedupe_lines_rejects_line_growth(self):
@@ -566,13 +826,19 @@ class DeterministicOperationsTest(unittest.TestCase):
 
     def test_filter_lines_include(self):
         out = sidecar._det_filter_lines(
-            b"apple\nbanana\navocado\n", {"pattern": "a", "mode": "include"}, "", "out.txt"
+            b"apple\nbanana\navocado\n",
+            {"pattern": "a", "mode": "include"},
+            "",
+            "out.txt",
         )
         self.assertEqual(out, b"apple\nbanana\navocado\n")
 
     def test_filter_lines_exclude(self):
         out = sidecar._det_filter_lines(
-            b"apple\nbanana\ncherry\n", {"pattern": "an", "mode": "exclude"}, "", "out.txt"
+            b"apple\nbanana\ncherry\n",
+            {"pattern": "an", "mode": "exclude"},
+            "",
+            "out.txt",
         )
         self.assertEqual(out, b"apple\ncherry\n")
 
@@ -582,11 +848,15 @@ class DeterministicOperationsTest(unittest.TestCase):
 
     def test_filter_lines_invalid_mode(self):
         with self.assertRaises(sidecar.SidecarError):
-            sidecar._det_filter_lines(b"a\n", {"pattern": "a", "mode": "bogus"}, "", "out.txt")
+            sidecar._det_filter_lines(
+                b"a\n", {"pattern": "a", "mode": "bogus"}, "", "out.txt"
+            )
 
     def test_filter_lines_invalid_regex(self):
         with self.assertRaises(sidecar.SidecarError):
-            sidecar._det_filter_lines(b"a\n", {"pattern": "(", "regex": True}, "", "out.txt")
+            sidecar._det_filter_lines(
+                b"a\n", {"pattern": "(", "regex": True}, "", "out.txt"
+            )
 
     def test_filter_lines_context(self):
         out = sidecar._det_filter_lines(
@@ -625,7 +895,9 @@ class DeterministicOperationsTest(unittest.TestCase):
             sidecar._det_hash_file(b"hello", {"algorithm": "crc32"}, "", "out.json")
 
     def test_strip_ansi_codes(self):
-        out = sidecar._det_strip_ansi_codes(b"\x1b[31mred\x1b[0m plain", {}, "", "out.txt")
+        out = sidecar._det_strip_ansi_codes(
+            b"\x1b[31mred\x1b[0m plain", {}, "", "out.txt"
+        )
         self.assertEqual(out, b"red plain")
 
     def test_normalize_log_timestamps_us_style(self):
@@ -635,17 +907,23 @@ class DeterministicOperationsTest(unittest.TestCase):
         self.assertIn(b"2023-10-10T13:55:36", out)
 
     def test_normalize_log_timestamps_unrecognized_passes_through(self):
-        out = sidecar._det_normalize_log_timestamps(b"no timestamp here\n", {}, "", "out.txt")
+        out = sidecar._det_normalize_log_timestamps(
+            b"no timestamp here\n", {}, "", "out.txt"
+        )
         self.assertEqual(out, b"no timestamp here\n")
 
     def test_extract_field_list_from_json(self):
         input_bytes = json.dumps([{"a": 1, "b": 2}, {"a": 3, "b": 4}]).encode("utf-8")
-        out = sidecar._det_extract_field_list(input_bytes, {"fields": ["a"]}, "", "out.json")
+        out = sidecar._det_extract_field_list(
+            input_bytes, {"fields": ["a"]}, "", "out.json"
+        )
         self.assertEqual(json.loads(out), [{"a": 1}, {"a": 3}])
 
     def test_extract_field_list_from_csv_to_csv(self):
         input_bytes = b"a,b\n1,2\n3,4\n"
-        out = sidecar._det_extract_field_list(input_bytes, {"fields": ["a"]}, "", "out.csv")
+        out = sidecar._det_extract_field_list(
+            input_bytes, {"fields": ["a"]}, "", "out.csv"
+        )
         self.assertEqual(out.decode("utf-8").strip().splitlines(), ["a", "1", "3"])
 
     def test_extract_field_list_requires_fields(self):
@@ -681,6 +959,145 @@ class DeterministicOperationsTest(unittest.TestCase):
     def test_plist_to_json_invalid_raises(self):
         with self.assertRaises(sidecar.SidecarError):
             sidecar._det_plist_to_json(b"not a plist", {}, "", "out.json")
+
+    # --- operation coverage additions (issue #113) ---
+
+    def test_slice_lines_head(self):
+        out = sidecar._det_slice_lines(b"1\n2\n3\n4\n5\n", {"head": 2}, "", "out.txt")
+        self.assertEqual(out, b"1\n2\n")
+
+    def test_slice_lines_tail(self):
+        out = sidecar._det_slice_lines(b"1\n2\n3\n4\n5\n", {"tail": 2}, "", "out.txt")
+        self.assertEqual(out, b"4\n5\n")
+
+    def test_slice_lines_range(self):
+        out = sidecar._det_slice_lines(
+            b"1\n2\n3\n4\n5\n", {"start": 2, "end": 4}, "", "out.txt"
+        )
+        self.assertEqual(out, b"2\n3\n4\n")
+
+    def test_slice_lines_invalid_mode_raises(self):
+        with self.assertRaises(sidecar.SidecarError):
+            sidecar._det_slice_lines(b"a\n", {"head": 1, "tail": 1}, "", "out.txt")
+
+    def test_regex_replace_basic(self):
+        out = sidecar._det_regex_replace(
+            b"hello world", {"pattern": "world", "replacement": "earth"}, "", "out.txt"
+        )
+        self.assertEqual(out, b"hello earth")
+
+    def test_regex_replace_case_insensitive(self):
+        out = sidecar._det_regex_replace(
+            b"HELLO World",
+            {"pattern": "world", "replacement": "earth", "case_insensitive": True},
+            "",
+            "out.txt",
+        )
+        self.assertEqual(out, b"HELLO earth")
+
+    def test_regex_replace_missing_pattern_raises(self):
+        with self.assertRaises(sidecar.SidecarError):
+            sidecar._det_regex_replace(b"a", {}, "", "out.txt")
+
+    def test_regex_replace_invalid_regex_raises(self):
+        with self.assertRaises(sidecar.SidecarError):
+            sidecar._det_regex_replace(b"a", {"pattern": "("}, "", "out.txt")
+
+    def test_base64_encode_basic(self):
+        out = sidecar._det_base64_encode(b"hello", {}, "", "out.b64")
+        self.assertEqual(out.strip(), b"aGVsbG8=")
+
+    def test_val_base64_encode_roundtrip(self):
+        ok, _ = sidecar._val_base64_encode(b"hello", b"aGVsbG8=\n", "out.b64", {})
+        self.assertTrue(ok)
+
+    def test_val_base64_encode_mismatch_rejected(self):
+        ok, reason = sidecar._val_base64_encode(b"hello", b"d29ybGQ=\n", "out.b64", {})
+        self.assertFalse(ok)
+
+    def test_text_stats(self):
+        out = sidecar._det_text_stats(b"hello world\nfoo bar\n", {}, "", "out.json")
+        obj = json.loads(out)
+        self.assertEqual(obj["lines"], 2)
+        self.assertEqual(obj["words"], 4)
+        self.assertEqual(obj["bytes"], 20)
+
+    def test_jsonl_to_json(self):
+        out = sidecar._det_jsonl_to_json(b'{"a":1}\n{"b":2}\n', {}, "", "out.json")
+        self.assertEqual(json.loads(out), [{"a": 1}, {"b": 2}])
+
+    def test_jsonl_to_json_empty_raises(self):
+        with self.assertRaises(sidecar.SidecarError):
+            sidecar._det_jsonl_to_json(b"\n", {}, "", "out.json")
+
+    def test_json_to_jsonl(self):
+        out = sidecar._det_json_to_jsonl(b'[{"a":1},{"b":2}]', {}, "", "out.jsonl")
+        self.assertEqual(out.strip().split(b"\n"), [b'{"a":1}', b'{"b":2}'])
+
+    def test_csv_to_json(self):
+        out = sidecar._det_csv_to_json(b"a,b\n1,2\n3,4\n", {}, "", "out.json")
+        self.assertEqual(json.loads(out), [{"a": "1", "b": "2"}, {"a": "3", "b": "4"}])
+
+    def test_csv_to_json_with_bom(self):
+        out = sidecar._det_csv_to_json(b"\xef\xbb\xbfa,b\n1,2\n", {}, "", "out.json")
+        self.assertEqual(json.loads(out), [{"a": "1", "b": "2"}])
+
+    def test_json_to_csv(self):
+        out = sidecar._det_json_to_csv(
+            b'[{"a": 1, "b": 2}, {"a": 3, "b": 4}]', {}, "", "out.csv"
+        )
+        lines = out.decode().strip().split("\r\n" if "\r\n" in out.decode() else "\n")
+        self.assertEqual(len(lines), 3)  # header + 2 rows
+        self.assertIn("a,b", lines[0] or "a,b")
+
+    def test_json_to_csv_with_fields(self):
+        out = sidecar._det_json_to_csv(
+            b'[{"a":1,"b":2}]', {"fields": ["b"]}, "", "out.csv"
+        )
+        lines = out.decode().strip().split("\r\n" if "\r\n" in out.decode() else "\n")
+        self.assertEqual(len(lines), 2)
+        self.assertIn("b", lines[0])
+
+    def test_xml_to_json(self):
+        out = sidecar._det_xml_to_json(
+            b"<root><name>x</name></root>", {}, "", "out.json"
+        )
+        self.assertEqual(json.loads(out), {"root": {"name": "x"}})
+
+    def test_xml_to_json_refuses_doctype(self):
+        with self.assertRaises(sidecar.SidecarError):
+            sidecar._det_xml_to_json(b"<!DOCTYPE foo><root/>", {}, "", "out.json")
+
+    def test_html_to_text(self):
+        out = sidecar._det_html_to_text(
+            b"<html><body><p>hello</p><p>world</p><script>evil()</script></body></html>",
+            {},
+            "",
+            "out.txt",
+        )
+        text = out.decode().strip()
+        self.assertIn("hello", text)
+        self.assertIn("world", text)
+        self.assertNotIn("evil", text)
+
+    def test_json_digest(self):
+        out = sidecar._det_json_digest(
+            b'{"a": 1, "b": [true, false]}', {}, "", "out.json"
+        )
+        obj = json.loads(out)
+        self.assertEqual(obj["top_level_type"], "dict")
+        self.assertIn("schema", obj)
+
+    def test_json_digest_invalid_input_raises(self):
+        with self.assertRaises(sidecar.SidecarError):
+            sidecar._det_json_digest(b"{not json", {}, "", "out.json")
+
+    def test_toml_to_json_smoke(self):
+        # tomllib is Python 3.11+; skip on older interpreters
+        if sidecar.tomllib is None:
+            self.skipTest("tomllib not available on this Python version")
+        out = sidecar._det_toml_to_json(b'[table]\nkey = "val"\n', {}, "", "out.json")
+        self.assertEqual(json.loads(out), {"table": {"key": "val"}})
 
 
 class SqliteDumpTest(unittest.TestCase):
@@ -720,7 +1137,9 @@ class SqliteDumpTest(unittest.TestCase):
             conn.commit()
             conn.close()
 
-            out = sidecar._det_sqlite_dump_to_json(db_path, {"tables": ["a"]}, "", "out.json")
+            out = sidecar._det_sqlite_dump_to_json(
+                db_path, {"tables": ["a"]}, "", "out.json"
+            )
             data = json.loads(out)
             self.assertEqual(list(data.keys()), ["a"])
 
@@ -759,7 +1178,11 @@ class HandleProcessLocalFileTest(unittest.TestCase):
     def test_deterministic_operation_success_roundtrip(self):
         self._write("in.txt", "b\na\nb\n")
         result = sidecar.handle_process_local_file(
-            {"operation": "dedupe_lines", "input_path": "in.txt", "output_path": "out.txt"}
+            {
+                "operation": "dedupe_lines",
+                "input_path": "in.txt",
+                "output_path": "out.txt",
+            }
         )
         self.assertEqual(result["status"], "success")
         with open(os.path.join(self.root, "out.txt")) as f:
@@ -772,7 +1195,11 @@ class HandleProcessLocalFileTest(unittest.TestCase):
         # instead, which is the more common real path, so exercise it here.
         self._write("in.txt", "not-valid-base64!!!")
         result = sidecar.handle_process_local_file(
-            {"operation": "base64_decode", "input_path": "in.txt", "output_path": "out.bin"}
+            {
+                "operation": "base64_decode",
+                "input_path": "in.txt",
+                "output_path": "out.bin",
+            }
         )
         self.assertEqual(result["status"], "error")
         self.assertIn("not valid base64", result["reason"])
@@ -780,7 +1207,11 @@ class HandleProcessLocalFileTest(unittest.TestCase):
     def test_convert_format_rejects_unsupported_extension_up_front(self):
         self._write("in.txt", "a,b\n1,2\n")
         result = sidecar.handle_process_local_file(
-            {"operation": "convert_format", "input_path": "in.txt", "output_path": "out.yaml"}
+            {
+                "operation": "convert_format",
+                "input_path": "in.txt",
+                "output_path": "out.yaml",
+            }
         )
         self.assertEqual(result["status"], "error")
         self.assertIn("unsupported target format", result["reason"])
@@ -789,17 +1220,28 @@ class HandleProcessLocalFileTest(unittest.TestCase):
         self._write("in.txt", "a\nb\na\n")
         self._write("out.txt", "existing")
         result = sidecar.handle_process_local_file(
-            {"operation": "dedupe_lines", "input_path": "in.txt", "output_path": "out.txt"}
+            {
+                "operation": "dedupe_lines",
+                "input_path": "in.txt",
+                "output_path": "out.txt",
+            }
         )
         self.assertEqual(result["status"], "success")
         self.assertTrue(result["output_path"].endswith("out.txt.new"))
 
     def test_llm_operation_calls_ollama_and_validates(self):
         self._write("in.txt", "line one\nline two\n")
-        fake_result = {"response": json.dumps([{"a": 1}, {"a": 2}]), "done_reason": "stop"}
+        fake_result = {
+            "response": json.dumps([{"a": 1}, {"a": 2}]),
+            "done_reason": "stop",
+        }
         with mock.patch.object(sidecar, "call_ollama", return_value=fake_result):
             result = sidecar.handle_process_local_file(
-                {"operation": "extract_json", "input_path": "in.txt", "output_path": "out.json"}
+                {
+                    "operation": "extract_json",
+                    "input_path": "in.txt",
+                    "output_path": "out.json",
+                }
             )
         self.assertEqual(result["status"], "success")
 
@@ -808,7 +1250,11 @@ class HandleProcessLocalFileTest(unittest.TestCase):
         fake_result = {"response": "{}", "done_reason": "length"}
         with mock.patch.object(sidecar, "call_ollama", return_value=fake_result):
             result = sidecar.handle_process_local_file(
-                {"operation": "extract_json", "input_path": "in.txt", "output_path": "out.json"}
+                {
+                    "operation": "extract_json",
+                    "input_path": "in.txt",
+                    "output_path": "out.json",
+                }
             )
         self.assertEqual(result["status"], "error")
         self.assertIn("done_reason", result["reason"])
@@ -816,10 +1262,16 @@ class HandleProcessLocalFileTest(unittest.TestCase):
     def test_llm_operation_ollama_error_surfaces(self):
         self._write("in.txt", "line one\n")
         with mock.patch.object(
-            sidecar, "call_ollama", side_effect=sidecar.OllamaError("could not reach ollama")
+            sidecar,
+            "call_ollama",
+            side_effect=sidecar.OllamaError("could not reach ollama"),
         ):
             result = sidecar.handle_process_local_file(
-                {"operation": "extract_json", "input_path": "in.txt", "output_path": "out.json"}
+                {
+                    "operation": "extract_json",
+                    "input_path": "in.txt",
+                    "output_path": "out.json",
+                }
             )
         self.assertEqual(result["status"], "error")
         self.assertIn("could not reach ollama", result["reason"])
@@ -828,7 +1280,11 @@ class HandleProcessLocalFileTest(unittest.TestCase):
         self._write("in.txt", "x" * 1000)
         with mock.patch.dict(os.environ, {"OLLAMA_NUM_CTX": "64"}):
             result = sidecar.handle_process_local_file(
-                {"operation": "extract_json", "input_path": "in.txt", "output_path": "out.json"}
+                {
+                    "operation": "extract_json",
+                    "input_path": "in.txt",
+                    "output_path": "out.json",
+                }
             )
         self.assertEqual(result["status"], "error")
         self.assertIn("too large for the current context budget", result["reason"])
@@ -838,7 +1294,11 @@ class HandleProcessLocalFileTest(unittest.TestCase):
         fake_result = {"response": "not json at all", "done_reason": "stop"}
         with mock.patch.object(sidecar, "call_ollama", return_value=fake_result):
             result = sidecar.handle_process_local_file(
-                {"operation": "extract_json", "input_path": "in.txt", "output_path": "out.json"}
+                {
+                    "operation": "extract_json",
+                    "input_path": "in.txt",
+                    "output_path": "out.json",
+                }
             )
         self.assertEqual(result["status"], "error")
         self.assertIn("failed validation", result["reason"])
@@ -847,7 +1307,11 @@ class HandleProcessLocalFileTest(unittest.TestCase):
     def test_merge_files_requires_two_or_more_inputs(self):
         self._write("a.txt", "a")
         result = sidecar.handle_process_local_file(
-            {"operation": "merge_files", "input_paths": ["a.txt"], "output_path": "out.txt"}
+            {
+                "operation": "merge_files",
+                "input_paths": ["a.txt"],
+                "output_path": "out.txt",
+            }
         )
         self.assertEqual(result["status"], "error")
         self.assertIn("at least 2", result["reason"])
@@ -902,15 +1366,179 @@ class HandleProcessLocalFileTest(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertIn("existing directory", result["reason"])
 
+    # --- media operation routing (issue #113) ---
+
+    def test_media_operation_rejects_local_tier(self):
+        """describe_image has media=True and needs an agy tier for vision."""
+        self._write("in.jpg", "fake image bytes")
+        result = sidecar.handle_process_local_file(
+            {
+                "operation": "describe_image",
+                "input_path": "in.jpg",
+                "output_path": "out.txt",
+                "tier": "deep",
+            }
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("needs a vision model", result["reason"])
+
+    def test_media_operation_accepts_flash_without_tier(self):
+        """media ops default to flash tier, so omitting tier should not reject."""
+        self._write("in.jpg", "fake image bytes")
+        # The call should get past the tier check to the quota gate (which
+        # needs a live agy) or the input-empty check. Since our test env has
+        # no real agy and a 0-byte test env doesn't have a real agy binary,
+        # the actual agy call will fail — but we're testing the routing, not
+        # the call itself. Mock call_agy to return a valid response.
+        with mock.patch.object(sidecar, "call_agy", return_value="An image of a cat."):
+            with mock.patch.object(
+                sidecar, "check_cloud_budget", return_value=(True, None, {})
+            ):
+                result = sidecar.handle_process_local_file(
+                    {
+                        "operation": "describe_image",
+                        "input_path": "in.jpg",
+                        "output_path": "out.txt",
+                    }
+                )
+        self.assertEqual(result["status"], "success")
+
+    def test_media_operation_accepts_pro_tier(self):
+        self._write("in.jpg", "fake image bytes")
+        with mock.patch.object(sidecar, "call_agy", return_value="An image of a cat."):
+            with mock.patch.object(
+                sidecar, "check_cloud_budget", return_value=(True, None, {})
+            ):
+                result = sidecar.handle_process_local_file(
+                    {
+                        "operation": "describe_image",
+                        "input_path": "in.jpg",
+                        "output_path": "out.txt",
+                        "tier": "pro",
+                    }
+                )
+        self.assertEqual(result["status"], "success")
+
+    def test_media_operation_empty_input_rejected(self):
+        self._write("in.jpg", "")  # empty file
+        result = sidecar.handle_process_local_file(
+            {
+                "operation": "describe_image",
+                "input_path": "in.jpg",
+                "output_path": "out.txt",
+            }
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("empty", result["reason"])
+
+    # --- LLM tier routing (issue #113) ---
+
+    def test_llm_operation_rejects_invalid_tier(self):
+        self._write("in.txt", "some text\n")
+        result = sidecar.handle_process_local_file(
+            {
+                "operation": "extract_json",
+                "input_path": "in.txt",
+                "output_path": "out.json",
+                "tier": "bogus_tier",
+            }
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("tier must be one of", result["reason"])
+
+    def test_llm_operation_requires_instruction_enforced(self):
+        """html_extract has requires_instruction=True — empty instruction is rejected."""
+        self._write("in.txt", "<div>content</div>")
+        result = sidecar.handle_process_local_file(
+            {
+                "operation": "html_extract",
+                "input_path": "in.txt",
+                "output_path": "out.txt",
+            }
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("requires an instruction", result["reason"])
+
+    def test_verify_screenshot_requires_instruction(self):
+        """verify_screenshot has requires_instruction=True."""
+        self._write("in.jpg", "fake image bytes")
+        result = sidecar.handle_process_local_file(
+            {
+                "operation": "verify_screenshot",
+                "input_path": "in.jpg",
+                "output_path": "out.json",
+            }
+        )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("requires an instruction", result["reason"])
+
+    def test_cloud_quota_gate_rejected_before_agy_call(self):
+        """A cloud operation with exhausted budget must reject before spawning agy."""
+        self._write("in.txt", "some text\n")
+        with mock.patch.object(
+            sidecar,
+            "check_cloud_budget",
+            return_value=(False, "budget exhausted", {"5h": 60, "week": 600}),
+        ):
+            result = sidecar.handle_process_local_file(
+                {
+                    "operation": "extract_json",
+                    "input_path": "in.txt",
+                    "output_path": "out.json",
+                    "tier": "flash",
+                }
+            )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("budget exhausted", result["reason"])
+        self.assertEqual(result.get("quota_caps"), {"5h": 60, "week": 600})
+
+    def test_llm_ollama_unreachable_failover(self):
+        """When one local tier is unreachable and the other is a different host,
+        the handler fails over."""
+        self._write("in.txt", "line one\nline two\n")
+        fake_result = {
+            "response": json.dumps([{"a": 1}, {"a": 2}]),
+            "done_reason": "stop",
+        }
+
+        # First call (deep) fails unreachable; second (fast) succeeds
+        call_count = [0]
+
+        def fake_call(cfg, sys_prompt, user_prompt):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise sidecar.OllamaError("could not reach ollama", unreachable=True)
+            return fake_result
+
+        with mock.patch.dict(
+            os.environ, {"OLLAMA_FAST_HOST": "http://different:11434"}
+        ):
+            with mock.patch.object(sidecar, "call_ollama", side_effect=fake_call):
+                result = sidecar.handle_process_local_file(
+                    {
+                        "operation": "extract_json",
+                        "input_path": "in.txt",
+                        "output_path": "out.json",
+                    }
+                )
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result.get("fell_back_from"), "deep")
+
 
 class RpcTransportTest(unittest.TestCase):
     def test_initialize_returns_fixed_protocol_version(self):
-        response = sidecar.handle_message({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-        self.assertEqual(response["result"]["protocolVersion"], sidecar.MCP_PROTOCOL_VERSION)
+        response = sidecar.handle_message(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+        )
+        self.assertEqual(
+            response["result"]["protocolVersion"], sidecar.MCP_PROTOCOL_VERSION
+        )
         self.assertEqual(response["result"]["serverInfo"]["name"], sidecar.SERVER_NAME)
 
     def test_notifications_initialized_returns_none(self):
-        response = sidecar.handle_message({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        response = sidecar.handle_message(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"}
+        )
         self.assertIsNone(response)
 
     def test_ping(self):
@@ -918,7 +1546,9 @@ class RpcTransportTest(unittest.TestCase):
         self.assertEqual(response["result"], {})
 
     def test_tools_list_returns_tool_definition(self):
-        response = sidecar.handle_message({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+        response = sidecar.handle_message(
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}
+        )
         tools = response["result"]["tools"]
         self.assertEqual(tools[0]["name"], "process_local_file")
 
@@ -935,11 +1565,15 @@ class RpcTransportTest(unittest.TestCase):
         self.assertEqual(response["error"]["code"], -32602)
 
     def test_unknown_method_with_id_errors(self):
-        response = sidecar.handle_message({"jsonrpc": "2.0", "id": 5, "method": "bogus/method"})
+        response = sidecar.handle_message(
+            {"jsonrpc": "2.0", "id": 5, "method": "bogus/method"}
+        )
         self.assertEqual(response["error"]["code"], -32601)
 
     def test_unknown_notification_without_id_returns_none(self):
-        response = sidecar.handle_message({"jsonrpc": "2.0", "method": "bogus/notification"})
+        response = sidecar.handle_message(
+            {"jsonrpc": "2.0", "method": "bogus/notification"}
+        )
         self.assertIsNone(response)
 
     def test_tools_call_wraps_handler_error_status(self):
@@ -966,7 +1600,12 @@ if __name__ == "__main__":
 class CloudTierResolutionTest(unittest.TestCase):
     def test_flash_defaults(self):
         with mock.patch.dict(os.environ, {}, clear=False):
-            for var in ("AGY_BIN", "AGY_FLASH_MODEL", "AGY_FLASH_PER_5H", "AGY_FLASH_PER_WEEK"):
+            for var in (
+                "AGY_BIN",
+                "AGY_FLASH_MODEL",
+                "AGY_FLASH_PER_5H",
+                "AGY_FLASH_PER_WEEK",
+            ):
                 os.environ.pop(var, None)
             cfg = sidecar.resolve_tier("flash")
         self.assertEqual(cfg["engine"], "agy")
@@ -1002,7 +1641,9 @@ class QuotaGateTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.state_path = os.path.join(self.tmp.name, "quota.json")
-        self.env_patch = mock.patch.dict(os.environ, {"AGY_QUOTA_STATE": self.state_path})
+        self.env_patch = mock.patch.dict(
+            os.environ, {"AGY_QUOTA_STATE": self.state_path}
+        )
         self.env_patch.start()
         self.cfg = {
             "tier": "flash",
@@ -1020,7 +1661,9 @@ class QuotaGateTest(unittest.TestCase):
 
     def _seed(self, timestamps, lockouts=None):
         with open(self.state_path, "w") as f:
-            json.dump({"calls": {"TestFlash": timestamps}, "lockouts": lockouts or {}}, f)
+            json.dump(
+                {"calls": {"TestFlash": timestamps}, "lockouts": lockouts or {}}, f
+            )
 
     def test_allows_under_cap(self):
         import time as _time
@@ -1149,7 +1792,9 @@ class CallAgyTest(unittest.TestCase):
 
     def test_inline_success_and_argv_shape(self):
         with mock.patch.object(sidecar.shutil, "which", return_value="/usr/bin/agy"):
-            with mock.patch.object(sidecar.subprocess, "run", return_value=self._proc("OUT")) as run:
+            with mock.patch.object(
+                sidecar.subprocess, "run", return_value=self._proc("OUT")
+            ) as run:
                 out = sidecar.call_agy(self.cfg, "sys prompt", input_text="the data")
         self.assertEqual(out, "OUT")
         argv = run.call_args[0][0]
@@ -1171,11 +1816,15 @@ class CallAgyTest(unittest.TestCase):
         with open(src, "w") as f:
             f.write("data")
         with mock.patch.object(sidecar.shutil, "which", return_value="/usr/bin/agy"):
-            with mock.patch.object(sidecar.subprocess, "run", return_value=self._proc("OUT")) as run:
+            with mock.patch.object(
+                sidecar.subprocess, "run", return_value=self._proc("OUT")
+            ) as run:
                 sidecar.call_agy(self.cfg, "sys", input_path=src)
         argv = run.call_args[0][0]
         add_dir = argv[argv.index("--add-dir") + 1]
-        self.assertNotEqual(os.path.realpath(add_dir), os.path.realpath(os.path.dirname(src)))
+        self.assertNotEqual(
+            os.path.realpath(add_dir), os.path.realpath(os.path.dirname(src))
+        )
         prompt = argv[argv.index("--print") + 1]
         self.assertIn(os.path.join(add_dir, "big.log"), prompt)
         self.assertNotIn(src, prompt)
@@ -1184,7 +1833,9 @@ class CallAgyTest(unittest.TestCase):
 
     def test_empty_output_retries_once_then_errors_and_counts_both_spawns(self):
         with mock.patch.object(sidecar.shutil, "which", return_value="/usr/bin/agy"):
-            with mock.patch.object(sidecar.subprocess, "run", return_value=self._proc("")) as run:
+            with mock.patch.object(
+                sidecar.subprocess, "run", return_value=self._proc("")
+            ) as run:
                 with self.assertRaises(sidecar.AgyError) as ctx:
                     sidecar.call_agy(self.cfg, "sys", input_text="d")
         self.assertEqual(run.call_count, 2)
@@ -1196,7 +1847,9 @@ class CallAgyTest(unittest.TestCase):
     def test_lockout_in_output_is_recorded_and_raised(self):
         msg = "Quota exceeded. You can resume using this model at 2999-01-02T03:04:05."
         with mock.patch.object(sidecar.shutil, "which", return_value="/usr/bin/agy"):
-            with mock.patch.object(sidecar.subprocess, "run", return_value=self._proc(msg)):
+            with mock.patch.object(
+                sidecar.subprocess, "run", return_value=self._proc(msg)
+            ):
                 with self.assertRaises(sidecar.AgyError) as ctx:
                     sidecar.call_agy(self.cfg, "sys", input_text="d")
         self.assertIn("quota-locked", str(ctx.exception))
@@ -1206,7 +1859,9 @@ class CallAgyTest(unittest.TestCase):
     def test_nonzero_exit_raises(self):
         with mock.patch.object(sidecar.shutil, "which", return_value="/usr/bin/agy"):
             with mock.patch.object(
-                sidecar.subprocess, "run", return_value=self._proc("", "boom", returncode=2)
+                sidecar.subprocess,
+                "run",
+                return_value=self._proc("", "boom", returncode=2),
             ):
                 with self.assertRaises(sidecar.AgyError) as ctx:
                     sidecar.call_agy(self.cfg, "sys", input_text="d")
@@ -1255,7 +1910,11 @@ class CloudHandlerTest(unittest.TestCase):
     def test_requires_instruction_enforced(self):
         self._write("page.html", "<p>hi</p>")
         result = sidecar.handle_process_local_file(
-            {"operation": "html_extract", "input_path": "page.html", "output_path": "out.txt"}
+            {
+                "operation": "html_extract",
+                "input_path": "page.html",
+                "output_path": "out.txt",
+            }
         )
         self.assertEqual(result["status"], "error")
         self.assertIn("requires an instruction", result["reason"])
@@ -1266,7 +1925,8 @@ class CloudHandlerTest(unittest.TestCase):
         now = _time.time()
         with open(os.path.join(self.root, "quota.json"), "w") as f:
             json.dump(
-                {"calls": {"TestFlash": [now - i for i in range(200)]}, "lockouts": {}}, f
+                {"calls": {"TestFlash": [now - i for i in range(200)]}, "lockouts": {}},
+                f,
             )
         self._write("ci.log", "build failed")
 
@@ -1338,11 +1998,15 @@ class CloudHandlerTest(unittest.TestCase):
                 "passed": 3,
                 "failed": 1,
                 "skipped": None,
-                "failure_clusters": [{"cause": "AssertionError", "count": 1, "example": "nope"}],
+                "failure_clusters": [
+                    {"cause": "AssertionError", "count": 1, "example": "nope"}
+                ],
                 "summary": "One assertion failure.",
             }
         )
-        with mock.patch.object(sidecar, "call_ollama", return_value={"response": digest}) as co:
+        with mock.patch.object(
+            sidecar, "call_ollama", return_value={"response": digest}
+        ) as co:
             result = sidecar.handle_process_local_file(
                 {
                     "operation": "summarize_test_run",
@@ -1357,7 +2021,9 @@ class CloudHandlerTest(unittest.TestCase):
 
 class NewValidatorsTest(unittest.TestCase):
     def test_draft_commit_message_rejects_code_fence(self):
-        ok, reason = sidecar._validate_draft_commit_message("diff", "```\nfix: x\n```", "o", "")
+        ok, reason = sidecar._validate_draft_commit_message(
+            "diff", "```\nfix: x\n```", "o", ""
+        )
         self.assertFalse(ok)
         self.assertIn("code fence", reason)
 
@@ -1381,11 +2047,15 @@ class NewValidatorsTest(unittest.TestCase):
     def test_changelog_requires_bullets(self):
         ok, _ = sidecar._validate_changelog_from_commits("log", "prose only", "o", "")
         self.assertFalse(ok)
-        ok, _ = sidecar._validate_changelog_from_commits("log", "## Added\n- thing", "o", "")
+        ok, _ = sidecar._validate_changelog_from_commits(
+            "log", "## Added\n- thing", "o", ""
+        )
         self.assertTrue(ok)
 
     def test_verify_screenshot_requires_boolean_pass(self):
-        ok, _ = sidecar._validate_verify_screenshot("", '{"pass": "yes", "observed": "x"}', "o", "a")
+        ok, _ = sidecar._validate_verify_screenshot(
+            "", '{"pass": "yes", "observed": "x"}', "o", "a"
+        )
         self.assertFalse(ok)
         ok, _ = sidecar._validate_verify_screenshot(
             "", '{"pass": true, "observed": "login page", "mismatches": []}', "o", "a"
@@ -1453,9 +2123,7 @@ class NewDeterministicOpsTest(unittest.TestCase):
             self._make_xlsx(path)
             out = sidecar._det_xlsx_extract(path, {}, "", "out.json")
         parsed = json.loads(out)
-        self.assertEqual(
-            parsed, {"Data": [["hello", None, 42], [True, "inline"]]}
-        )
+        self.assertEqual(parsed, {"Data": [["hello", None, 42], [True, "inline"]]})
 
     def test_xlsx_extract_absolute_relationship_target(self):
         import zipfile as _zipfile
