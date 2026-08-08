@@ -16,7 +16,7 @@ jobs:
     # head to be a same-repo branch (not a fork) before granting the contents:write push.
     if: github.actor != 'github-actions[bot]' && github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Fetch full history so we can diff against the base branch
           fetch-depth: 0
