@@ -1,5 +1,12 @@
 // ape-forage.workflow.js — the deterministic fan-out for /ape:forage.
 //
+// PLATFORM ASSUMPTION — Claude Code only. This file assumes the `Workflow` tool, the
+// `agent()` fan-out primitive, and ~/.claude/workflows/ as a load path. No equivalent is
+// recorded for OpenCode or Agy (docs/platform-matrix.md), so build/generate.py excludes
+// this script from dist/ and the generated builds run the fan-out as a serial foreground
+// loop described in build/overrides/ape/. Changing the sequencing here does not change
+// that prose — update both.
+//
 // This is the canonical copy, bundled with the plugin at
 // ${CLAUDE_PLUGIN_ROOT}/scripts/ape-forage.workflow.js. The /ape:forage command
 // syncs it into the user's ~/.claude/workflows/ape-forage.js on first run (workflows

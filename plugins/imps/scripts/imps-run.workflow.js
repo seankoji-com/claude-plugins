@@ -1,5 +1,14 @@
 // imps-run.workflow.js — the free-text run's dispatch/merge/gate/review/finalize pipeline.
 //
+// PLATFORM ASSUMPTION — Claude Code only. This file assumes the `Workflow` tool, the
+// `agent()` dispatch primitive with `isolation: 'worktree'`, model pins by Claude tier
+// name, and ~/.claude/workflows/ as a load path. None of that exists on OpenCode or Agy
+// (docs/platform-matrix.md), so build/generate.py excludes this script from dist/ — see
+// build/overrides/imps/port.json's asset_exclude entry for it. The generated builds run
+// the same pipeline as a foreground prose loop from build/overrides/imps/. Keep that in
+// mind when changing the pipeline: the prose loop is a separate surface and does not
+// track edits here automatically.
+//
 // Canonical copy at ${CLAUDE_PLUGIN_ROOT}/scripts/imps-run.workflow.js. commands/imps.md
 // syncs it into ~/.claude/workflows/imps-run.js on every invocation (plugins can't ship a
 // runnable Workflow directly) and calls Workflow({scriptPath, args}) FRESH every time —
