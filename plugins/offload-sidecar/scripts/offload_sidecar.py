@@ -111,7 +111,7 @@ YQ_TIMEOUT_SECONDS = 60
 MCP_PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "offload-sidecar"
 # Kept in lockstep with plugin.json / marketplace.json.
-SERVER_VERSION = "0.3.4"
+SERVER_VERSION = "0.3.5"
 
 # --- agy (Google Antigravity CLI) engine defaults ---------------------------
 # Model names are agy's display names, exactly as `agy models` prints them.

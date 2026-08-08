@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "elephant-goldfish",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "source": "./plugins/elephant-goldfish",
       "description": "Design-doc command with a different-lineage Gemini judge, plus /elephant-goldfish:thinking — steps 1 and 2 of Rensin's process: interrogate the problem, build the rubric, emit the plan."
     },
@@ -25,19 +25,19 @@
     },
     {
       "name": "imps",
-      "version": "0.3.39",
+      "version": "0.3.40",
       "source": "./plugins/imps",
       "description": "Swarm orchestrator — decomposes tasks into parallel model-routed agents, dispatches via a real Workflow script, merges through gates and persona review. Plus /imps:imp-agency: whole-repo audit → imps-ready remediation plan."
     },
     {
       "name": "ape",
-      "version": "0.2.12",
+      "version": "0.2.13",
       "source": "./plugins/ape",
       "description": "Apes open-source repos for techniques transferable to your codebase — discovery, ranking, cloning, per-repo analysis, and synthesis run as a real Workflow script, so the orchestrator only sees the fingerprint and final recommendations."
     },
     {
       "name": "offload-sidecar",
-      "version": "0.3.4",
+      "version": "0.3.5",
       "source": "./plugins/offload-sidecar",
       "description": "MCP tool that offloads file transforms, log triage, and vision tasks so Claude passes file paths, not content — deterministic in-process where possible, else routed across local Ollama tiers (deep/fast, private) or Gemini via the agy CLI (flash/pro, budget-gated so quota exhaustion rejects up front instead of failing mid-call). Formerly ollama-sidecar."
     }
