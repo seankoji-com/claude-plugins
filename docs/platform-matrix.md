@@ -150,7 +150,9 @@ and tracks them in `~/.gemini/config/import_manifest.json`.
   file afterward did **not** propagate to the installed copy. Whole-directory copy,
   including files under non-recognized subdirectories (a `scripts/` dir alongside
   `skills/` was copied even though the install summary only reports `skills` as a
-  "processed" component — see Item 0).
+  "processed" component — see Item 0). **This is the load-bearing finding for PR 2's
+  update story ("reinstall" only makes sense if install is a real copy, not a
+  symlink) — see the re-verifiability caveat below before treating it as final.**
 - **Reinstall over an existing name:** silently overwrites, exit 0, no confirmation
   prompt and no force flag needed for a same-named reinstall.
 - **Uninstall cleanliness:** clean. `agy plugin uninstall <name>` removed both the
@@ -164,6 +166,10 @@ at measurement time but their own output was not separately captured into a ledg
 row — the plugin was uninstalled by the time this was noticed, so re-deriving would
 cost a fresh install/uninstall cycle; the conclusion itself (real copy, not symlink) is
 unambiguous from how it was tested, just not re-verifiable from this document alone.
+**Recommendation: independently re-confirm this specific finding (a two-command,
+free, ~5-second check) before PR 2's installer design relies on the "reinstall" story
+it implies** — the conclusion is very likely correct, but "very likely" is a weaker
+bar than this document's own evidence standard for a load-bearing finding.
 
 ---
 
