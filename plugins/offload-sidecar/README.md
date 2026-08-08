@@ -1,3 +1,5 @@
+<!-- PLATFORM-SUPPORT: opencode=note-only agy=note-only -->
+
 # offload-sidecar
 
 *Formerly `ollama-sidecar` — one sidecar for all offloadable work, local or cloud.*
@@ -92,6 +94,20 @@ as the fixed rules they implement.
 
 ---
 
+## Platforms
+
+| Claude Code | OpenCode | Agy |
+| --- | --- | --- |
+| native (this README), via `.mcp.json` | note-only | note-only |
+
+Not generated for OpenCode or Agy — this plugin ships no command, agent, or skill
+files to port; it's an MCP server plus a Python entrypoint, so there is nothing for
+`build/generate.py` to produce (`build/generation-manifest.json`). Per-platform MCP
+registration is documented by hand instead, below. `scripts/offload_sidecar.py` is
+untouched by cross-platform work — it's the same entrypoint on every platform. See
+[`docs/plans/cross-platform-compat.md`](../../docs/plans/cross-platform-compat.md) and
+[`docs/platform-matrix.md`](../../docs/platform-matrix.md) for how and why.
+
 ## Prerequisites
 
 - `python3` on PATH (standard library only — nothing to `pip install`; `toml_to_json`
@@ -137,6 +153,61 @@ Config (prompted at install; reconfigure later via `claude plugin` config comman
 | `agy_flash_per_week` | `600` | Flash call budget per week. |
 | `agy_pro_per_5h` | `5` | Pro call budget per 5h window. |
 | `agy_pro_per_week` | `25` | Pro call budget per week. |
+
+---
+
+## Registering on OpenCode or Agy
+
+This plugin has no OpenCode or Agy generated output (see Platforms above) —
+`scripts/offload_sidecar.py` is a standalone MCP server, so register it by hand in
+whichever platform's MCP config.
+
+### Agy — `mcp_config.json`
+
+The shape below is confirmed live against a real, already-in-use
+`~/.gemini/config/mcp_config.json` (`docs/platform-matrix.md` Item 10): a top-level
+`mcpServers` object keyed by server name, each entry a `{command, args}` stdio-server
+spec.
+
+```json
+{
+  "mcpServers": {
+    "offload-sidecar": {
+      "command": "python3",
+      "args": ["/absolute/path/to/offload-sidecar/scripts/offload_sidecar.py"],
+      "environment": {
+        "OLLAMA_HOST": "http://localhost:11434",
+        "OLLAMA_MODEL": "qwen3:14b",
+        "AGY_BIN": "agy"
+      }
+    }
+  }
+}
+```
+
+**Env-var passthrough uses the key `environment`, not `env`.** Confirmed by a
+`strings` pass over the `agy` binary matching its MCP-config struct's exact field
+names — `mcpServers`, `command`, `args`, `environment`, `headers`, `timeout` — see
+`docs/platform-matrix.md`, `## PR 2 re-verification`, token
+`ENV_PASSTHROUGH: supported:environment`. That's static-binary evidence, not a live
+round-trip confirmation, but it does mean credentials and config *can* reach the
+sidecar through Agy — set every key from the config table above that you need
+(`OLLAMA_*`, `AGY_*`, plus `SIDECAR_ROOT` if you want output paths scoped to a
+project directory other than `mcp_config.json`'s own cwd). Unlike `.mcp.json`,
+`${user_config.*}`/`${CLAUDE_PLUGIN_ROOT}` substitution is a Claude Code convention
+only — Agy needs literal, already-resolved values.
+
+### OpenCode
+
+OpenCode's own MCP server registration shape was not measured by this repo's
+platform spike — only Agy's `mcp_config.json` shape (Item 10, above) and the `agy`
+binary's env-key struct were confirmed. Check OpenCode's current docs or `opencode
+--help` for its MCP config location and schema before registering; don't assume the
+Agy `{command, args, environment}` shape above applies unmodified.
+
+Whichever platform you register on, the entrypoint itself
+(`scripts/offload_sidecar.py`) is unchanged — same file, same invocation, same
+`OLLAMA_*`/`AGY_*` env vars either config sets directly.
 
 ---
 
