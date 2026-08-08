@@ -29,11 +29,20 @@ function baseArgs(overrides = {}) {
   }
 }
 
+// The workflow may require('fs') to validate report files exist on disk. In the test
+// environment, analysis phases produce stubs, not real files — provide a permissive mock.
+const mockFs = {
+  existsSync: () => true,
+  statSync: () => ({ size: 100 }),
+  readFileSync: () => 'mock report content',
+}
+const mockRequire = (mod) => (mod === 'fs' ? mockFs : require(mod))
+
 function runWorkflow({ agent, parallel, phase, args, log }) {
   const source = fs.readFileSync(SCRIPT_PATH, 'utf8')
   const body = source.replace('export const meta', 'const meta')
   const factory = new AsyncFunction('agent', 'parallel', 'phase', 'args', 'log', 'require', body)
-  return factory(agent, parallel, phase || (() => {}), args || baseArgs(), log || (() => {}), require)
+  return factory(agent, parallel, phase || (() => {}), args || baseArgs(), log || (() => {}), mockRequire)
 }
 
 // Mirrors the real Workflow tool's parallel(): each thunk runs independently; one
