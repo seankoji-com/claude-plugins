@@ -494,7 +494,15 @@ def load_quota_state():
 def save_quota_state(state):
     """Persist cloud-tier quota state atomically. Raises SidecarError on
     write failure — shared state must be durable for quota enforcement
-    across processes to be reliable."""
+    across processes to be reliable.
+
+    NOTE: This is called *after* a successful cloud call. If the write fails
+    (disk full, permission change mid-run), the SidecarError propagates up and
+    the caller receives an error instead of the LLM response — even though the
+    cloud provider already fulfilled the request. This is deliberate fail-closed
+    behavior (AGENTS.md: 'Fail-closed beats fail-open everywhere safety-relevant').
+    Cloud-tier quota without durable state silently permits over-quota usage
+    across processes, which is a worse failure mode than one lost response."""
     path = quota_state_path()
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
