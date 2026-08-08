@@ -189,6 +189,52 @@ to police mechanically; the discipline is in what you type.
 
 ---
 
+## Slug disambiguation
+
+The project slug keys imps state files under `~/.claude/imps/runs/`. Historically
+the slug was derived from `basename "${CLAUDE_PROJECT_DIR:-$(pwd)}"` alone, which
+collides when two different repos share the same directory name (e.g.
+`~/work/proj-a/widgets` and `~/work/proj-b/widgets` both resolve to `widgets`
+and share one state file).
+
+The recommended pattern disambiguates with the remote origin:
+
+```bash
+SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
+OLD_SLUG="$SLUG"
+if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
+  OWNER_REPO=$(echo "$REMOTE_URL" \
+    | sed -E \
+      -e 's|^https?://[^/]+/||' \
+      -e 's|^git@[^:]+:||' \
+      -e 's|^ssh://[^/]+/[^/]+/||' \
+      -e 's|\.git$||' -e 's|/$||' \
+    | tr '/' '_')
+  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then
+    SLUG="${OWNER_REPO}__${SLUG}"
+  fi
+fi
+# Migration: rename old basename-only state files if they exist
+if [ "$SLUG" != "$OLD_SLUG" ] \
+  && [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.json" ] \
+  && [ ! -f "$HOME/.claude/imps/runs/$SLUG.json" ]; then
+  for ext in json md; do
+    [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" ] && \
+      mv "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" \
+         "$HOME/.claude/imps/runs/$SLUG.$ext" 2>/dev/null || true
+  done
+fi
+```
+
+This produces slugs like `seankoji__claude-plugins__claude-plugins` (owner + repo
++ basename, double-underscore separated). The migration block preserves existing
+state by renaming old-format files to the new slug on first invocation.
+
+Slug derivations throughout this file should follow this pattern. The snippet
+above is canonical — copy it whenever deriving `SLUG`.
+
+---
+
 ## Guard: resume check
 
 **This check fires on every invocation — including when `$ARGUMENTS` is empty.** An
@@ -196,7 +242,8 @@ empty invocation does NOT mean "start fresh" — it means the user may have clea
 context mid-run. Always run the guard before Phase 0.
 
 Before anything else:
-1. Derive the project slug: `basename "${CLAUDE_PROJECT_DIR:-$(pwd)}"`
+1. Derive the project slug (see **Slug disambiguation** above — use the canonical
+   snippet with remote-origin disambiguation and migration).
 2. Check whether `~/.claude/imps/runs/<slug>.json` exists.
 
 State files from other projects are independent — only the current project's file
@@ -392,6 +439,14 @@ not Bash, and does not expand `~`:
 ```sh
 mkdir -p ~/.claude/imps/runs
 SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
+OLD_SLUG="$SLUG"
+if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
+  OWNER_REPO=$(echo "$REMOTE_URL" | sed -E -e 's|^https?://[^/]+/||' -e 's|^git@[^:]+:||' -e 's|^ssh://[^/]+/[^/]+/||' -e 's|\.git$||' -e 's|/$||' | tr '/' '_')
+  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then SLUG="${OWNER_REPO}__${SLUG}"; fi
+fi
+if [ "$SLUG" != "$OLD_SLUG" ] && [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.json" ] && [ ! -f "$HOME/.claude/imps/runs/$SLUG.json" ]; then
+  for ext in json md; do [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" ] && mv "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" "$HOME/.claude/imps/runs/$SLUG.$ext" 2>/dev/null || true; done
+fi
 GOAL_PATH="$HOME/.claude/imps/runs/${SLUG}.md"
 echo "$GOAL_PATH"
 ```
@@ -496,6 +551,14 @@ default branch, the same way `commands/issue-mode.md` Phase 1 cuts its holding b
 ```sh
 mkdir -p ~/.claude/imps/runs
 SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
+OLD_SLUG="$SLUG"
+if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
+  OWNER_REPO=$(echo "$REMOTE_URL" | sed -E -e 's|^https?://[^/]+/||' -e 's|^git@[^:]+:||' -e 's|^ssh://[^/]+/[^/]+/||' -e 's|\.git$||' -e 's|/$||' | tr '/' '_')
+  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then SLUG="${OWNER_REPO}__${SLUG}"; fi
+fi
+if [ "$SLUG" != "$OLD_SLUG" ] && [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.json" ] && [ ! -f "$HOME/.claude/imps/runs/$SLUG.json" ]; then
+  for ext in json md; do [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" ] && mv "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" "$HOME/.claude/imps/runs/$SLUG.$ext" 2>/dev/null || true; done
+fi
 STATE_PATH="$HOME/.claude/imps/runs/${SLUG}.json"
 DEFAULT_BRANCH=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
 RUN_BRANCH="imps/${SLUG}-$(date -u +%Y%m%d-%H%M%S)"
@@ -654,6 +717,14 @@ first, and pass those literal echoed values (never the `~/...` form) into Step 2
 mkdir -p ~/.claude/workflows
 cp "${CLAUDE_PLUGIN_ROOT}/scripts/imps-run.workflow.js" ~/.claude/workflows/imps-run.js
 SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
+OLD_SLUG="$SLUG"
+if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
+  OWNER_REPO=$(echo "$REMOTE_URL" | sed -E -e 's|^https?://[^/]+/||' -e 's|^git@[^:]+:||' -e 's|^ssh://[^/]+/[^/]+/||' -e 's|\.git$||' -e 's|/$||' | tr '/' '_')
+  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then SLUG="${OWNER_REPO}__${SLUG}"; fi
+fi
+if [ "$SLUG" != "$OLD_SLUG" ] && [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.json" ] && [ ! -f "$HOME/.claude/imps/runs/$SLUG.json" ]; then
+  for ext in json md; do [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" ] && mv "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" "$HOME/.claude/imps/runs/$SLUG.$ext" 2>/dev/null || true; done
+fi
 WORKFLOW_DEST="$HOME/.claude/workflows/imps-run.js"
 STATE_PATH="$HOME/.claude/imps/runs/${SLUG}.json"
 GOAL_PATH="$HOME/.claude/imps/runs/${SLUG}.md"
