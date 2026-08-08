@@ -1,0 +1,37 @@
+{
+  "name": "claude-plugins-opencode",
+  "version": "0.1.0",
+  "description": "OpenCode channel installer for seankoji/claude-plugins — copies the generated commands and scripts into ~/.config/opencode.",
+  "license": "MIT",
+  "private": false,
+  "homepage": "https://github.com/seankoji/claude-plugins",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/seankoji/claude-plugins.git"
+  },
+  "bin": {
+    "claude-plugins-opencode": "bin/cli.js"
+  },
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "commands/",
+    "share/",
+    "postinstall.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "keywords": [
+    "opencode",
+    "claude-plugins"
+  ]
+}
