@@ -152,6 +152,9 @@ ollama_class="READY" # neutral default when Ollama is disabled; doesn't affect c
 if [ -n "$OLLAMA_MODEL" ]; then
   if command -v ollama >/dev/null 2>&1; then
     ollama_err="$(mktemp "${TMPDIR:-/tmp}/goldfish-ollama-err.XXXXXX")"
+    # Append to the SCRATCH trap so this file is cleaned up even on abnormal exit.
+    # (ollama_err lives outside $SCRATCH to survive a trap-fired rm -rf.)
+    trap 'rm -rf "$SCRATCH" "$ollama_err"' EXIT
     _prefix=""
     # /no_think prefix tells qwen3 and compatible models to skip their <think> block so the
     # very first output token is VERDICT:, matching the format spec. Ignored by other models.
