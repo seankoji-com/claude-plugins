@@ -1,0 +1,185 @@
+{
+  "agy": {
+    "audit_log": {
+      "canonical": "~/.claude/audit.jsonl",
+      "note": "One canonical audit log on every platform — audit-log.sh is home-relative and the schema is shared. Contract: docs/plans/cross-platform-compat.md, 'Audit log'.",
+      "protect": [
+        "$HOME/.claude/audit.jsonl",
+        "~/.claude/audit.jsonl"
+      ]
+    },
+    "command_naming": {
+      "namespace": false,
+      "note": "Each plugin installs into its own ~/.gemini/config/plugins/<name>/ directory, so skill names are not prefixed. Evidence: docs/platform-matrix.md Item 1.",
+      "separator": "-"
+    },
+    "evidence": {
+      "bundled_scripts": "docs/platform-matrix.md — PR 2 re-verification, AGY_INSTALL_MODE: copy. A non-recognized scripts/ subdirectory is copied with the plugin, so bundled helpers ship.",
+      "config_root": "docs/platform-matrix.md — Item 1. Plugins install to ~/.gemini/config/plugins/<name>/; the registry is ~/.gemini/config/import_manifest.json.",
+      "invocation": "docs/platform-matrix.md — Item 6. Skills are invoked with a /-prefixed skill name.",
+      "model_aliases": "Claude's haiku/sonnet/opus aliases name no model on either target (docs/platform-matrix.md, 'Already measured': OpenCode models are provider-scoped strings and those three names do not exist; the Agy models measured in the Ledger are differently named). Prose that names one as a routing choice is mapped to a capability description instead, so no generated artifact asks for a model that cannot resolve.",
+      "no_model_field": "Unmeasured. No matrix item establishes a per-skill model field for this platform, so none is emitted; model choice is passed at invocation (docs/platform-matrix.md Item 8 records that agy -p accepts --model).",
+      "no_version_field": "docs/plans/cross-platform-compat.md — 'Versioning'. plugin.json carries name + description only so version-bump.yml can never desync dist/.",
+      "skill_frontmatter": "docs/platform-matrix.md — 'Already measured' + Item 1. skills/*.md with name/description frontmatter become slash commands.",
+      "state_paths": "The ~/.gemini/config/ root is matrix-derived (Item 1). The per-plugin subdirectory under it is plugin-owned state — writing our own file at a path of our choosing needs no platform capability, so it is not a platform claim."
+    },
+    "label": "Antigravity CLI (agy)",
+    "layout": {
+      "asset_dirs_default": [
+        "scripts",
+        "templates"
+      ],
+      "root": "dist/agy/<plugin>",
+      "skills_dir": "skills"
+    },
+    "manifest": {
+      "fields": [
+        "name",
+        "description"
+      ],
+      "filename": "plugin.json"
+    },
+    "plugin_root_placeholder": "__PLUGIN_ROOT__",
+    "pre_replacements": [
+      {
+        "find": "AUDIT_FILE=\"${AUDIT_LOG_FILE:-$HOME/.claude/audit.jsonl}\"",
+        "replace": "AUDIT_FILE=\"${AUDIT_LOG_FILE:-}\"\n# Tilde-expanded on assignment rather than interpolating the home variable, because no\n# generated artifact may carry a machine path — see build/README.md, 'dist/ invariants'.\n[ -n \"$AUDIT_FILE\" ] || AUDIT_FILE=~/.claude/audit.jsonl",
+        "required_in": [
+          "scripts/audit-log.sh"
+        ],
+        "why": "The bundled audit logger resolves its default path from the home variable. dist/ must contain no such reference, and tilde does not expand inside a quoted ${VAR:-...} default, so the default is resolved on a separate unquoted assignment instead."
+      }
+    ],
+    "replacements": [
+      [
+        "a haiku `scout`",
+        "a cheap read-only `scout`"
+      ],
+      [
+        "${CLAUDE_PLUGIN_ROOT}",
+        "__PLUGIN_ROOT__"
+      ],
+      [
+        "$CLAUDE_PLUGIN_ROOT",
+        "__PLUGIN_ROOT__"
+      ],
+      [
+        "CLAUDE_PLUGIN_ROOT",
+        "PLUGIN_ROOT"
+      ],
+      [
+        "$HOME/.claude/",
+        "~/.gemini/config/"
+      ],
+      [
+        "~/.claude/",
+        "~/.gemini/config/"
+      ],
+      [
+        ".claude/",
+        ".agy/"
+      ]
+    ],
+    "skill_frontmatter": {
+      "drop": [
+        "allowed-tools",
+        "argument-hint",
+        "disable-model-invocation",
+        "metadata",
+        "model"
+      ],
+      "emit": [
+        "name",
+        "description"
+      ]
+    }
+  },
+  "opencode": {
+    "audit_log": {
+      "canonical": "~/.claude/audit.jsonl",
+      "note": "One canonical audit log on every platform — audit-log.sh is home-relative and the schema is shared. Contract: docs/plans/cross-platform-compat.md, 'Audit log'.",
+      "protect": [
+        "$HOME/.claude/audit.jsonl",
+        "~/.claude/audit.jsonl"
+      ]
+    },
+    "command_frontmatter": {
+      "drop": [
+        "allowed-tools",
+        "disable-model-invocation",
+        "model",
+        "name"
+      ],
+      "emit": [
+        "agent",
+        "argument-hint",
+        "description"
+      ]
+    },
+    "command_naming": {
+      "namespace": true,
+      "note": "Command files from every plugin land in one flat directory, so filenames are prefixed with the plugin name. Cross-plugin collision is an installer-level naming problem the platform does not arbitrate — docs/platform-matrix.md Item 5.",
+      "separator": "-"
+    },
+    "evidence": {
+      "command_dir": "docs/platform-matrix.md — Items 3 and 5 (measured against ~/.config/opencode/commands/) plus the reconciliation note in docs/plans/cross-platform-compat.md section 0, which records that the bundled help documents both the singular and plural directory names.",
+      "frontmatter_agent": "docs/platform-matrix.md — Item 3. agent: <name> is honored and selects the subagent type.",
+      "frontmatter_argument_hint": "docs/platform-matrix.md — Item 3. argument-hint is informational only; its runtime effect was not isolated.",
+      "model_aliases": "Claude's haiku/sonnet/opus aliases name no model on either target (docs/platform-matrix.md, 'Already measured': OpenCode models are provider-scoped strings and those three names do not exist). Prose that names one as a routing choice is mapped to a capability description instead, so no generated artifact asks for a model that cannot resolve.",
+      "no_model_field": "docs/platform-matrix.md — Item 3 measured only that Claude Code's model: convention is NOT honored; it explicitly did not rule out a differently-named OpenCode field. Emitting no model field is therefore a safe default, not a settled platform fact. Model choice is passed at invocation by the dispatch backend.",
+      "no_plugin_root": "docs/platform-matrix.md — Item 0. A binary scan of the OPENCODE_* surface found no per-invocation 'this command's own path' variable, so bundled-script paths are resolved at install time by placeholder substitution.",
+      "state_paths": "The ~/.config/opencode/ root and the project-local .opencode/ directory are matrix-derived ('Already measured' and Item 5). The per-plugin subdirectory under them is plugin-owned state — writing our own file at a path of our choosing needs no platform capability, so it is not a platform claim."
+    },
+    "label": "OpenCode",
+    "layout": {
+      "asset_dirs_default": [
+        "scripts",
+        "templates"
+      ],
+      "asset_root": "share/<plugin>",
+      "commands_dir": "commands",
+      "root": "dist/opencode"
+    },
+    "plugin_root_placeholder": "__PLUGIN_ROOT__",
+    "pre_replacements": [
+      {
+        "find": "AUDIT_FILE=\"${AUDIT_LOG_FILE:-$HOME/.claude/audit.jsonl}\"",
+        "replace": "AUDIT_FILE=\"${AUDIT_LOG_FILE:-}\"\n# Tilde-expanded on assignment rather than interpolating the home variable, because no\n# generated artifact may carry a machine path — see build/README.md, 'dist/ invariants'.\n[ -n \"$AUDIT_FILE\" ] || AUDIT_FILE=~/.claude/audit.jsonl",
+        "required_in": [
+          "scripts/audit-log.sh"
+        ],
+        "why": "The bundled audit logger resolves its default path from the home variable. dist/ must contain no such reference, and tilde does not expand inside a quoted ${VAR:-...} default, so the default is resolved on a separate unquoted assignment instead."
+      }
+    ],
+    "replacements": [
+      [
+        "a haiku `scout`",
+        "a cheap read-only `scout`"
+      ],
+      [
+        "${CLAUDE_PLUGIN_ROOT}",
+        "__PLUGIN_ROOT__"
+      ],
+      [
+        "$CLAUDE_PLUGIN_ROOT",
+        "__PLUGIN_ROOT__"
+      ],
+      [
+        "CLAUDE_PLUGIN_ROOT",
+        "PLUGIN_ROOT"
+      ],
+      [
+        "$HOME/.claude/",
+        "~/.config/opencode/"
+      ],
+      [
+        "~/.claude/",
+        "~/.config/opencode/"
+      ],
+      [
+        ".claude/",
+        ".opencode/"
+      ]
+    ]
+  }
+}
