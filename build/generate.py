@@ -63,6 +63,21 @@ FORBIDDEN_PATTERNS = (
 CLAUDE_DIR_RE = re.compile(r"\.claude/")
 AUDIT_LOG_BASENAME = "audit.jsonl"
 
+# Build byproducts that live *inside* a source tree but are not source. Without this,
+# a single `python3 plugins/elephant-goldfish/scripts/gh_publish.py` leaves a
+# __pycache__/*.pyc behind and every later `generate.py` / `dist-lint.sh` run dies on
+# "not UTF-8 text" — green on a fresh CI checkout, red on every dev box that ever ran
+# the script. Enumeration stays sorted(); this only filters.
+IGNORED_SOURCE_DIRS = frozenset({"__pycache__", ".git", "node_modules", ".pytest_cache"})
+IGNORED_SOURCE_SUFFIXES = (".pyc", ".pyo", ".pyd", ".so", ".DS_Store")
+
+
+def is_source_artifact(relative_parts: tuple[str, ...]) -> bool:
+    """True if this plugin-relative path is a build byproduct, not shippable source."""
+    if any(part in IGNORED_SOURCE_DIRS for part in relative_parts):
+        return True
+    return relative_parts[-1].endswith(IGNORED_SOURCE_SUFFIXES)
+
 SENTINEL_AUDIT = "\x00audit-%d\x00"
 SENTINEL_OVERRIDE = "\x00override-%d\x00"
 
@@ -407,7 +422,10 @@ def asset_files(plugin: str, asset_dirs, asset_exclude=None) -> list[Path]:
         for path in sorted(directory.rglob("*")):
             if not path.is_file():
                 continue
-            if path.relative_to(PLUGINS_DIR / plugin).as_posix() in excluded:
+            relative = path.relative_to(PLUGINS_DIR / plugin)
+            if is_source_artifact(relative.parts):
+                continue
+            if relative.as_posix() in excluded:
                 continue
             found.append(path)
     return found
@@ -520,8 +538,10 @@ def mirror_npm_source(outputs: dict) -> None:
     if not NPM_DIR.is_dir():
         return
     for source in sorted(path for path in NPM_DIR.rglob("*") if path.is_file()):
-        relative = source.relative_to(NPM_DIR).as_posix()
-        outputs[f"opencode/{relative}"] = (read_text(source), file_mode(source))
+        relative = source.relative_to(NPM_DIR)
+        if is_source_artifact(relative.parts):
+            continue
+        outputs[f"opencode/{relative.as_posix()}"] = (read_text(source), file_mode(source))
 
 
 # ------------------------------------------------------------------------------ output

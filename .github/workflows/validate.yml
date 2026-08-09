@@ -279,17 +279,33 @@ jobs:
   cross-platform-regen:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # fetch-depth: 0 is load-bearing, not tidiness. dist-lint.sh's frozen-sources check
+      # diffs plugins/*/{commands,agents,scripts} against origin/master; with the default
+      # shallow single-ref fetch neither origin/master nor a local master exists on a
+      # pull_request checkout, resolve_base_ref() returns 1, and the lint step fails on
+      # every PR. Matches the `validate` job's checkout above.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # dist-lint runs FIRST, against the pristine checkout. Its regen-diff invariant
+      # generates into its own mktemp and compares both directions against the *committed*
+      # dist/ — that signal is destroyed once `generate.py` has overwritten dist/ in place.
+      - name: Lint the committed dist/ (build/dist-lint.sh)
+        run: bash build/dist-lint.sh
 
       - name: Regenerate dist/ from committed sources (build/generate.py)
         run: python3 build/generate.py
 
-      - name: Lint the regenerated dist/ (build/dist-lint.sh)
-        run: bash build/dist-lint.sh
-
       - name: Fail on dist/ drift between committed and freshly generated output
         run: |
-          if ! git diff --exit-code -- dist; then
+          # git status --porcelain, not `git diff --exit-code`: a regeneration that emits a
+          # brand-new file (a new command added to plugins/, dist/ not re-committed) leaves
+          # it *untracked*, which `git diff` does not see. --porcelain reports both.
+          drift="$(git status --porcelain -- dist)"
+          if [ -n "$drift" ]; then
             echo "ERROR: dist/ is out of date. Run 'python3 build/generate.py' locally and commit the result." >&2
+            printf '%s\n' "$drift" >&2
+            git diff -- dist >&2 || true
             exit 1
           fi

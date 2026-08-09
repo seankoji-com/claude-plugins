@@ -180,10 +180,22 @@ function uninstall(opts) {
   }
 
   // Best-effort cleanup of now-empty directories, deepest first, never past prefix.
-  const dirs = [...new Set(files.map((f) => path.dirname(f)))].sort((a, b) => b.length - a.length);
+  //
+  // The climb resolves each dirname and reuses the same trailing-separator boundary test
+  // as the file guard above, rather than a bare string startsWith on the raw manifest
+  // value. Without that, a manifest entry like "<prefix>/../opencode/commands/x.md"
+  // passes the file guard (it *resolves* inside the prefix) while its unresolved dirname
+  // climbs to "<prefix>/.." — the prefix's parent. That escape is not currently
+  // reachable, but only by accident: the manifest file itself still sits in the prefix
+  // during this loop, so rmdir hits ENOTEMPTY and breaks. Moving the `fs.rmSync(mPath)`
+  // below up above this loop — an innocuous-looking reorder — would make it live. The
+  // guard is here so the fail-closed property does not depend on that ordering.
+  const dirs = [...new Set(files.map((f) => path.dirname(path.resolve(f))))].sort(
+    (a, b) => b.length - a.length
+  );
   for (const dir of dirs) {
     let cur = dir;
-    while (cur.startsWith(prefixResolved.slice(0, -1)) && cur !== prefix) {
+    while ((cur + path.sep).startsWith(prefixResolved) && cur !== prefix) {
       try {
         fs.rmdirSync(cur);
       } catch {
