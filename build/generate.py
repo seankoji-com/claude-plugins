@@ -274,6 +274,23 @@ def load_overrides(plugin: str, platform: str, kind: str) -> dict[str, Override]
 
 
 def find_section(body_lines: list[str], heading: str) -> tuple[int, int] | None:
+    """Span of the section introduced by `heading`, as [start, end).
+
+    A section ends at the next heading of ANY level, not the next sibling-or-shallower
+    one — so a `## Parent` with a `### Child` under it spans only down to that child, and
+    the child survives a REPLACE-SECTION or DROP-SECTION of the parent.
+
+    That is deliberate and load-bearing, not an oversight: 9 of the 82 section directives
+    across build/overrides/ target a section terminated by a deeper child, and each was
+    authored expecting the child to stay. The usual case is a Claude-specific parent whose
+    child is platform-agnostic and still wanted in the output (e.g. imps.md's
+    `## The Head Imp ...` and its `### Never pre-judge ...` subsection). Making this
+    depth-aware would silently start swallowing those children and change shipped output.
+
+    The gap this leaves is that an override author cannot express "replace this section
+    AND its subtree". The fix for that is a separate opt-in directive rather than a change
+    here, so no existing directive's meaning moves.
+    """
     for start, line in enumerate(body_lines):
         if line.strip() != heading:
             continue
