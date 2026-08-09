@@ -27,7 +27,26 @@ permissions:
 jobs:
   publish-npm:
     runs-on: ubuntu-latest
+    # workflow_dispatch can be re-triggered before a prior run finishes; without this,
+    # two concurrent runs could both reach `npm publish` for the same version and race.
+    # Not cancel-in-progress — an in-flight publish must be allowed to finish, not be
+    # killed mid-`npm publish`; a second dispatch queues behind it instead.
+    concurrency:
+      group: release-npm
+      cancel-in-progress: false
     steps:
+      # Fail fast, before checkout+lint spend any CI time, if the secret this job
+      # can't publish without simply isn't configured — surfaces as a plain, actionable
+      # message instead of npm's opaque ENEEDAUTH deep in the publish step.
+      - name: Verify NPM_TOKEN is configured
+        env:
+          HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "ERROR: the NPM_TOKEN repository secret is not set — publish would fail with ENEEDAUTH at the last step. Add it under Settings > Secrets and variables > Actions before dispatching this workflow." >&2
+            exit 1
+          fi
+
       # fetch-depth: 0 is load-bearing, not tidiness — dist-lint.sh's frozen-sources
       # invariant (exercised below) diffs plugins/*/{commands,agents,scripts} against
       # origin/master; a shallow single-ref checkout has neither ref and the lint step

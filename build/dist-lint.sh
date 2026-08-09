@@ -75,10 +75,26 @@ resolve_base_ref() {
 check_regen_diff() {
   local repo_root="$1" dist_under_test="$2" scope="${3:-}"
   local tmp
-  tmp="$(mktemp -d)" || return 1
+  tmp="$(mktemp -d)" || {
+    echo "regen-diff: mktemp -d failed — could not create a scratch dir to regenerate into" >&2
+    return 1
+  }
   mkdir -p "$tmp/build" "$tmp/plugins"
-  cp -R "$repo_root/build/." "$tmp/build/" 2>/dev/null
-  cp -R "$repo_root/plugins/." "$tmp/plugins/" 2>/dev/null
+  local cp_err
+  cp_err="$(cp -R "$repo_root/build/." "$tmp/build/" 2>&1 1>/dev/null)"
+  if [ -n "$cp_err" ]; then
+    echo "regen-diff: cp -R $repo_root/build/. failed:" >&2
+    echo "$cp_err" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  cp_err="$(cp -R "$repo_root/plugins/." "$tmp/plugins/" 2>&1 1>/dev/null)"
+  if [ -n "$cp_err" ]; then
+    echo "regen-diff: cp -R $repo_root/plugins/. failed:" >&2
+    echo "$cp_err" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
   rm -rf "$tmp/dist"
 
   local gen_out status=0
@@ -363,9 +379,18 @@ check_uninstall_prefix_repo() {
 # ---------------------------------------------------------------- 9. frozen-sources
 #
 # plugins/*/commands, plugins/*/agents, plugins/*/scripts stay byte-identical to the
-# comparison base except the two named workflow scripts, and even those may only change
-# in comment lines (contract, Architecture + Phase D). The only enforcement this
-# invariant gets anywhere in this run.
+# comparison base except three narrowly-scoped exceptions, each checked line-by-line so
+# the exception can never smuggle in a real behavior change:
+#   1-2. comment-only platform-assumption headers in the two named workflow scripts
+#        (contract, Architecture + Phase D).
+#   3.   the `SERVER_VERSION = "..."` line in any plugins/*/scripts/*.py, rewritten by
+#        .github/workflows/version-bump.yml on every PR that bumps that plugin's
+#        version (a pre-existing, intentional CI mechanism added in #161 to keep
+#        SERVER_VERSION from drifting from plugin.json — see AGENTS.md's "Cross-plugin
+#        audit log" section). Without this exception, that bot commit trips this check
+#        on every future PR touching such a plugin, on a diff the PR author neither
+#        introduced nor controls.
+# The only enforcement this invariant gets anywhere in this run.
 
 check_frozen_sources() {
   local root="$1" scope="${2:-}" base status=0
@@ -381,22 +406,35 @@ check_frozen_sources() {
     paths=(plugins/*/commands plugins/*/agents plugins/*/scripts)
   fi
 
-  local changed bad
+  local changed
   changed="$(cd "$root" && git diff "$base" --name-only -- "${paths[@]}" 2>/dev/null)"
-  bad="$(printf '%s\n' "$changed" | grep -vE 'imps-run\.workflow\.js|ape-forage\.workflow\.js' | grep -v '^$' || true)"
-  if [ -n "$bad" ]; then
-    echo "frozen-sources: changed outside the two named exceptions (base=$base):" >&2
-    printf '%s\n' "$bad" >&2
-    status=1
-  fi
 
-  local diff_noncomment
-  diff_noncomment="$(cd "$root" && git diff "$base" -- \
-      plugins/imps/scripts/imps-run.workflow.js plugins/ape/scripts/ape-forage.workflow.js \
-      2>/dev/null | grep -E '^[+-][^+-]' | grep -vE '^[+-][[:space:]]*(//|/\*|\*)' || true)"
-  if [ -n "$diff_noncomment" ]; then
-    echo "frozen-sources: non-comment changes in an allowed workflow script (base=$base):" >&2
-    printf '%s\n' "$diff_noncomment" >&2
+  local f fdiff
+  local -a bad=()
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+      */imps-run.workflow.js|*/ape-forage.workflow.js)
+        fdiff="$(cd "$root" && git diff "$base" -- "$f" 2>/dev/null \
+          | grep -E '^[+-][^+-]' | grep -vE '^[+-][[:space:]]*(//|/\*|\*)' || true)"
+        [ -n "$fdiff" ] && bad+=("$f (non-comment change)")
+        ;;
+      plugins/*/scripts/*.py)
+        fdiff="$(cd "$root" && git diff "$base" -- "$f" 2>/dev/null \
+          | grep -E '^[+-][^+-]' | grep -vE '^[+-]SERVER_VERSION = "[^"]*"$' || true)"
+        [ -n "$fdiff" ] && bad+=("$f (change beyond SERVER_VERSION)")
+        ;;
+      *)
+        bad+=("$f")
+        ;;
+    esac
+  done <<EOF
+$changed
+EOF
+
+  if [ "${#bad[@]}" -gt 0 ]; then
+    echo "frozen-sources: changed outside the named exceptions (base=$base):" >&2
+    printf '%s\n' "${bad[@]}" >&2
     status=1
   fi
   return $status
@@ -652,6 +690,30 @@ FIXTURE
     "check_frozen_sources '$fz_broken'" \
     "check_frozen_sources '$fz_correct'"
 
+  # 9b. frozen-sources / SERVER_VERSION exception — the version-bump.yml lockstep
+  # (AGENTS.md "Cross-plugin audit log") rewrites only the SERVER_VERSION line; any
+  # other simultaneous change to the same file must still fail.
+  local fz_sv_correct="$tmp/frozen-sv/correct" fz_sv_broken="$tmp/frozen-sv/broken"
+  for d in "$fz_sv_correct" "$fz_sv_broken"; do
+    mkdir -p "$d/plugins/offload-sidecar/scripts"
+    printf '#!/usr/bin/env python3\nSERVER_VERSION = "0.3.4"\nprint("ok")\n' \
+      > "$d/plugins/offload-sidecar/scripts/offload_sidecar.py"
+    (cd "$d" && git init -q -b master && git -c user.email=t@example.com -c user.name=t \
+       add -A && git -c user.email=t@example.com -c user.name=t commit -q -m init)
+  done
+  # correct: SERVER_VERSION-only bump, exactly what version-bump.yml writes
+  sed -i.bak 's/SERVER_VERSION = "0.3.4"/SERVER_VERSION = "0.3.5"/' \
+    "$fz_sv_correct/plugins/offload-sidecar/scripts/offload_sidecar.py" \
+    && rm -f "$fz_sv_correct/plugins/offload-sidecar/scripts/offload_sidecar.py.bak"
+  # broken: SERVER_VERSION bump smuggling in a second, unrelated line change
+  sed -i.bak -e 's/SERVER_VERSION = "0.3.4"/SERVER_VERSION = "0.3.5"/' \
+    -e 's/print("ok")/print("mutated")/' \
+    "$fz_sv_broken/plugins/offload-sidecar/scripts/offload_sidecar.py" \
+    && rm -f "$fz_sv_broken/plugins/offload-sidecar/scripts/offload_sidecar.py.bak"
+  st_case "frozen-sources-server-version" \
+    "check_frozen_sources '$fz_sv_broken'" \
+    "check_frozen_sources '$fz_sv_correct'"
+
   # 10. readme-marker
   mkdir -p "$tmp/marker/correct/build" "$tmp/marker/correct/plugins/foo" \
            "$tmp/marker/broken/build" "$tmp/marker/broken/plugins/foo"
@@ -704,7 +766,15 @@ mode="lint"
 while [ $# -gt 0 ]; do
   case "$1" in
     --self-test) mode="self-test"; shift ;;
-    --scope) scope="${2:-}"; shift 2 ;;
+    --scope)
+      if [ $# -lt 2 ]; then
+        echo "dist-lint: --scope requires a value" >&2
+        usage >&2
+        exit 1
+      fi
+      scope="$2"
+      shift 2
+      ;;
     -h|--help) usage; exit 0 ;;
     *) echo "dist-lint: unknown argument: $1" >&2; usage >&2; exit 1 ;;
   esac

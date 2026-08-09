@@ -109,11 +109,28 @@ path_within_prefix() {
   esac
 }
 
+# remove_path_guarded <prefix> <path> — removes a single path (via `rm -rf --`)
+# iff it resolves inside <prefix>; refuses (logs, never deletes) otherwise.
+# The one place in this script that actually deletes anything, so both the
+# manifest-wide sweep below and uninstall_cmd's per-path fallback share the
+# same fail-closed check instead of each re-implementing (and possibly
+# drifting from) it.
+remove_path_guarded() {
+  local prefix="$1" path="$2"
+  if path_within_prefix "$prefix" "$path"; then
+    rm -rf -- "$path"
+    log "install-agy.sh: removed $path"
+    return 0
+  else
+    log "install-agy.sh: REFUSING to remove path outside install prefix: $path"
+    return 1
+  fi
+}
+
 # remove_manifest_paths <manifest_file> <prefix>
-# Reads "path:<value>" lines and removes each one, refusing (logging, never
-# deleting) any path that does not resolve inside <prefix>. Uses
-# `while IFS= read -r` and `rm -rf --` throughout so spaces in paths are
-# handled correctly and nothing is unquoted-word-split.
+# Reads "path:<value>" lines and removes each one via remove_path_guarded.
+# Uses `while IFS= read -r` throughout so spaces in paths are handled
+# correctly and nothing is unquoted-word-split.
 remove_manifest_paths() {
   local manifest="$1" prefix="$2" line path refused=0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -122,13 +139,7 @@ remove_manifest_paths() {
       *) continue ;;
     esac
     [ -z "$path" ] && continue
-    if path_within_prefix "$prefix" "$path"; then
-      rm -rf -- "$path"
-      log "install-agy.sh: removed $path"
-    else
-      log "install-agy.sh: REFUSING to remove path outside install prefix: $path"
-      refused=$((refused + 1))
-    fi
+    remove_path_guarded "$prefix" "$path" || refused=$((refused + 1))
   done < "$manifest"
   return "$refused"
 }
@@ -187,7 +198,15 @@ extract_dist_agy() {
 # ---------------------------------------------------------------------------
 substitute_plugin_root() {
   local installed_dir="$1" f tmp changed=0
-  [ -d "$installed_dir" ] || return 0
+  if [ ! -d "$installed_dir" ]; then
+    # AGY_PLUGIN_PREFIX is this script's guess at where `agy plugin install`
+    # places files — not something agy tells us. A wrong guess must not look
+    # like a clean, complete install: log it, don't just skip silently, so
+    # `installed N plugin(s)` isn't printed over plugins still carrying the
+    # literal __PLUGIN_ROOT__ placeholder.
+    log "install-agy.sh:   WARNING — expected install dir not found, __PLUGIN_ROOT__ substitution skipped: $installed_dir"
+    return 0
+  fi
   while IFS= read -r f; do
     grep -q '__PLUGIN_ROOT__' "$f" 2>/dev/null || continue
     tmp="$(mktemp)" || return 1
@@ -251,9 +270,17 @@ install_cmd() {
   # Values are interpolated into the trap string now, not read from these
   # `local`s later — bash tears down a function's locals as soon as `set -e`
   # aborts mid-function, so a trap that referenced `$tmp_checkout`/`$written`
-  # directly would see them unset by the time it actually runs.
+  # directly would see them unset by the time it actually runs. `%q` (not a
+  # hand-rolled single-quote wrap) is what makes this safe when $TMPDIR or
+  # $HOME contains a single quote — e.g. $HOME=/Users/O'Brien — which a plain
+  # `'$var'` wrap turns into a syntax error at trap-fire time; spaces alone
+  # are not the only character that needs escaping here.
+  local tmp_checkout_q written_q manifest_q
+  printf -v tmp_checkout_q '%q' "$tmp_checkout"
+  printf -v written_q '%q' "$written"
+  printf -v manifest_q '%q' "$MANIFEST_PATH"
   # shellcheck disable=SC2064
-  trap "finalize_partial_install '$tmp_checkout' '$written' '$MANIFEST_PATH'" EXIT
+  trap "finalize_partial_install $tmp_checkout_q $written_q $manifest_q" EXIT
 
   sha="$(extract_dist_agy "$REF" "$tmp_checkout")"
 
@@ -274,14 +301,46 @@ install_cmd() {
     plugin_name="$(basename "$plugin_dir")"
     log "install-agy.sh: installing $plugin_name"
     agy plugin install "${plugin_dir%/}"
-    substitute_plugin_root "${AGY_PLUGIN_PREFIX%/}/$plugin_name"
+    # Record the manifest entry as soon as the plugin is actually on disk —
+    # before substitution, not after. A substitution failure aborts the whole
+    # script under `set -e`; recording first means the EXIT trap's partial
+    # manifest still tracks this plugin (so --uninstall or a re-run can find
+    # it) instead of leaving an installed, half-substituted plugin with no
+    # manifest entry at all.
     printf 'path:%s\n' "${AGY_PLUGIN_PREFIX%/}/$plugin_name" >> "$written"
+    substitute_plugin_root "${AGY_PLUGIN_PREFIX%/}/$plugin_name"
     installed_count=$((installed_count + 1))
   done
 
   if [ "$installed_count" -eq 0 ]; then
     log "install-agy.sh: no plugin directories found under dist/agy/ at ref $REF"
     exit 1
+  fi
+
+  # Orphan cleanup: a plugin recorded in the OLD manifest but not written by
+  # this install (e.g. dropped from dist/agy/ at the new --ref) would
+  # otherwise stay installed on disk forever, and become unrecorded — and so
+  # un-uninstallable — the moment the manifest below is overwritten. Mirrors
+  # the orphan sweep build/npm/lib/installer.js already does for the npm
+  # channel. Runs only after every plugin in this install has succeeded
+  # (installed_count check above), so a failed install never removes an old,
+  # still-valid install.
+  if [ -f "$MANIFEST_PATH" ]; then
+    local old_line old_path orphan_name
+    while IFS= read -r old_line || [ -n "$old_line" ]; do
+      case "$old_line" in
+        path:*) old_path="${old_line#path:}" ;;
+        *) continue ;;
+      esac
+      [ -z "$old_path" ] && continue
+      grep -qxF "path:$old_path" "$written" && continue
+      orphan_name="$(basename "$old_path")"
+      log "install-agy.sh: removing orphaned plugin no longer in dist/agy/ at $REF: $orphan_name"
+      agy plugin uninstall "$orphan_name" 2>/dev/null || true
+      if [ -e "$old_path" ]; then
+        remove_path_guarded "$AGY_PLUGIN_PREFIX" "$old_path" || true
+      fi
+    done < "$MANIFEST_PATH"
   fi
 
   mv -f -- "$written" "$MANIFEST_PATH"
@@ -319,6 +378,22 @@ uninstall_cmd() {
     if ! agy plugin uninstall "$name"; then
       log "install-agy.sh: agy plugin uninstall failed for $name"
       failures=$((failures + 1))
+      continue
+    fi
+    # Post-condition: `agy plugin uninstall` is an opaque external binary — a
+    # reported-success exit code is not proof the path is actually gone.
+    # Without this check a silent no-op uninstall drops the manifest entry
+    # (below) while the files stay on disk, loaded, with zero record. The
+    # already-validated $written_path (not a re-derived one) is what gets
+    # removed here, so the guard above actually governs the deletion instead
+    # of being discarded once $name is computed.
+    if [ -e "$written_path" ]; then
+      log "install-agy.sh: agy plugin uninstall reported success but $written_path still exists — removing directly"
+      remove_path_guarded "$AGY_PLUGIN_PREFIX" "$written_path" || true
+      if [ -e "$written_path" ]; then
+        log "install-agy.sh: failed to remove $written_path"
+        failures=$((failures + 1))
+      fi
     fi
   done < "$MANIFEST_PATH"
 

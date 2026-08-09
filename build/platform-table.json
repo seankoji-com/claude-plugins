@@ -21,7 +21,7 @@
       "no_model_field": "Unmeasured. No matrix item establishes a per-skill model field for this platform, so none is emitted; model choice is passed at invocation (docs/platform-matrix.md Item 8 records that agy -p accepts --model).",
       "no_version_field": "docs/plans/cross-platform-compat.md — 'Versioning'. plugin.json carries name + description only so version-bump.yml can never desync dist/.",
       "skill_frontmatter": "docs/platform-matrix.md — 'Already measured' + Item 1. skills/*.md with name/description frontmatter become slash commands.",
-      "state_paths": "The ~/.gemini/config/ root is matrix-derived (Item 1). The per-plugin subdirectory under it is plugin-owned state — writing our own file at a path of our choosing needs no platform capability, so it is not a platform claim."
+      "state_paths": "The ~/.gemini/config/ root is matrix-derived (Item 1). The per-plugin subdirectory under it, and the project-local `.agy/` directory the generic `.claude/` -> `.agy/` replacement produces (e.g. `.claude/imps/learnings.md` -> `.agy/imps/learnings.md`), are both plugin-owned state, not a platform claim: no matrix item measures agy reading or auto-loading a project-local directory by any name (AGY_REGISTERED_AUTOLOAD: neither), so `.agy/` is this project's own file-layout choice — the Agy-branded analogue of `.claude/` — not an assertion that Agy itself defines or looks for that name. Writing our own file at a path of our choosing needs no platform capability."
     },
     "label": "Antigravity CLI (agy)",
     "layout": {

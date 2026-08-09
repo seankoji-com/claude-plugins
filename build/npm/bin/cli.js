@@ -35,7 +35,16 @@ function parseArgs(argv) {
       }
       args.prefix = argv[++i];
     } else if (arg.startsWith("--prefix=")) {
-      args.prefix = arg.slice("--prefix=".length);
+      const value = arg.slice("--prefix=".length);
+      // Empty-value case: `--prefix=` with nothing after the `=`. Falsy, so
+      // `resolvePrefix`'s `explicit || ...` fallback would silently resolve to the
+      // real OPENCODE_CONFIG_DIR / ~/.config/opencode — exactly the guard the
+      // space-separated form above already closes for a trailing bare `--prefix`.
+      if (value === "") {
+        args.error = "--prefix requires a value";
+        break;
+      }
+      args.prefix = value;
     } else {
       rest.push(arg);
     }

@@ -17,5 +17,8 @@ try {
   );
 } catch (err) {
   console.error(`claude-plugins-opencode postinstall failed: ${err.message}`);
+  console.error(
+    "claude-plugins-opencode: run `npx claude-plugins-opencode install` to retry, or `npx claude-plugins-opencode doctor` to check install health."
+  );
   process.exitCode = 1;
 }
