@@ -1,4 +1,23 @@
+<!-- PLATFORM-SUPPORT: opencode=full agy=full -->
+
 # imps — swarm orchestrator for Claude Code
+
+## Platforms
+
+| Claude Code | OpenCode | Agy |
+| --- | --- | --- |
+| native (this README) — full swarm, `Workflow`-driven | full — generated | full — generated |
+
+The orchestration prose ports, but the Claude `Workflow` script that drives it does
+not run on either target: OpenCode dispatch goes through the
+`opencode execute-tier dispatcher` referenced in the table below (model tiers passed
+at invocation via `opencode run -m`, never as frontmatter); Agy dispatch is serial
+`agy -p`, inspecting response content rather than exit status (see
+`docs/platform-matrix.md` Item 8). Per-platform dispatch prose comes from
+`build/overrides/imps/`; generated output lives under `dist/opencode/` and
+`dist/agy/imps/`. See
+[`docs/plans/cross-platform-compat.md`](../../docs/plans/cross-platform-compat.md) and
+[`docs/platform-matrix.md`](../../docs/platform-matrix.md) for how and why.
 
 ## What it does
 

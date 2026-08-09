@@ -1,9 +1,23 @@
+<!-- PLATFORM-SUPPORT: opencode=full agy=full -->
+
 # prompt-builder
 
 Iteratively build high-quality, reusable Claude prompts. Diagnoses your brief, structures
 it using Anthropic's evidence-based prompting techniques, drafts, critiques, and delivers
 a finished artefact — complete with test cases, known failure modes, and a recommended
 model.
+
+## Platforms
+
+| Claude Code | OpenCode | Agy |
+| --- | --- | --- |
+| native (this README) | full — generated | full — generated |
+
+A single self-contained command with no harness dependency beyond the bundled audit
+logger, so the only platform-specific content is the audit-log invocation path.
+Generated output lives under `dist/opencode/` and `dist/agy/prompt-builder/`; see
+[`docs/plans/cross-platform-compat.md`](../../docs/plans/cross-platform-compat.md) and
+[`docs/platform-matrix.md`](../../docs/platform-matrix.md) for how and why.
 
 ## What it does
 
