@@ -85,6 +85,22 @@ function substitute(content, pluginShareAbsPath) {
   return content.split(PLACEHOLDER).join(pluginShareAbsPath);
 }
 
+// Read a file's mode and contents through a SINGLE file descriptor, so the two
+// operations cannot resolve to different inodes. statSync-then-readFileSync on a
+// path is a genuine TOCTOU window (CodeQL js/file-system-race): between the two
+// calls the path can be replaced — e.g. swapped for a symlink to something
+// outside the package — and we would then copy the wrong bytes while carrying
+// the mode we sampled from the original. Opening once and using fstat/read on
+// the fd closes that window: both refer to the object we actually opened.
+function readFileAndMode(srcFile) {
+  const fd = fs.openSync(srcFile, "r");
+  try {
+    return { mode: fs.fstatSync(fd).mode, content: fs.readFileSync(fd, "utf8") };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function walkFiles(dir) {
   const out = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
@@ -180,8 +196,8 @@ function install(opts) {
     for (const srcFile of walkFiles(srcShare)) {
       const rel = path.relative(srcShare, srcFile);
       const destFile = path.join(destShare, rel);
-      const mode = fs.statSync(srcFile).mode;
-      const content = substitute(fs.readFileSync(srcFile, "utf8"), destShare);
+      const { mode, content: rawContent } = readFileAndMode(srcFile);
+      const content = substitute(rawContent, destShare);
       writeFileWithMode(destFile, content, mode);
       written.push(destFile);
     }
@@ -200,8 +216,8 @@ function install(opts) {
       }
       const destShare = path.join(prefix, "share", plugin);
       const destFile = path.join(prefix, "commands", filename);
-      const mode = fs.statSync(srcFile).mode;
-      const content = substitute(fs.readFileSync(srcFile, "utf8"), destShare);
+      const { mode, content: rawContent } = readFileAndMode(srcFile);
+      const content = substitute(rawContent, destShare);
       writeFileWithMode(destFile, content, mode);
       written.push(destFile);
     }
