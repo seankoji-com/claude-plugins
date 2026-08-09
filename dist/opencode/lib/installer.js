@@ -152,6 +152,10 @@ function readManifestIfPresent(mPath) {
   return JSON.parse(fs.readFileSync(mPath, "utf8"));
 }
 
+function writeManifestFile(mPath, fields) {
+  fs.writeFileSync(mPath, JSON.stringify(fields, null, 2) + "\n", "utf8");
+}
+
 function install(opts) {
   opts = opts || {};
   const root = pkgRoot();
@@ -164,30 +168,37 @@ function install(opts) {
   const prevFiles = Array.isArray(prevManifest && prevManifest.files) ? prevManifest.files : [];
 
   fs.mkdirSync(prefix, { recursive: true });
+  const mid = {
+    manifestVersion: 1,
+    packageVersion: pkgVersion(),
+    prefix,
+    installedFrom: root,
+    installedAt: new Date().toISOString(),
+    state: "installing",
+    plugins,
+    files: prevFiles,
+  };
   // Marked mid-install BEFORE any file is copied. If install() throws partway through
   // (disk full, a permission error, a malformed source file), this state survives on
   // disk and doctor() can report "install crashed mid-run" instead of its only other
   // hypothesis for a stale/absent manifest — "--ignore-scripts skipped postinstall" —
   // which looks identical otherwise. Carries the previous file list forward so a
   // crash here doesn't itself look like an uninstall to doctor().
-  fs.writeFileSync(
-    mPath,
-    JSON.stringify(
-      {
-        manifestVersion: 1,
-        packageVersion: pkgVersion(),
-        prefix,
-        installedFrom: root,
-        installedAt: new Date().toISOString(),
-        state: "installing",
-        plugins,
-        files: prevFiles,
-      },
-      null,
-      2
-    ) + "\n",
-    "utf8"
-  );
+  writeManifestFile(mPath, mid);
+
+  // Flushed after every plugin's files (and again after commands/) with
+  // files: union(prevFiles, written-so-far) — not just `written`, and not only at the
+  // very end. A crash between two flushes still leaves every file actually on disk (old
+  // ones not yet superseded, plus everything copied so far this run) recorded
+  // somewhere: without this, a crash after copying new files but before the final
+  // fs.writeFileSync below left those new files on disk with NO manifest entry at all —
+  // untracked by any future uninstall or orphan sweep. install-agy.sh's equivalent loop
+  // records each plugin's path the same way, as soon as it lands on disk.
+  const flushProgress = () => {
+    mid.files = Array.from(new Set([...prevFiles, ...written])).sort();
+    mid.installedAt = new Date().toISOString();
+    writeManifestFile(mPath, mid);
+  };
 
   for (const plugin of plugins) {
     const srcShare = path.join(root, "share", plugin);
@@ -201,6 +212,7 @@ function install(opts) {
       writeFileWithMode(destFile, content, mode);
       written.push(destFile);
     }
+    flushProgress();
   }
 
   const srcCommands = path.join(root, "commands");
@@ -221,6 +233,7 @@ function install(opts) {
       writeFileWithMode(destFile, content, mode);
       written.push(destFile);
     }
+    flushProgress();
   }
 
   written.sort();

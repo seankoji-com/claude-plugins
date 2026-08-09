@@ -704,3 +704,14 @@ if __name__ == "__main__":
         print(f"generate.py: {error}", file=sys.stderr)
         print("generate.py: dist/ may now be missing or partial — run 'git restore -- dist/' to recover the last-committed tree", file=sys.stderr)
         sys.exit(1)
+    except Exception:
+        # Any exception besides GenerateError -- a PermissionError/OSError from
+        # write_outputs()'s open()/chmod(), a KeyError on a malformed
+        # platform-table.json, etc. -- can still fire after clear_paths() has already
+        # emptied dist/ (or --only's slice of it), leaving the same missing-or-partial
+        # state as the GenerateError case above. Print the same recovery hint first so
+        # it isn't buried under the traceback, then re-raise: an *unexpected* exception
+        # is a real generator bug, and the traceback is what a maintainer needs to fix
+        # it, not something to swallow the way the well-understood GenerateError case is.
+        print("generate.py: dist/ may now be missing or partial — run 'git restore -- dist/' to recover the last-committed tree", file=sys.stderr)
+        raise
