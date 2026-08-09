@@ -1,4 +1,4 @@
-# claude-plugins-opencode
+# @seankoji/claude-plugins-opencode
 
 OpenCode channel for [seankoji/claude-plugins](https://github.com/seankoji/claude-plugins).
 This package's tree is generated: `build/generate.py` mirrors this `build/npm/` source
@@ -9,9 +9,42 @@ sources here and regenerate.
 
 ## Install
 
-```bash
-npm install -g claude-plugins-opencode
+This package is published to **GitHub Packages**, not npmjs. GitHub Packages requires
+authentication for every read, including public packages, so installing takes one
+setup step that a plain npmjs package would not.
+
+**1. Create a token.** A [personal access token](https://github.com/settings/tokens)
+with the `read:packages` scope, and no other scope.
+
+It must be a **classic** token. GitHub's own npm-registry documentation states:
+*"GitHub Packages only supports authentication using a personal access token
+(classic)."* ([docs](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry))
+Fine-grained tokens carry a `Packages` permission and do work against some other
+GitHub Packages registries, which makes this easy to get wrong — for the **npm**
+registry specifically they are not supported. If that changes upstream, this line is
+the one to revisit.
+
+**2. Point the `@seankoji` scope at GitHub Packages and authenticate.** In `~/.npmrc`:
+
 ```
+@seankoji:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_TOKEN_HERE
+```
+
+Only the `@seankoji` scope is redirected; everything else still resolves from npmjs.
+
+**3. Install.**
+
+```bash
+npm install -g @seankoji/claude-plugins-opencode
+```
+
+The installed command is `claude-plugins-opencode` — the scope is part of the package
+name, not the binary.
+
+> If you would rather not create a token, skip the package: clone the repo and run
+> `node dist/opencode/bin/cli.js install` from the checkout. It does exactly what
+> `postinstall` does, from the same code.
 
 `postinstall` copies the bundled commands and scripts into
 `~/.config/opencode/{commands,share}`, substituting the `__PLUGIN_ROOT__` placeholder

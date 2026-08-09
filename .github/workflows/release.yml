@@ -7,6 +7,17 @@ name: Release (npm)
 # this workflow never runs build/generate.py to *produce* dist/, only to check it (see
 # "Lint dist/ before publishing" below).
 #
+# Target registry is GitHub Packages (https://npm.pkg.github.com), not npmjs. Three
+# consequences, all load-bearing:
+#   * the package name MUST be scoped to the repo owner (@seankoji/...) — GitHub Packages
+#     only accepts scoped names, so an unscoped name is rejected at publish;
+#   * auth is the workflow's automatic GITHUB_TOKEN plus `packages: write`, so there is no
+#     registry secret to configure and nothing to rotate;
+#   * `--provenance` is gone. npm provenance attestations are minted against the public
+#     npmjs registry via Sigstore; GitHub Packages does not issue or serve them, so the
+#     flag would fail the publish rather than add a signature. `id-token: write` went with
+#     it, since nothing else here needs OIDC.
+#
 # `workflow_dispatch` can target any ref, not only one that went through a PR and
 # validate.yml's cross-platform-regen gate — a ref pushed straight to a branch, for
 # instance. So this job cannot assume "the PR already proved drift-free" and skip its own
@@ -17,12 +28,12 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type PUBLISH to confirm publishing the committed dist/opencode/ package to npm'
+        description: 'Type PUBLISH to confirm publishing the committed dist/opencode/ package to GitHub Packages'
         required: true
 
 permissions:
   contents: read
-  id-token: write # required for --provenance (npm OIDC attestation)
+  packages: write # publish to GitHub Packages as the workflow's own GITHUB_TOKEN
 
 jobs:
   publish-npm:
@@ -41,17 +52,13 @@ jobs:
       group: release-npm
       cancel-in-progress: false
     steps:
-      # Fail fast, before checkout+lint spend any CI time, if the secret this job
-      # can't publish without simply isn't configured — surfaces as a plain, actionable
-      # message instead of npm's opaque ENEEDAUTH deep in the publish step.
-      - name: Verify NPM_TOKEN is configured
-        env:
-          HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
-        run: |
-          if [ "$HAS_TOKEN" != "true" ]; then
-            echo "ERROR: the NPM_TOKEN repository secret is not set — publish would fail with ENEEDAUTH at the last step. Add it under Settings > Secrets and variables > Actions before dispatching this workflow." >&2
-            exit 1
-          fi
+      # No token-preflight step: GITHUB_TOKEN is injected automatically for every workflow
+      # run, so there is no misconfiguration to catch here the way there was with a
+      # hand-added NPM_TOKEN. What CAN still be wrong is org/repo policy — if GitHub
+      # Packages is disabled for this repo, or `packages: write` is withheld by an org
+      # default-permissions setting, the publish step fails with a 403. That is not
+      # detectable from inside the job before attempting it, so it is left to fail at the
+      # publish step with GitHub's own error rather than guessed at up front.
 
       # fetch-depth: 0 matches validate.yml's cross-platform-regen job and the same
       # actions/checkout version it uses. NOTE: the frozen-sources invariant that needs
@@ -78,10 +85,15 @@ jobs:
             exit 1
           fi
 
+      # registry-url makes setup-node write an ~/.npmrc binding this scope to GitHub
+      # Packages and referencing ${NODE_AUTH_TOKEN}. Every npm command below that needs
+      # auth — the preflight `npm view` as well as `npm publish` — therefore just needs
+      # NODE_AUTH_TOKEN in its env; neither writes an .npmrc of its own.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@seankoji'
 
       - name: Verify dist/opencode is present and committed
         run: |
@@ -114,30 +126,65 @@ jobs:
       # governs plugin manifests, not this package). So a second dispatch at an unbumped
       # ref reaches `npm publish` with a version that already exists on the registry and
       # dies on EPUBLISHCONFLICT *after* the checkout, lint and regen-diff have all run,
-      # with npm's error as the only explanation. Check up front and say the actual
-      # remedy instead. `npm view` exits non-zero when the version does not exist, which
-      # is the success case here, so the exit status is deliberately not used as the gate
-      # — only whether it printed a version. A registry outage therefore fails open to
-      # the publish step, which fails closed on its own.
+      # with npm's error as the only explanation. Check up front and say the actual remedy.
+      #
+      # Three outcomes, distinguished deliberately rather than collapsed into
+      # "did it print anything":
+      #   * the version exists            -> fail, with the bump instructions
+      #   * E404 / 404                    -> the version is genuinely absent; publish
+      #   * anything else (401, 5xx, DNS) -> fail CLOSED, because we do not know
+      #
+      # The third case is the one worth spelling out. On npmjs reads are anonymous, so a
+      # lookup either found the version or did not. GitHub Packages requires auth for every
+      # read, which makes 401 a live failure mode — and a bare `|| true` would swallow it,
+      # print nothing, and read as "not published, safe to publish". That does not risk a
+      # bad publish (npm still rejects a duplicate version), but it does silently delete
+      # this gate's entire value: the operator gets npm's opaque EPUBLISHCONFLICT instead
+      # of the actionable message this step exists to produce. Refusing on an inconclusive
+      # answer keeps the failure legible.
       - name: Preflight — refuse to republish an existing version
         working-directory: dist/opencode
+        # NODE_AUTH_TOKEN is needed even to READ: GitHub Packages requires authentication
+        # for every operation, including reads of public packages.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           name="$(node -p 'require("./package.json").name')"
           version="$(node -p 'require("./package.json").version')"
           echo "package: $name@$version"
-          if [ -n "$(npm view "$name@$version" version 2>/dev/null || true)" ]; then
+
+          # Capture stdout, stderr and status separately. `|| true` keeps set -e from
+          # killing the step before we can classify the failure.
+          set +e
+          view_out="$(npm view "$name@$version" version 2>"$RUNNER_TEMP/npm-view-err.txt")"
+          view_status=$?
+          set -e
+          view_err="$(cat "$RUNNER_TEMP/npm-view-err.txt")"
+
+          if [ "$view_status" -eq 0 ] && [ -n "$view_out" ]; then
             echo "::error::$name@$version is already published — npm forbids republishing a version." >&2
             echo "Bump \"version\" in build/npm/package.json, run \`python3 build/generate.py\` to mirror it into dist/opencode/package.json, commit both, and re-dispatch." >&2
             exit 1
           fi
-          echo "$name@$version is not on the registry — safe to publish."
 
-      - name: Publish committed dist/opencode/ to npm (no rebuild)
+          if printf '%s' "$view_err" | grep -qE 'E404|404 Not Found|is not in this registry'; then
+            echo "$name@$version is not on GitHub Packages — safe to publish."
+            exit 0
+          fi
+
+          echo "::error::could not determine whether $name@$version is already published." >&2
+          echo "npm view exited $view_status. This is NOT treated as 'not published' — refusing rather than guessing." >&2
+          echo "Common causes: GITHUB_TOKEN lacks packages:read, GitHub Packages is disabled for this repo, or the registry is unreachable." >&2
+          printf '%s\n' "$view_err" >&2
+          exit 1
+
+      - name: Publish committed dist/opencode/ to GitHub Packages (no rebuild)
         working-directory: dist/opencode
-        # First publish of a scoped/new package: --access public makes the intent explicit
-        # rather than relying on npm's default, and --provenance attaches a signed build
-        # attestation (needs the id-token: write permission above).
-        run: npm publish --access public --provenance
+        # No --access: on GitHub Packages a package's visibility follows the repository's,
+        # and --access is an npmjs concept the registry does not honour. No --provenance
+        # either — see the header comment. The registry comes from package.json's
+        # publishConfig, backed by the .npmrc setup-node wrote.
+        run: npm publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

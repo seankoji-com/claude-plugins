@@ -44,16 +44,33 @@ generated output cites [`docs/platform-matrix.md`](./docs/platform-matrix.md) �
 measured facts about what each CLI actually does, live-tested rather than assumed.
 
 **OpenCode** — via the npm package (source at `build/npm/`, generated into
-`dist/opencode/`):
+`dist/opencode/`). It is published to **GitHub Packages**, which requires a token to
+read *even for public packages*, so installing needs one `~/.npmrc` setup step:
+
+```
+@seankoji:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_TOKEN_HERE
+```
+
+The token is a [personal access token](https://github.com/settings/tokens) with only
+the `read:packages` scope. It must be a **classic** token — GitHub's npm-registry docs
+state *"GitHub Packages only supports authentication using a personal access token
+(classic)"*, and fine-grained tokens are not supported for this registry even though
+they expose a `Packages` permission that works elsewhere. Then:
 
 ```bash
-npm install -g claude-plugins-opencode
+npm install -g @seankoji/claude-plugins-opencode
 ```
 
 `postinstall` copies commands and scripts into `~/.config/opencode/{commands,share}`.
 If you installed with `--ignore-scripts`, run the bundled CLI's own subcommand
-instead: `claude-plugins-opencode install` (also `uninstall`/`doctor`). Published
-manually via `workflow_dispatch` — this repo carries no git tags.
+instead: `claude-plugins-opencode install` (also `uninstall`/`doctor`) — the binary
+keeps its unscoped name. Published manually via `workflow_dispatch`; this repo carries
+no git tags.
+
+**Don't want a token?** Clone this repo and run `node dist/opencode/bin/cli.js install`
+from the checkout — same code path as `postinstall`, no registry involved. See
+[`build/npm/README.md`](./build/npm/README.md) for the full CLI.
 
 **Heads up:** running `opencode run` inside any directory with project-local OpenCode
 config auto-provisions a **~62 MB** `.opencode/node_modules/` there — confirmed live
