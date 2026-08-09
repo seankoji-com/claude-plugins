@@ -288,6 +288,23 @@ jobs:
         with:
           fetch-depth: 0
 
+      # --self-test proves each dist-lint invariant actually fails on a broken fixture
+      # and passes on a correct one — the fail-closed guards it enforces (out-of-prefix
+      # uninstall paths, frozen Claude sources, README-marker agreement, ...) had no
+      # automated regression coverage anywhere in CI before this step existed; a
+      # regression here previously required someone to remember to run --self-test by
+      # hand. Self-contained (its own mktemp fixtures and synthetic git repos), so it
+      # needs no live agy/opencode and runs before the real-repo lint below.
+      - name: Prove dist-lint.sh's invariants (build/dist-lint.sh --self-test)
+        run: bash build/dist-lint.sh --self-test
+
+      # Same reasoning for install-agy.sh's fail-closed uninstall-path guard: its
+      # --self-test runs entirely inside a throwaway mktemp -d prefix (never the real
+      # install location) and needs no live `agy` binary — see its own --self-test
+      # implementation for both guarantees.
+      - name: Prove install-agy.sh's fail-closed guard (install-agy.sh --self-test)
+        run: bash install-agy.sh --self-test
+
       # dist-lint runs FIRST, against the pristine checkout. Its regen-diff invariant
       # generates into its own mktemp and compares both directions against the *committed*
       # dist/ — that signal is destroyed once `generate.py` has overwritten dist/ in place.
