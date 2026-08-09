@@ -285,7 +285,7 @@ _has_prefix_guard() {
   # wildcard arm rejects (exit/return non-zero) — the fail-closed shape.
   awk '
     /case[ \t]+.*in[ \t]*$/ { in_case=1; has_prefix_arm=0; has_reject=0; in_wild=0 }
-    in_case && /"\$[A-Za-z0-9_]*PREFIX[A-Za-z0-9_]*"\/?\*\)/ { has_prefix_arm=1 }
+    in_case && /"\$[A-Za-z0-9_]*[Pp][Rr][Ee][Ff][Ii][Xx][A-Za-z0-9_]*"\/?\*\)/ { has_prefix_arm=1 }
     in_case && /^[ \t]*\*\)/ { in_wild=1 }
     in_case && in_wild && /(exit|return)[ \t]+[1-9]/ { has_reject=1 }
     in_case && /esac/ {
