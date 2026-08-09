@@ -395,6 +395,40 @@ else
   skip "imps/tests/state-schema.sh" "missing or not executable: $imps_state_schema"
 fi
 
+# Cross-platform e2e (OpenCode npm channel, Agy plugin channel). These exercise real
+# package-manager/registry machinery (tests/npm-install-smoke.sh talks to the npm
+# registry even for a local tarball path) or a live `agy` binary — neither of which a
+# sandboxed imp run may reach or invoke (see docs/plans/cross-platform-compat.md's
+# "No live opencode or agy model invocations" constraint). Off by default; a maintainer
+# opts in explicitly with XPLAT_E2E=1 (both channels) or the per-channel OPENCODE_E2E=1
+# / AGY_E2E=1. Same skip-vs-pass shape as sandbox-smoke.sh/imps-e2e.sh above: unset means
+# skip, never a silent "ok".
+xplat_npm_smoke="$ROOT/tests/npm-install-smoke.sh"
+if [ -n "${XPLAT_E2E:-}" ] || [ -n "${OPENCODE_E2E:-}" ]; then
+  if [ ! -x "$xplat_npm_smoke" ]; then
+    skip "xplat/npm-install-smoke.sh" "missing or not executable: $xplat_npm_smoke"
+  else
+    xplat_npm_out="$(bash "$xplat_npm_smoke" 2>&1)"
+    xplat_npm_rc=$?
+    if [ "$xplat_npm_rc" -eq 0 ]; then
+      report "xplat/npm-install-smoke.sh" 1
+    else
+      report "xplat/npm-install-smoke.sh" 0 "$xplat_npm_out"
+    fi
+  fi
+else
+  skip "xplat/npm-install-smoke.sh" "cross-platform e2e disabled by default (set OPENCODE_E2E=1 or XPLAT_E2E=1 to enable; needs npm registry access)"
+fi
+
+if [ -n "${XPLAT_E2E:-}" ] || [ -n "${AGY_E2E:-}" ]; then
+  # Even opted in, this run must not perform a live `agy` invocation itself — that proof
+  # is operator-run only (docs/plans/cross-platform-compat.md item 13: "proof plugin
+  # installs and invokes on both platforms" is [OPERATOR-RUN — not dispatchable]).
+  skip "xplat/agy-live-invocation" "AGY_E2E/XPLAT_E2E enabled, but live agy install+invoke proof is operator-run only — see docs/plans/cross-platform-compat.md item 13"
+else
+  skip "xplat/agy-live-invocation" "cross-platform e2e disabled by default (set AGY_E2E=1 or XPLAT_E2E=1 to enable; needs a live agy binary)"
+fi
+
 echo "---"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

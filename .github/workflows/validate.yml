@@ -268,3 +268,28 @@ jobs:
 
       - name: Run tests/run-js.sh
         run: bash tests/run-js.sh
+
+  # Regenerates dist/opencode and dist/agy from the committed sources on a clean
+  # ubuntu-latest checkout and fails if the result differs from what's committed. This
+  # is also the cross-machine determinism check: generate.py is required to produce a
+  # byte-identical dist/ regardless of the OS/filesystem it runs on (see the "Generator
+  # determinism" constraint in the run's Global Constraints — sorted() enumeration,
+  # sort_keys json.dump, newline="\n" everywhere), and ubuntu-latest is a different
+  # machine from every contributor's dev box by construction.
+  cross-platform-regen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Regenerate dist/ from committed sources (build/generate.py)
+        run: python3 build/generate.py
+
+      - name: Lint the regenerated dist/ (build/dist-lint.sh)
+        run: bash build/dist-lint.sh
+
+      - name: Fail on dist/ drift between committed and freshly generated output
+        run: |
+          if ! git diff --exit-code -- dist; then
+            echo "ERROR: dist/ is out of date. Run 'python3 build/generate.py' locally and commit the result." >&2
+            exit 1
+          fi

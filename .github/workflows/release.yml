@@ -1,0 +1,57 @@
+name: Release (npm)
+
+# Manual-only, on purpose: the repo has zero git tags (docs/plans/cross-platform-compat.md
+# "0. What the matrix changed") and no release automation exists to reuse. Nothing else in
+# this repo invokes `npm publish` — see the "publish is manual-only" invariant in
+# docs/plans/cross-platform-compat.md item 28. Publishes the committed dist/opencode/ as-is;
+# this workflow never runs build/generate.py, so what a maintainer approved in the PR (and
+# validate.yml's cross-platform-regen job already proved is drift-free) is exactly what ships.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type PUBLISH to confirm publishing the committed dist/opencode/ package to npm'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write # required for --provenance (npm OIDC attestation)
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Require explicit confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "PUBLISH" ]; then
+            echo "Refusing to publish: the 'confirm' input must be exactly 'PUBLISH' (got '${{ github.event.inputs.confirm }}')." >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify dist/opencode is present, committed, and not hand-edited since generation
+        run: |
+          test -f dist/opencode/package.json || {
+            echo "ERROR: dist/opencode/package.json is missing. Run 'python3 build/generate.py' and commit dist/ before releasing." >&2
+            exit 1
+          }
+          if [ -n "$(git status --porcelain -- dist/opencode)" ]; then
+            echo "ERROR: dist/opencode has uncommitted changes on this checkout; refusing to publish an unclean tree." >&2
+            exit 1
+          fi
+
+      - name: Publish committed dist/opencode/ to npm (no rebuild)
+        working-directory: dist/opencode
+        # First publish of a scoped/new package: --access public makes the intent explicit
+        # rather than relying on npm's default, and --provenance attaches a signed build
+        # attestation (needs the id-token: write permission above).
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
