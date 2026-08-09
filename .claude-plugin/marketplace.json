@@ -7,37 +7,37 @@
   "plugins": [
     {
       "name": "elephant-goldfish",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "source": "./plugins/elephant-goldfish",
       "description": "Design-doc command with a different-lineage Gemini judge, plus /elephant-goldfish:thinking — steps 1 and 2 of Rensin's process: interrogate the problem, build the rubric, emit the plan."
     },
     {
       "name": "claude-tuneup",
-      "version": "0.1.11",
+      "version": "0.1.12",
       "source": "./plugins/claude-tuneup",
       "description": "Permission audit and settings tuneup — scans transcripts, classifies by scope, deduplicates global vs project settings."
     },
     {
       "name": "prompt-builder",
-      "version": "0.1.14",
+      "version": "0.1.15",
       "source": "./plugins/prompt-builder",
       "description": "Iterative prompt engineering assistant — structures with Anthropic's evidence-based prompting techniques, drafts, critiques, and delivers a finished artefact with test cases."
     },
     {
       "name": "imps",
-      "version": "0.3.37",
+      "version": "0.3.38",
       "source": "./plugins/imps",
       "description": "Swarm orchestrator — decomposes tasks into parallel model-routed agents, dispatches via a real Workflow script, merges through gates and persona review. Plus /imps:imp-agency: whole-repo audit → imps-ready remediation plan."
     },
     {
       "name": "ape",
-      "version": "0.2.8",
+      "version": "0.2.9",
       "source": "./plugins/ape",
       "description": "Apes open-source repos for techniques transferable to your codebase — discovery, ranking, cloning, per-repo analysis, and synthesis run as a real Workflow script, so the orchestrator only sees the fingerprint and final recommendations."
     },
     {
       "name": "offload-sidecar",
-      "version": "0.3.4",
+      "version": "0.3.5",
       "source": "./plugins/offload-sidecar",
       "description": "MCP tool that offloads file transforms, log triage, and vision tasks so Claude passes file paths, not content — deterministic in-process where possible, else routed across local Ollama tiers (deep/fast, private) or Gemini via the agy CLI (flash/pro, budget-gated so quota exhaustion rejects up front instead of failing mid-call). Formerly ollama-sidecar."
     }

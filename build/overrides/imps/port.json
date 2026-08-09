@@ -1,0 +1,59 @@
+{
+  "asset_dirs": [
+    "personas",
+    "references",
+    "scripts",
+    "templates"
+  ],
+  "asset_exclude": {
+    "references/opencode-harness.md": "Maintainer documentation for the Claude-side OpenCode execute-tier harness. Records the harness's own Homebrew install path ($(brew --prefix)/opt/agent-safehouse/...) and $HOME-relative git config mounts, which dist/ forbids. It stays accurate for Claude readers in plugins/; the generated dispatch prose points at the harness by name instead of restating it.",
+    "scripts/dispatch-banner.py": "Colour-codes the imp roster by Claude model name — `opus`/`sonnet`/`haiku` substring matches against a `model` field in the run state file. This build routes by tier (`cheap`/`standard`/`deep`) and its state file carries no `model` field, so the script would silently colour every imp the default green while re-introducing Claude model names as a runtime choice (contract item 23). Its only caller was the Workflow-driven Phase 3, which this directory's overrides replace with a foreground loop that has no roster to print.",
+    "scripts/final-banner.py": "The end-of-run companion to dispatch-banner.py, excluded for the same reason: it colours by `opus`/`sonnet`/`haiku` and synthesizes a roster from a `model_counts` map that a tier-routed run never writes. Excluded with its caller, the Workflow `run_complete` checkpoint.",
+    "scripts/imps-run.workflow.js": "The Claude Code Workflow runtime for the whole run — agent() dispatch, isolation: 'worktree', the Workflow resume model. Neither platform has a Workflow tool, so shipping it would present Claude mechanics as if they run there (contract item 16). The per-platform dispatch loop is prose, from this directory's overrides.",
+    "scripts/opencode-dispatch.sh": "The Claude-host oracle-loop harness. Copies the operator's own OpenCode auth from a $HOME-relative path and drives sandbox-wrap.sh, so it is unusable without it and cannot satisfy dist/'s no-machine-paths invariant as written. Frozen Claude sources forbid rewriting it here.",
+    "scripts/sandbox-smoke.sh": "Seatbelt grant-boundary smoke test for sandbox-wrap.sh. Asserts against $HOME-relative paths throughout; excluded with the wrapper it tests.",
+    "scripts/sandbox-wrap.sh": "Darwin-only Seatbelt wrapper (agent-safehouse). Resolves the safehouse binary through /opt/homebrew and /usr/local/opt and canonicalises $HOME — absolute machine paths dist/ must never carry, and unfixable here because Claude sources are frozen."
+  },
+  "asset_replacements": {
+    "references/checklist-mode.md": [
+      [
+        "- Model = haiku for shell/grep checks; sonnet for items marked `[JUDGMENT — sonnet]`",
+        "- Tier = `cheap` for shell/grep checks; `standard` for items marked `[JUDGMENT]`"
+      ],
+      [
+        "For each task, spawn a `query` imp (haiku or sonnet, worktree-isolated=false) that:",
+        "For each task, dispatch a `query` imp (`cheap` or `standard` tier, no worktree) that:"
+      ],
+      [
+        "audits — dispatch them directly; no state file or Workflow script is involved unless",
+        "audits — dispatch them directly; no state file or background run driver is involved unless"
+      ],
+      [
+        "  write the state file and hand the run to the Workflow script (model-routed,",
+        "  write the state file and hand the run to the dispatch loop (tier-routed,"
+      ]
+    ],
+    "references/discussion-mode.md": [
+      [
+        "one obligation the Workflow script fulfills at finalize.*",
+        "one obligation the run's finalize step fulfills.*"
+      ],
+      [
+        "the source discussion whenever finalize is reached. **The Workflow script owns this** — it",
+        "the source discussion whenever finalize is reached. **The finalize step owns this** — it"
+      ]
+    ],
+    "references/persona-posting.md": [
+      [
+        "Phase 4 and the free-text run's Workflow script alike. Generalized on purpose: this file",
+        "Phase 4 and the free-text run's own panel alike. Generalized on purpose: this file"
+      ]
+    ]
+  },
+  "manifest_overrides": {
+    "description": "Swarm orchestrator — decomposes a task into dependency-mapped units, dispatches them serially into isolated git worktrees, merges through deterministic gates, and runs a persona-review panel. Includes /imp-agency: a whole-repo audit that produces an imps-ready remediation plan. (The Claude Code build of this plugin drives the same run from a background Workflow script; here the skill drives it directly.)"
+  },
+  "source_hash_pins": {
+    "scripts/imps-run.workflow.js": "f0d65ad141e8d7194a1e36265eb55254853db311823cdc98d03100a7bd53009d"
+  }
+}

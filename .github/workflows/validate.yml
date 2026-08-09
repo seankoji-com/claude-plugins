@@ -268,3 +268,72 @@ jobs:
 
       - name: Run tests/run-js.sh
         run: bash tests/run-js.sh
+
+  # Regenerates dist/opencode and dist/agy from the committed sources on a clean
+  # ubuntu-latest checkout and fails if the result differs from what's committed. This
+  # is also the cross-machine determinism check: generate.py is required to produce a
+  # byte-identical dist/ regardless of the OS/filesystem it runs on (see the "Generator
+  # determinism" constraint in the run's Global Constraints — sorted() enumeration,
+  # sort_keys json.dump, newline="\n" everywhere), and ubuntu-latest is a different
+  # machine from every contributor's dev box by construction.
+  cross-platform-regen:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 matches the `validate` job's checkout above; kept for parity and
+      # because it's cheap on this repo's history, even though dist-lint.sh's
+      # frozen-sources check — the one invariant here that needs origin/master — is
+      # opt-in (--check-frozen-sources) and NOT part of the plain `bash build/dist-lint.sh`
+      # run below. Wiring frozen-sources into this permanent push/pull_request gate would
+      # compare every future, unrelated PR against a moving origin/master and reject any
+      # of them that legitimately touch a command/agent/script file — see dist-lint.sh's
+      # own --help text and the comment above check_frozen_sources for the full reasoning.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # --self-test proves each dist-lint invariant actually fails on a broken fixture
+      # and passes on a correct one — the fail-closed guards it enforces (out-of-prefix
+      # uninstall paths, frozen Claude sources, README-marker agreement, ...) had no
+      # automated regression coverage anywhere in CI before this step existed; a
+      # regression here previously required someone to remember to run --self-test by
+      # hand. Self-contained (its own mktemp fixtures and synthetic git repos), so it
+      # needs no live agy/opencode and runs before the real-repo lint below.
+      - name: Prove dist-lint.sh's invariants (build/dist-lint.sh --self-test)
+        run: bash build/dist-lint.sh --self-test
+
+      # Same reasoning for install-agy.sh's fail-closed uninstall-path guard: its
+      # --self-test runs entirely inside a throwaway mktemp -d prefix (never the real
+      # install location) and needs no live `agy` binary — see its own --self-test
+      # implementation for both guarantees.
+      - name: Prove install-agy.sh's fail-closed guard (install-agy.sh --self-test)
+        run: bash install-agy.sh --self-test
+
+      # dist-lint runs FIRST, against the pristine checkout. Its regen-diff invariant
+      # generates into its own mktemp and compares both directions against the *committed*
+      # dist/ — that signal is destroyed once `generate.py` has overwritten dist/ in place.
+      # Deliberately NOT --check-frozen-sources: see the checkout step's comment above.
+      - name: Lint the committed dist/ (build/dist-lint.sh)
+        run: bash build/dist-lint.sh
+
+      - name: Regenerate dist/ from committed sources (build/generate.py)
+        run: python3 build/generate.py
+
+      - name: Fail on dist/ drift between committed and freshly generated output
+        run: |
+          # git status --porcelain, not just `git diff --exit-code`: a regeneration that
+          # emits a brand-new file (a new command added to plugins/, dist/ not
+          # re-committed) leaves it *untracked*, which `git diff --exit-code` alone does
+          # not see. Run both: porcelain is the primary gate (it also covers the
+          # untracked case), and `git diff --exit-code -- dist` is kept alongside as a
+          # second, narrower assertion over tracked files specifically — redundant with
+          # porcelain by construction (nothing reaches it with porcelain already clean),
+          # so it never weakens the gate, only names the tracked-file case explicitly.
+          drift="$(git status --porcelain -- dist)"
+          tracked_drift=0
+          git diff --exit-code -- dist >/dev/null || tracked_drift=1
+          if [ -n "$drift" ] || [ "$tracked_drift" = "1" ]; then
+            echo "ERROR: dist/ is out of date. Run 'python3 build/generate.py' locally and commit the result." >&2
+            printf '%s\n' "$drift" >&2
+            git diff -- dist >&2 || true
+            exit 1
+          fi

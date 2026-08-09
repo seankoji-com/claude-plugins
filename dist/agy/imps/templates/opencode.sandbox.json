@@ -1,0 +1,13 @@
+{
+  "permission": {
+    "external_directory": "deny",
+    "webfetch": "deny",
+    "bash": {
+      "*": "allow",
+      "rm -rf *": "deny",
+      "git push *": "deny",
+      "sudo *": "deny",
+      "curl *": "deny"
+    }
+  }
+}

