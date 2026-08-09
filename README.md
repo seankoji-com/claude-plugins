@@ -53,8 +53,10 @@ read *even for public packages*, so installing needs one `~/.npmrc` setup step:
 ```
 
 The token is a [personal access token](https://github.com/settings/tokens) with only
-the `read:packages` scope (classic tokens — fine-grained tokens cannot read GitHub
-Packages). Then:
+the `read:packages` scope. It must be a **classic** token — GitHub's npm-registry docs
+state *"GitHub Packages only supports authentication using a personal access token
+(classic)"*, and fine-grained tokens are not supported for this registry even though
+they expose a `Packages` permission that works elsewhere. Then:
 
 ```bash
 npm install -g @seankoji/claude-plugins-opencode

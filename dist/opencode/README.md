@@ -14,8 +14,15 @@ authentication for every read, including public packages, so installing takes on
 setup step that a plain npmjs package would not.
 
 **1. Create a token.** A [personal access token](https://github.com/settings/tokens)
-with the `read:packages` scope — classic tokens only; fine-grained tokens cannot read
-GitHub Packages today. It needs no other scope.
+with the `read:packages` scope, and no other scope.
+
+It must be a **classic** token. GitHub's own npm-registry documentation states:
+*"GitHub Packages only supports authentication using a personal access token
+(classic)."* ([docs](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry))
+Fine-grained tokens carry a `Packages` permission and do work against some other
+GitHub Packages registries, which makes this easy to get wrong — for the **npm**
+registry specifically they are not supported. If that changes upstream, this line is
+the one to revisit.
 
 **2. Point the `@seankoji` scope at GitHub Packages and authenticate.** In `~/.npmrc`:
 

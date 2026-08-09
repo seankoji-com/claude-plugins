@@ -28,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       confirm:
-        description: 'Type PUBLISH to confirm publishing the committed dist/opencode/ package to npm'
+        description: 'Type PUBLISH to confirm publishing the committed dist/opencode/ package to GitHub Packages'
         required: true
 
 permissions:
@@ -126,17 +126,26 @@ jobs:
       # governs plugin manifests, not this package). So a second dispatch at an unbumped
       # ref reaches `npm publish` with a version that already exists on the registry and
       # dies on EPUBLISHCONFLICT *after* the checkout, lint and regen-diff have all run,
-      # with npm's error as the only explanation. Check up front and say the actual
-      # remedy instead. `npm view` exits non-zero when the version does not exist, which
-      # is the success case here, so the exit status is deliberately not used as the gate
-      # — only whether it printed a version. A registry outage therefore fails open to
-      # the publish step, which fails closed on its own.
+      # with npm's error as the only explanation. Check up front and say the actual remedy.
+      #
+      # Three outcomes, distinguished deliberately rather than collapsed into
+      # "did it print anything":
+      #   * the version exists            -> fail, with the bump instructions
+      #   * E404 / 404                    -> the version is genuinely absent; publish
+      #   * anything else (401, 5xx, DNS) -> fail CLOSED, because we do not know
+      #
+      # The third case is the one worth spelling out. On npmjs reads are anonymous, so a
+      # lookup either found the version or did not. GitHub Packages requires auth for every
+      # read, which makes 401 a live failure mode — and a bare `|| true` would swallow it,
+      # print nothing, and read as "not published, safe to publish". That does not risk a
+      # bad publish (npm still rejects a duplicate version), but it does silently delete
+      # this gate's entire value: the operator gets npm's opaque EPUBLISHCONFLICT instead
+      # of the actionable message this step exists to produce. Refusing on an inconclusive
+      # answer keeps the failure legible.
       - name: Preflight — refuse to republish an existing version
         working-directory: dist/opencode
         # NODE_AUTH_TOKEN is needed even to READ: GitHub Packages requires authentication
-        # for every operation, including reads of public packages. Without it this `npm
-        # view` would 401 rather than 404, print nothing either way, and the gate would
-        # silently degrade into "always allow".
+        # for every operation, including reads of public packages.
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -144,12 +153,31 @@ jobs:
           name="$(node -p 'require("./package.json").name')"
           version="$(node -p 'require("./package.json").version')"
           echo "package: $name@$version"
-          if [ -n "$(npm view "$name@$version" version 2>/dev/null || true)" ]; then
+
+          # Capture stdout, stderr and status separately. `|| true` keeps set -e from
+          # killing the step before we can classify the failure.
+          set +e
+          view_out="$(npm view "$name@$version" version 2>"$RUNNER_TEMP/npm-view-err.txt")"
+          view_status=$?
+          set -e
+          view_err="$(cat "$RUNNER_TEMP/npm-view-err.txt")"
+
+          if [ "$view_status" -eq 0 ] && [ -n "$view_out" ]; then
             echo "::error::$name@$version is already published — npm forbids republishing a version." >&2
             echo "Bump \"version\" in build/npm/package.json, run \`python3 build/generate.py\` to mirror it into dist/opencode/package.json, commit both, and re-dispatch." >&2
             exit 1
           fi
-          echo "$name@$version is not on GitHub Packages — safe to publish."
+
+          if printf '%s' "$view_err" | grep -qE 'E404|404 Not Found|is not in this registry'; then
+            echo "$name@$version is not on GitHub Packages — safe to publish."
+            exit 0
+          fi
+
+          echo "::error::could not determine whether $name@$version is already published." >&2
+          echo "npm view exited $view_status. This is NOT treated as 'not published' — refusing rather than guessing." >&2
+          echo "Common causes: GITHUB_TOKEN lacks packages:read, GitHub Packages is disabled for this repo, or the registry is unreachable." >&2
+          printf '%s\n' "$view_err" >&2
+          exit 1
 
       - name: Publish committed dist/opencode/ to GitHub Packages (no rebuild)
         working-directory: dist/opencode
