@@ -204,7 +204,11 @@ extract_dist_agy() {
 # against the INSTALLED tree afterwards.
 #
 # Literal index/substr replacement, mirroring build/npm/lib/installer.js — not
-# sed -- so that a resolved path containing /, &, or \ needs no escaping.
+# sed -- so that a resolved path containing /, &, or \ needs no escaping. The
+# replacement value is passed via ENVIRON, not `awk -v`: POSIX `-v var=value`
+# runs C-style escape processing on value (e.g. a literal `\b` in the path
+# becomes a backspace byte), which would corrupt any install prefix containing
+# a backslash. ENVIRON is not reprocessed that way.
 # Idempotent: after a successful pass no placeholder remains, so re-running is
 # a no-op. File modes are preserved (cat > in place, not a fresh file) so
 # shipped scripts stay executable.
@@ -226,8 +230,9 @@ substitute_plugin_root() {
   while IFS= read -r f; do
     grep -q '__PLUGIN_ROOT__' "$f" 2>/dev/null || continue
     tmp="$(mktemp)" || return 1
-    awk -v root="$installed_dir" '
+    PLUGIN_ROOT_VALUE="$installed_dir" awk '
       {
+        root = ENVIRON["PLUGIN_ROOT_VALUE"]
         n = index($0, "__PLUGIN_ROOT__")
         while (n > 0) {
           $0 = substr($0, 1, n - 1) root substr($0, n + 15)

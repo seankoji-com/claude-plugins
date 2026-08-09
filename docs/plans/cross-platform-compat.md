@@ -308,7 +308,7 @@ the gate's handle, not a substitute for evidence.
 
 ## Out of scope
 
-- Any behavior change to Claude-loaded files beyond the two named exceptions.
+- Any behavior change to Claude-loaded files beyond the three named exceptions.
 - Rewriting workflow-script internals; porting claude-tuneup; reworking offload-sidecar Python.
 - Building a second OpenCode delivery channel for the Claude-skills auto-load (document only).
 - Introducing git tags or a release-tagging practice.

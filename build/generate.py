@@ -392,6 +392,19 @@ def verify_source_hash_pins(plugin: str, config: dict) -> None:
             )
 
 
+PORT_CONFIG_KEYS = frozenset(
+    {
+        "asset_dirs",
+        "asset_exclude",
+        "asset_replacements",
+        "manifest_overrides",
+        "source_hash_pins",
+        # Documentation-only: read by maintainers, not by this generator.
+        "reason",
+    }
+)
+
+
 def port_config(plugin: str, platform_conf: dict) -> dict:
     path = OVERRIDES_DIR / plugin / "port.json"
     config = {
@@ -402,7 +415,16 @@ def port_config(plugin: str, platform_conf: dict) -> dict:
         "source_hash_pins": {},
     }
     if path.is_file():
-        config.update(load_json(path))
+        overrides = load_json(path)
+        unknown = sorted(set(overrides) - PORT_CONFIG_KEYS)
+        if unknown:
+            raise GenerateError(
+                f"{rel(path)}: unrecognized key(s) {unknown!r} — expected one of "
+                f"{sorted(PORT_CONFIG_KEYS)!r}. A misspelled key (e.g. "
+                f"'asset_excludes' for 'asset_exclude') is silently ignored otherwise, "
+                f"and whatever it was meant to configure just doesn't happen."
+            )
+        config.update(overrides)
     verify_source_hash_pins(plugin, config)
     return config
 
@@ -475,9 +497,13 @@ def render_markdown(
     blocks = filter_frontmatter(
         blocks, frontmatter_conf["emit"], frontmatter_conf["drop"], source_rel
     )
+    injected: list[tuple[str, tuple[str, ...]]] = []
     for key, value in extra_frontmatter + override.frontmatter:
         blocks = [(k, v) for k, v in blocks if k != key]
-        blocks.insert(0, (key, (f"{key}: {value}",)))
+        injected.append((key, (f"{key}: {value}",)))
+    # Prepended as a group, not one insert(0) per key, so multiple injected keys
+    # keep the order they were iterated in rather than ending up reversed.
+    blocks = injected + blocks
 
     body, held = apply_override(body, override, source_rel)
     text = render_frontmatter(blocks) + "\n" + body.lstrip("\n")

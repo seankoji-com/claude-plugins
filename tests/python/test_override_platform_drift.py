@@ -230,7 +230,7 @@ class TestOverridePlatformDrift(unittest.TestCase):
                         reduced.splitlines(), agy_text.splitlines(), lineterm=""
                     )
                     if (line.startswith("+") or line.startswith("-"))
-                    and not line.startswith(("+++", "---"))
+                    and not line.startswith(("+++ ", "--- "))
                 ]
 
                 checked += 1
