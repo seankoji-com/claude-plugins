@@ -1,5 +1,5 @@
 {
-  "name": "claude-plugins-opencode",
+  "name": "@seankoji/claude-plugins-opencode",
   "version": "0.1.0",
   "description": "OpenCode channel installer for seankoji/claude-plugins — copies the generated commands and scripts into ~/.config/opencode.",
   "license": "MIT",
@@ -8,6 +8,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/seankoji/claude-plugins.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "bin": {
     "claude-plugins-opencode": "bin/cli.js"

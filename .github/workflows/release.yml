@@ -7,6 +7,17 @@ name: Release (npm)
 # this workflow never runs build/generate.py to *produce* dist/, only to check it (see
 # "Lint dist/ before publishing" below).
 #
+# Target registry is GitHub Packages (https://npm.pkg.github.com), not npmjs. Three
+# consequences, all load-bearing:
+#   * the package name MUST be scoped to the repo owner (@seankoji/...) — GitHub Packages
+#     only accepts scoped names, so an unscoped name is rejected at publish;
+#   * auth is the workflow's automatic GITHUB_TOKEN plus `packages: write`, so there is no
+#     registry secret to configure and nothing to rotate;
+#   * `--provenance` is gone. npm provenance attestations are minted against the public
+#     npmjs registry via Sigstore; GitHub Packages does not issue or serve them, so the
+#     flag would fail the publish rather than add a signature. `id-token: write` went with
+#     it, since nothing else here needs OIDC.
+#
 # `workflow_dispatch` can target any ref, not only one that went through a PR and
 # validate.yml's cross-platform-regen gate — a ref pushed straight to a branch, for
 # instance. So this job cannot assume "the PR already proved drift-free" and skip its own
@@ -22,7 +33,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # required for --provenance (npm OIDC attestation)
+  packages: write # publish to GitHub Packages as the workflow's own GITHUB_TOKEN
 
 jobs:
   publish-npm:
@@ -41,17 +52,13 @@ jobs:
       group: release-npm
       cancel-in-progress: false
     steps:
-      # Fail fast, before checkout+lint spend any CI time, if the secret this job
-      # can't publish without simply isn't configured — surfaces as a plain, actionable
-      # message instead of npm's opaque ENEEDAUTH deep in the publish step.
-      - name: Verify NPM_TOKEN is configured
-        env:
-          HAS_TOKEN: ${{ secrets.NPM_TOKEN != '' }}
-        run: |
-          if [ "$HAS_TOKEN" != "true" ]; then
-            echo "ERROR: the NPM_TOKEN repository secret is not set — publish would fail with ENEEDAUTH at the last step. Add it under Settings > Secrets and variables > Actions before dispatching this workflow." >&2
-            exit 1
-          fi
+      # No token-preflight step: GITHUB_TOKEN is injected automatically for every workflow
+      # run, so there is no misconfiguration to catch here the way there was with a
+      # hand-added NPM_TOKEN. What CAN still be wrong is org/repo policy — if GitHub
+      # Packages is disabled for this repo, or `packages: write` is withheld by an org
+      # default-permissions setting, the publish step fails with a 403. That is not
+      # detectable from inside the job before attempting it, so it is left to fail at the
+      # publish step with GitHub's own error rather than guessed at up front.
 
       # fetch-depth: 0 matches validate.yml's cross-platform-regen job and the same
       # actions/checkout version it uses. NOTE: the frozen-sources invariant that needs
@@ -78,10 +85,15 @@ jobs:
             exit 1
           fi
 
+      # registry-url makes setup-node write an ~/.npmrc binding this scope to GitHub
+      # Packages and referencing ${NODE_AUTH_TOKEN}. Every npm command below that needs
+      # auth — the preflight `npm view` as well as `npm publish` — therefore just needs
+      # NODE_AUTH_TOKEN in its env; neither writes an .npmrc of its own.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@seankoji'
 
       - name: Verify dist/opencode is present and committed
         run: |
@@ -121,6 +133,12 @@ jobs:
       # the publish step, which fails closed on its own.
       - name: Preflight — refuse to republish an existing version
         working-directory: dist/opencode
+        # NODE_AUTH_TOKEN is needed even to READ: GitHub Packages requires authentication
+        # for every operation, including reads of public packages. Without it this `npm
+        # view` would 401 rather than 404, print nothing either way, and the gate would
+        # silently degrade into "always allow".
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           name="$(node -p 'require("./package.json").name')"
@@ -131,13 +149,14 @@ jobs:
             echo "Bump \"version\" in build/npm/package.json, run \`python3 build/generate.py\` to mirror it into dist/opencode/package.json, commit both, and re-dispatch." >&2
             exit 1
           fi
-          echo "$name@$version is not on the registry — safe to publish."
+          echo "$name@$version is not on GitHub Packages — safe to publish."
 
-      - name: Publish committed dist/opencode/ to npm (no rebuild)
+      - name: Publish committed dist/opencode/ to GitHub Packages (no rebuild)
         working-directory: dist/opencode
-        # First publish of a scoped/new package: --access public makes the intent explicit
-        # rather than relying on npm's default, and --provenance attaches a signed build
-        # attestation (needs the id-token: write permission above).
-        run: npm publish --access public --provenance
+        # No --access: on GitHub Packages a package's visibility follows the repository's,
+        # and --access is an npmjs concept the registry does not honour. No --provenance
+        # either — see the header comment. The registry comes from package.json's
+        # publishConfig, backed by the .npmrc setup-node wrote.
+        run: npm publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
