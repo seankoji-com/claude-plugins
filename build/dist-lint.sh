@@ -177,7 +177,16 @@ check_unsubstituted_ref() {
 check_absolute_path() {
   local dist="$1"
   local hits
-  hits="$(grep -rlE '(^|[^_[:alnum:]])/(Users|home|opt|usr/local)/|[$]HOME' "$dist" 2>/dev/null | sorted || true)"
+  # `[$][{]?HOME` covers both `$HOME` and `${HOME}`; the original `[$]HOME` could not
+  # match the braced form (the `$` is followed by `{`), so it was strictly weaker than
+  # generate.py's own FORBIDDEN_PATTERNS, which this check exists to re-assert
+  # independently. /private, /var and /etc join the roots list on the same reasoning.
+  #
+  # /tmp is deliberately NOT in that list. It appears legitimately throughout dist/ in
+  # mktemp templates and `${TMPDIR:-/tmp}` fallbacks, and unlike a home directory it is
+  # not machine-specific — the same path exists on every POSIX box, which is exactly
+  # what makes it safe to bake in and what this check is guarding against.
+  hits="$(grep -rlE '(^|[^_[:alnum:]])/(Users|home|opt|usr/local|private|var|etc)/|[$][{]?HOME' "$dist" 2>/dev/null | sorted || true)"
   if [ -n "$hits" ]; then
     echo "absolute-path: absolute machine path or \$HOME leaked into dist/ in:" >&2
     printf '%s\n' "$hits" >&2
@@ -632,6 +641,25 @@ self_test() {
   st_case "absolute-path" \
     "check_absolute_path '$tmp/abs/broken'" \
     "check_absolute_path '$tmp/abs/correct'"
+
+  # 3b. absolute-path, braced ${HOME} — the form the original `[$]HOME` pattern could
+  # not match, so this fixture is what stops that regression from returning.
+  mkdir -p "$tmp/abs-braced/correct" "$tmp/abs-braced/broken"
+  printf 'cache lives under XDG_CACHE_HOME\n' > "$tmp/abs-braced/correct/a.md"
+  printf 'cache lives under %s/.cache\n' '${HOME}' > "$tmp/abs-braced/broken/a.md"
+  st_case "absolute-path-braced-home" \
+    "check_absolute_path '$tmp/abs-braced/broken'" \
+    "check_absolute_path '$tmp/abs-braced/correct'"
+
+  # 3c. absolute-path, /tmp is deliberately allowed — a machine-independent path that
+  # appears legitimately in mktemp templates and ${TMPDIR:-/tmp} fallbacks. This case
+  # pins that as intent, so a later "tighten the regex" pass has to change a named
+  # fixture rather than silently breaking every dist/ file that uses a temp dir.
+  mkdir -p "$tmp/abs-tmp/correct"
+  printf 'scratch="$(mktemp -d /tmp/xplat.XXXXXX)"\n' > "$tmp/abs-tmp/correct/a.sh"
+  st_case "absolute-path-tmp-allowed" \
+    "check_absolute_path '$tmp/abs/broken'" \
+    "check_absolute_path '$tmp/abs-tmp/correct'"
 
   # 4. manifest
   mkdir -p "$tmp/manifest/correct/agy/foo" "$tmp/manifest/broken/agy/foo"

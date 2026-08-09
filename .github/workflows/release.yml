@@ -109,6 +109,30 @@ jobs:
         # costs seconds and dist-lint has no opencode-only mode to save them.
         run: bash build/dist-lint.sh
 
+      # `version` in build/npm/package.json is authored by hand and mirrored verbatim
+      # into dist/opencode/package.json — nothing bumps it automatically (version-bump.yml
+      # governs plugin manifests, not this package). So a second dispatch at an unbumped
+      # ref reaches `npm publish` with a version that already exists on the registry and
+      # dies on EPUBLISHCONFLICT *after* the checkout, lint and regen-diff have all run,
+      # with npm's error as the only explanation. Check up front and say the actual
+      # remedy instead. `npm view` exits non-zero when the version does not exist, which
+      # is the success case here, so the exit status is deliberately not used as the gate
+      # — only whether it printed a version. A registry outage therefore fails open to
+      # the publish step, which fails closed on its own.
+      - name: Preflight — refuse to republish an existing version
+        working-directory: dist/opencode
+        run: |
+          set -euo pipefail
+          name="$(node -p 'require("./package.json").name')"
+          version="$(node -p 'require("./package.json").version')"
+          echo "package: $name@$version"
+          if [ -n "$(npm view "$name@$version" version 2>/dev/null || true)" ]; then
+            echo "::error::$name@$version is already published — npm forbids republishing a version." >&2
+            echo "Bump \"version\" in build/npm/package.json, run \`python3 build/generate.py\` to mirror it into dist/opencode/package.json, commit both, and re-dispatch." >&2
+            exit 1
+          fi
+          echo "$name@$version is not on the registry — safe to publish."
+
       - name: Publish committed dist/opencode/ to npm (no rebuild)
         working-directory: dist/opencode
         # First publish of a scoped/new package: --access public makes the intent explicit

@@ -296,3 +296,35 @@ test('parseArgs() still accepts a well-formed --prefix', () => {
   assert.equal(result.command, 'uninstall')
   assert.equal(result.prefix, '/tmp/x')
 })
+
+// --- binary-asset safety -------------------------------------------------------
+//
+// installer.js used to read every file under share/<plugin>/ with
+// fs.readFileSync(f, "utf8") and hand the string to substitute(). A plugin shipping a
+// non-text asset (an icon, a compiled helper, an archive) would have every invalid
+// byte sequence replaced with U+FFFD on the way out — a silent corruption with no
+// error and no failing check anywhere. isBinary() is the guard that routes those
+// files down a verbatim byte copy instead; these cases pin its two detection rules
+// and, critically, prove the corruption it prevents is real rather than theoretical.
+
+test('isBinary() flags a NUL byte, which valid UTF-8 text never contains', () => {
+  const installer = freshInstaller()
+  assert.equal(installer.isBinary(Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x01])), true)
+  assert.equal(installer.isBinary(Buffer.from('#!/bin/sh\necho hi\n', 'utf8')), false)
+})
+
+test('isBinary() flags bytes that are not valid UTF-8, and lets real UTF-8 text through', () => {
+  const installer = freshInstaller()
+  // 0x80-0x8f as a lone sequence is not a legal UTF-8 encoding of anything.
+  assert.equal(installer.isBinary(Buffer.from([0xff, 0xd8, 0xff, 0xe0])), true, 'JPEG magic should read as binary')
+  // Multi-byte UTF-8 must NOT be misread as binary — dist/ is full of em dashes.
+  assert.equal(installer.isBinary(Buffer.from('a — b · c ✓\n', 'utf8')), false)
+})
+
+test('a utf8 decode round trip really does corrupt binary bytes (the bug isBinary prevents)', () => {
+  const bytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46])
+  const roundTripped = Buffer.from(bytes.toString('utf8'), 'utf8')
+  assert.ok(!roundTripped.equals(bytes), 'expected the utf8 round trip to be lossy')
+  // And the guard catches exactly this input, so the lossy path is never taken.
+  assert.equal(freshInstaller().isBinary(bytes), true)
+})

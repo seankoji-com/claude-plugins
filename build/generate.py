@@ -97,6 +97,28 @@ def read_text(path: Path) -> str:
         raise GenerateError(f"{rel(path)}: not UTF-8 text ({exc})") from exc
 
 
+def read_asset(path: Path) -> str | bytes:
+    """Read a bundled asset, returning `str` for text and `bytes` for binary.
+
+    Everything under a plugin's `asset_dirs` is copied into dist/, and a plugin may
+    legitimately ship a non-text asset (an image, a compiled helper, an archive, a
+    sqlite file). `read_text` raises GenerateError on those, which would fail the whole
+    build; decoding them lossily would be worse, silently replacing every invalid byte
+    with U+FFFD. So probe first and hand binary back untouched — no `apply_mapping`, no
+    `asset_replacements`, no `__PLUGIN_ROOT__` rewriting, all of which are text-file
+    conventions. A NUL byte never occurs in valid UTF-8, and anything that fails to
+    decode is binary by definition; together those cover the realistic cases without a
+    content-type table.
+    """
+    raw = path.read_bytes()
+    if b"\x00" in raw:
+        return raw
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw
+
+
 def rel(path: Path) -> str:
     return path.relative_to(REPO_ROOT).as_posix()
 
@@ -583,8 +605,14 @@ def generate_plugin(plugin: str, platform: str, platform_table: dict, outputs: d
 
     for source in asset_files(plugin, config["asset_dirs"], config["asset_exclude"]):
         source_rel = rel(source)
-        text = apply_mapping(read_text(source), platform_conf, invocation_pairs, source_rel)
         relative = source.relative_to(PLUGINS_DIR / plugin).as_posix()
+        content = read_asset(source)
+        if isinstance(content, bytes):
+            # Binary asset: copied through byte-for-byte. Mapping and replacements are
+            # text transforms; running them here would either crash or corrupt.
+            outputs[f"{asset_prefix}/{relative}"] = (content, file_mode(source))
+            continue
+        text = apply_mapping(content, platform_conf, invocation_pairs, source_rel)
         text = apply_asset_replacements(text, plugin, relative, config["asset_replacements"])
         outputs[f"{asset_prefix}/{relative}"] = (text, file_mode(source))
 
@@ -598,7 +626,9 @@ def mirror_npm_source(outputs: dict) -> None:
         relative = source.relative_to(NPM_DIR)
         if is_source_artifact(relative.parts):
             continue
-        outputs[f"opencode/{relative.as_posix()}"] = (read_text(source), file_mode(source))
+        # read_asset, not read_text: build/npm/ is verbatim-mirrored package source and
+        # could grow a binary fixture; a crash here would fail the whole build.
+        outputs[f"opencode/{relative.as_posix()}"] = (read_asset(source), file_mode(source))
 
 
 # ------------------------------------------------------------------------------ output
@@ -625,15 +655,23 @@ def plugin_output_targets(plugin: str, platform_table: dict) -> list[Path]:
 
 
 def write_outputs(outputs: dict) -> None:
+    # Binary outputs are exempt from `guard` and written in binary mode. They cannot
+    # carry a machine path or an unmapped Claude directory reference in any sense the
+    # line-oriented guard could check — it would have to decode them to look, which is
+    # the corruption this exemption exists to avoid.
     for out_rel in sorted(outputs):
-        text, mode = outputs[out_rel]
-        guard(out_rel, text)
+        content, mode = outputs[out_rel]
+        if not isinstance(content, bytes):
+            guard(out_rel, content)
     for out_rel in sorted(outputs):
-        text, mode = outputs[out_rel]
+        content, mode = outputs[out_rel]
         path = DIST_DIR / out_rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        else:
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(content)
         path.chmod(mode)
 
 

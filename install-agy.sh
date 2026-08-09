@@ -227,7 +227,7 @@ substitute_plugin_root() {
     log "install-agy.sh:   WARNING — expected install dir not found, __PLUGIN_ROOT__ substitution skipped: $installed_dir"
     return 2
   fi
-  while IFS= read -r f; do
+  while IFS= read -r -d '' f; do
     grep -q '__PLUGIN_ROOT__' "$f" 2>/dev/null || continue
     tmp="$(mktemp)" || return 1
     PLUGIN_ROOT_VALUE="$installed_dir" awk '
@@ -244,9 +244,15 @@ substitute_plugin_root() {
     cat "$tmp" > "$f" || { rm -f -- "$tmp"; return 1; }   # preserves $f's mode
     rm -f -- "$tmp"
     changed=$((changed + 1))
-  done <<EOF
-$(find "$installed_dir" -type f)
-EOF
+    # NUL-delimited, via a process substitution rather than a `find | while` pipe.
+    # `IFS= read -r` already handles spaces and tabs correctly, but a newline inside a
+    # filename would split one path into two — and the command-substitution heredoc this
+    # replaces also stripped trailing newlines and forked a subshell. `-d ''` makes the
+    # delimiter NUL, the one byte a POSIX path cannot contain, so every path arrives
+    # intact whatever it holds. Redirecting from <(...) instead of piping keeps the loop
+    # in this shell, so `changed` survives the loop (a pipe would increment it in a
+    # subshell and report 0 every time).
+  done < <(find "$installed_dir" -type f -print0)
   [ "$changed" -gt 0 ] && log "install-agy.sh:   substituted __PLUGIN_ROOT__ in $changed file(s)"
   return 0
 }

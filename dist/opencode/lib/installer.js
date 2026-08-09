@@ -92,13 +92,28 @@ function substitute(content, pluginShareAbsPath) {
 // outside the package — and we would then copy the wrong bytes while carrying
 // the mode we sampled from the original. Opening once and using fstat/read on
 // the fd closes that window: both refer to the object we actually opened.
+//
+// Returns raw bytes, NOT a utf8 string: a decode-then-write round trip replaces any
+// byte sequence that isn't valid UTF-8 with U+FFFD, silently corrupting a binary asset
+// (an image, a compiled helper, an archive) that a plugin ships under its share/ dir.
+// Callers decide whether to decode — see isBinary below.
 function readFileAndMode(srcFile) {
   const fd = fs.openSync(srcFile, "r");
   try {
-    return { mode: fs.fstatSync(fd).mode, content: fs.readFileSync(fd, "utf8") };
+    return { mode: fs.fstatSync(fd).mode, bytes: fs.readFileSync(fd) };
   } finally {
     fs.closeSync(fd);
   }
+}
+
+// A NUL byte never appears in valid UTF-8 text, and a lossy decode/encode round trip
+// that doesn't reproduce the input means the bytes weren't valid UTF-8 either. Both
+// checks together cover the asset kinds a plugin realistically ships without needing a
+// content-type table. Binary files are copied through byte-for-byte with no
+// __PLUGIN_ROOT__ substitution — the placeholder is a text-file convention.
+function isBinary(bytes) {
+  if (bytes.includes(0)) return true;
+  return !Buffer.from(bytes.toString("utf8"), "utf8").equals(bytes);
 }
 
 function walkFiles(dir) {
@@ -114,9 +129,17 @@ function walkFiles(dir) {
   return out;
 }
 
+// `content` is either a string (text asset, post-substitution) or a Buffer (binary
+// asset, copied verbatim). Passing an explicit encoding alongside a Buffer would be
+// ignored by fs, but branching keeps the intent legible and keeps the text path's
+// encoding pinned rather than left to the platform default.
 function writeFileWithMode(destPath, content, mode) {
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
-  fs.writeFileSync(destPath, content, { encoding: "utf8" });
+  if (Buffer.isBuffer(content)) {
+    fs.writeFileSync(destPath, content);
+  } else {
+    fs.writeFileSync(destPath, content, { encoding: "utf8" });
+  }
   fs.chmodSync(destPath, mode);
 }
 
@@ -243,8 +266,9 @@ function install(opts) {
     for (const srcFile of walkFiles(srcShare)) {
       const rel = path.relative(srcShare, srcFile);
       const destFile = path.join(destShare, rel);
-      const { mode, content: rawContent } = readFileAndMode(srcFile);
-      const content = substitute(rawContent, destShare);
+      const { mode, bytes } = readFileAndMode(srcFile);
+      // Binary assets copy through verbatim; only text carries __PLUGIN_ROOT__.
+      const content = isBinary(bytes) ? bytes : substitute(bytes.toString("utf8"), destShare);
       writeFileWithMode(destFile, content, mode);
       written.push(destFile);
     }
@@ -264,8 +288,10 @@ function install(opts) {
       }
       const destShare = path.join(prefix, "share", plugin);
       const destFile = path.join(prefix, "commands", filename);
-      const { mode, content: rawContent } = readFileAndMode(srcFile);
-      const content = substitute(rawContent, destShare);
+      // Command files are .md by the filter above, so always text — decoded
+      // unconditionally rather than probed, since a binary .md is a packaging bug.
+      const { mode, bytes } = readFileAndMode(srcFile);
+      const content = substitute(bytes.toString("utf8"), destShare);
       writeFileWithMode(destFile, content, mode);
       written.push(destFile);
     }
@@ -429,6 +455,7 @@ module.exports = {
   manifestPath,
   listPlugins,
   pluginForCommandFile,
+  isBinary,
   substitute,
   install,
   uninstall,
