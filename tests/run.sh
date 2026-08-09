@@ -410,7 +410,15 @@ if [ -n "${XPLAT_E2E:-}" ] || [ -n "${OPENCODE_E2E:-}" ]; then
   else
     xplat_npm_out="$(bash "$xplat_npm_smoke" 2>&1)"
     xplat_npm_rc=$?
-    if [ "$xplat_npm_rc" -eq 0 ]; then
+    if [ "$xplat_npm_rc" -eq 0 ] && printf '%s\n' "$xplat_npm_out" | grep -q '^skip:'; then
+      # npm-install-smoke.sh exits 0 on its own early "npm not on PATH" /
+      # "dist/opencode missing" outs — a real skip, not a pass. rc==0 alone
+      # cannot tell those apart from an actual pass, so the reason line it
+      # printed is what does: without this, an opted-in (XPLAT_E2E=1) run on a
+      # box with no npm would report "ok" here, exactly the silent-green
+      # signal the comment above promises this block never produces.
+      skip "xplat/npm-install-smoke.sh" "$(printf '%s\n' "$xplat_npm_out" | grep '^skip:' | head -1)"
+    elif [ "$xplat_npm_rc" -eq 0 ]; then
       report "xplat/npm-install-smoke.sh" 1
     else
       report "xplat/npm-install-smoke.sh" 0 "$xplat_npm_out"

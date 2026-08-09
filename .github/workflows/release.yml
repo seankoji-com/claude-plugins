@@ -3,9 +3,15 @@ name: Release (npm)
 # Manual-only, on purpose: the repo has zero git tags (docs/plans/cross-platform-compat.md
 # "0. What the matrix changed") and no release automation exists to reuse. Nothing else in
 # this repo invokes `npm publish` — see the "publish is manual-only" invariant in
-# docs/plans/cross-platform-compat.md item 28. Publishes the committed dist/opencode/ as-is;
-# this workflow never runs build/generate.py, so what a maintainer approved in the PR (and
-# validate.yml's cross-platform-regen job already proved is drift-free) is exactly what ships.
+# docs/plans/cross-platform-compat.md item 28. Publishes the committed dist/opencode/ as-is —
+# this workflow never runs build/generate.py to *produce* dist/, only to check it (see
+# "Lint dist/ before publishing" below).
+#
+# `workflow_dispatch` can target any ref, not only one that went through a PR and
+# validate.yml's cross-platform-regen gate — a ref pushed straight to a branch, for
+# instance. So this job cannot assume "the PR already proved drift-free" and skip its own
+# check: it re-runs `build/dist-lint.sh`'s regen-diff invariant itself, against whatever
+# ref was actually dispatched, immediately before publish.
 
 on:
   workflow_dispatch:
@@ -22,7 +28,14 @@ jobs:
   publish-npm:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      # fetch-depth: 0 is load-bearing, not tidiness — dist-lint.sh's frozen-sources
+      # invariant (exercised below) diffs plugins/*/{commands,agents,scripts} against
+      # origin/master; a shallow single-ref checkout has neither ref and the lint step
+      # fails unconditionally. Same reasoning as validate.yml's cross-platform-regen job,
+      # pinned to the same actions/checkout version it uses.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       # The input is passed through `env:` rather than interpolated into the script body.
       # `${{ }}` inside a `run:` block is substituted before the shell ever sees it, so an
@@ -42,7 +55,7 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Verify dist/opencode is present, committed, and not hand-edited since generation
+      - name: Verify dist/opencode is present and committed
         run: |
           test -f dist/opencode/package.json || {
             echo "ERROR: dist/opencode/package.json is missing. Run 'python3 build/generate.py' and commit dist/ before releasing." >&2
@@ -52,6 +65,21 @@ jobs:
             echo "ERROR: dist/opencode has uncommitted changes on this checkout; refusing to publish an unclean tree." >&2
             exit 1
           fi
+
+      # The real "not hand-edited since generation" check. build/dist-lint.sh's
+      # regen-diff invariant regenerates dist/ into its own mktemp scratch dir and
+      # diffs both directions against the committed tree — it never mutates this
+      # checkout's dist/, so the exact bytes `npm publish` reads afterward are
+      # unaffected. This is the only place in the release path that ever confirms
+      # the dispatched ref's dist/opencode matches what generate.py would produce
+      # from its own sources; without it, the two checks above pass on a fresh
+      # checkout unconditionally regardless of whether dist/ is stale or hand-edited.
+      - name: Lint dist/ before publishing (build/dist-lint.sh)
+        # No --scope: dist-lint.sh scopes to a *plugin* name (e.g. --scope imps), not a
+        # platform, so there is no "just opencode" slice to ask for — the full lint also
+        # covers dist/agy, which this job never touches or publishes, but running it
+        # costs seconds and dist-lint has no opencode-only mode to save them.
+        run: bash build/dist-lint.sh
 
       - name: Publish committed dist/opencode/ to npm (no rebuild)
         working-directory: dist/opencode

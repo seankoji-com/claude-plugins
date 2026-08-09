@@ -299,11 +299,18 @@ jobs:
 
       - name: Fail on dist/ drift between committed and freshly generated output
         run: |
-          # git status --porcelain, not `git diff --exit-code`: a regeneration that emits a
-          # brand-new file (a new command added to plugins/, dist/ not re-committed) leaves
-          # it *untracked*, which `git diff` does not see. --porcelain reports both.
+          # git status --porcelain, not just `git diff --exit-code`: a regeneration that
+          # emits a brand-new file (a new command added to plugins/, dist/ not
+          # re-committed) leaves it *untracked*, which `git diff --exit-code` alone does
+          # not see. Run both: porcelain is the primary gate (it also covers the
+          # untracked case), and `git diff --exit-code -- dist` is kept alongside as a
+          # second, narrower assertion over tracked files specifically — redundant with
+          # porcelain by construction (nothing reaches it with porcelain already clean),
+          # so it never weakens the gate, only names the tracked-file case explicitly.
           drift="$(git status --porcelain -- dist)"
-          if [ -n "$drift" ]; then
+          tracked_drift=0
+          git diff --exit-code -- dist >/dev/null || tracked_drift=1
+          if [ -n "$drift" ] || [ "$tracked_drift" = "1" ]; then
             echo "ERROR: dist/ is out of date. Run 'python3 build/generate.py' locally and commit the result." >&2
             printf '%s\n' "$drift" >&2
             git diff -- dist >&2 || true

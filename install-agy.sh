@@ -147,27 +147,113 @@ resolve_repo_root() {
 # <dest_dir> via `git archive`, without touching the caller's working tree.
 # Prints the resolved commit SHA on stdout.
 extract_dist_agy() {
-  local ref="$1" dest="$2" repo_root sha
+  local ref="$1" dest="$2" repo_root sha archive_err tar_err
   repo_root="$(resolve_repo_root)"
   sha="$(git -C "$repo_root" rev-parse "$ref" 2>/dev/null)" || {
     log "install-agy.sh: unknown ref: $ref"
     exit 1
   }
   mkdir -p "$dest"
-  if ! git -C "$repo_root" archive "$sha" -- dist/agy 2>/dev/null | tar -x -C "$dest" 2>/dev/null; then
+  # stderr from both halves of the pipe is captured (not silenced) so a corrupt
+  # git object, a permission error, or a truncated/malformed tar stream is
+  # reported as what it is, instead of being collapsed into the generic "no
+  # dist/agy/ found" message that also covers the ordinary case (the ref
+  # genuinely predates dist/agy/).
+  archive_err="$(mktemp "${TMPDIR:-/tmp}/install-agy-archive-err.XXXXXX")"
+  tar_err="$(mktemp "${TMPDIR:-/tmp}/install-agy-tar-err.XXXXXX")"
+  if ! git -C "$repo_root" archive "$sha" -- dist/agy 2>"$archive_err" | tar -x -C "$dest" 2>"$tar_err"; then
     log "install-agy.sh: no dist/agy/ found at ref $ref ($sha) — nothing to install"
+    [ -s "$archive_err" ] && log "install-agy.sh:   git archive: $(cat "$archive_err")"
+    [ -s "$tar_err" ] && log "install-agy.sh:   tar: $(cat "$tar_err")"
+    rm -f -- "$archive_err" "$tar_err"
     exit 1
   fi
+  rm -f -- "$archive_err" "$tar_err"
   printf '%s\n' "$sha"
+}
+
+# ---------------------------------------------------------------------------
+# __PLUGIN_ROOT__ substitution — the Agy half of the contract in
+# docs/plans/cross-platform-compat.md ("no machine paths in the repo or dist/;
+# absolute paths are written only by an installer, on the user's machine, at
+# install time"). Agy's own `plugin install` is a plain copy, so this runs
+# against the INSTALLED tree afterwards.
+#
+# Literal index/substr replacement, mirroring build/npm/lib/installer.js — not
+# sed -- so that a resolved path containing /, &, or \ needs no escaping.
+# Idempotent: after a successful pass no placeholder remains, so re-running is
+# a no-op. File modes are preserved (cat > in place, not a fresh file) so
+# shipped scripts stay executable.
+# ---------------------------------------------------------------------------
+substitute_plugin_root() {
+  local installed_dir="$1" f tmp changed=0
+  [ -d "$installed_dir" ] || return 0
+  while IFS= read -r f; do
+    grep -q '__PLUGIN_ROOT__' "$f" 2>/dev/null || continue
+    tmp="$(mktemp)" || return 1
+    awk -v root="$installed_dir" '
+      {
+        n = index($0, "__PLUGIN_ROOT__")
+        while (n > 0) {
+          $0 = substr($0, 1, n - 1) root substr($0, n + 15)
+          n = index($0, "__PLUGIN_ROOT__")
+        }
+        print
+      }
+    ' "$f" > "$tmp" || { rm -f -- "$tmp"; return 1; }
+    cat "$tmp" > "$f" || { rm -f -- "$tmp"; return 1; }   # preserves $f's mode
+    rm -f -- "$tmp"
+    changed=$((changed + 1))
+  done <<EOF
+$(find "$installed_dir" -type f)
+EOF
+  [ "$changed" -gt 0 ] && log "install-agy.sh:   substituted __PLUGIN_ROOT__ in $changed file(s)"
+  return 0
+}
+
+# finalize_partial_install <tmp_checkout> <written> <manifest_path> [exit_status] —
+# the EXIT trap for install_cmd, invoked with its arguments interpolated into
+# the trap string at trap-set time (not read from install_cmd's `local`s,
+# which are already torn down by the time `set -e` fires this mid-function —
+# see the trap-set call site for why).
+#
+# Always removes the checkout tmpdir. If $written still exists and recorded at
+# least one `path:` line, it is finalized as the real manifest — covering both
+# the happy path (a no-op; the success branch below already moved it) and an
+# abort partway through the install loop, where some `agy plugin install`
+# calls succeeded before one failed: those plugins are now on disk, and
+# without this they would have no manifest entry at all (leaving them stuck
+# with no record and no clean `--uninstall` path) while the tmp file leaked
+# in $AGY_CONFIG_DIR forever. A $written with no `path:` lines (failure before
+# anything installed) is just removed, so a real prior manifest is never
+# clobbered with an empty one.
+finalize_partial_install() {
+  local tmp_checkout="$1" written="$2" manifest_path="$3"
+  rm -rf -- "$tmp_checkout"
+  if [ -f "$written" ]; then
+    if grep -q '^path:' "$written" 2>/dev/null; then
+      mv -f -- "$written" "$manifest_path"
+      log "install-agy.sh: install stopped early — manifest reflects only the plugin(s) installed before the failure; re-run to finish or --uninstall to remove them"
+    else
+      rm -f -- "$written"
+    fi
+  fi
 }
 
 install_cmd() {
   require_agy
 
-  local tmp_checkout sha
+  mkdir -p "$AGY_CONFIG_DIR"
+
+  local tmp_checkout sha written
   tmp_checkout="$(mktemp -d "${TMPDIR:-/tmp}/install-agy.XXXXXX")"
+  written="$AGY_CONFIG_DIR/.seankoji-agy-manifest.tmp.$$"
+  # Values are interpolated into the trap string now, not read from these
+  # `local`s later — bash tears down a function's locals as soon as `set -e`
+  # aborts mid-function, so a trap that referenced `$tmp_checkout`/`$written`
+  # directly would see them unset by the time it actually runs.
   # shellcheck disable=SC2064
-  trap "rm -rf -- '$tmp_checkout'" EXIT
+  trap "finalize_partial_install '$tmp_checkout' '$written' '$MANIFEST_PATH'" EXIT
 
   sha="$(extract_dist_agy "$REF" "$tmp_checkout")"
 
@@ -176,10 +262,7 @@ install_cmd() {
     exit 1
   fi
 
-  mkdir -p "$AGY_CONFIG_DIR"
-
-  local written plugin_dir plugin_name installed_count=0
-  written="$AGY_CONFIG_DIR/.seankoji-agy-manifest.tmp.$$"
+  local plugin_dir plugin_name installed_count=0
   {
     printf 'ref=%s\n' "$REF"
     printf 'sha=%s\n' "$sha"
@@ -191,6 +274,7 @@ install_cmd() {
     plugin_name="$(basename "$plugin_dir")"
     log "install-agy.sh: installing $plugin_name"
     agy plugin install "${plugin_dir%/}"
+    substitute_plugin_root "${AGY_PLUGIN_PREFIX%/}/$plugin_name"
     printf 'path:%s\n' "${AGY_PLUGIN_PREFIX%/}/$plugin_name" >> "$written"
     installed_count=$((installed_count + 1))
   done

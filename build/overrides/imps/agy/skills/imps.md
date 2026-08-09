@@ -322,8 +322,8 @@ command -v jq  >/dev/null || { echo "imps: jq is required to read dispatch resul
 needing a permission the CLI cannot prompt for is auto-denied with an actionable error
 naming `permissions.allow` in `settings.json` (matrix Item 9 — confirmed live, fails
 closed *and* fails loud). Add the allow-rules your tasks need to your own settings before
-dispatching. **This plugin never adds them for you and never passes
-`--dangerously-skip-permissions`.**
+dispatching. **This plugin never adds them for you and never bypasses these prompts
+with an unattended-override flag.**
 
 **Step 1 — reconcile.** Read the state file. Cross-check it against git ground truth
 before trusting it — `git branch --list`, `git worktree list`, and the merge state of the
@@ -553,8 +553,8 @@ task table instead, where the operator can see it.
   instruction for the endstate PR.
 - Persona live-posting is a separate authorization from push/PR creation, not implied by
   it — only the `personas post live reviews` answer authorizes real GitHub reviews.
-- **Never pass `--dangerously-skip-permissions`, and never write permission allow-rules
-  into a user's `settings.json` on their behalf.** Document what a run needs and let the
+- **Never bypass permission prompts with an unattended-override flag, and never write
+  permission allow-rules into a user's `settings.json` on their behalf.** Document what a run needs and let the
   operator add it.
 - Never treat a zero exit code or `"status":"SUCCESS"` as proof a dispatched task did its
   job — inspect the `response` (matrix Item 8).

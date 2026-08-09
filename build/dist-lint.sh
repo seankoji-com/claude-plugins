@@ -397,7 +397,7 @@ check_readme_marker() {
     local plugin
     plugin="$(basename "$dir")"
     if [ -n "$scope" ] && [ "$plugin" != "$scope" ]; then continue; fi
-    local readme="$dir/README.md"
+    local readme="${dir%/}/README.md"
     [ -f "$readme" ] || continue
     local marker
     marker="$(grep -m1 '^<!-- PLATFORM-SUPPORT:' "$readme" 2>/dev/null || true)"

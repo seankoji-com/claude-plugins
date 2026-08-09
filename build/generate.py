@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -363,6 +364,34 @@ def plugin_sources(plugin: str) -> tuple[list[Path], list[Path]]:
     return commands, skills
 
 
+def verify_source_hash_pins(plugin: str, config: dict) -> None:
+    """A pin in port.json's `source_hash_pins` ties a hand-restated per-platform
+    dispatch-prose override to the exact bytes of the frozen Claude source it was
+    written against. Claude sources are frozen, so the override cannot be generated
+    from the source and kept in sync automatically — this is the next best thing: if
+    the pinned source changes and the pin is not updated to match, generation fails
+    loudly instead of silently shipping stale dispatch prose that no longer describes
+    what the frozen source actually does.
+    """
+    pins = config.get("source_hash_pins") or {}
+    for rel_path, expected in sorted(pins.items()):
+        source = PLUGINS_DIR / plugin / rel_path
+        if not source.is_file():
+            raise GenerateError(
+                f"build/overrides/{plugin}/port.json: source_hash_pins names "
+                f"{rel_path!r}, which does not exist under plugins/{plugin}/"
+            )
+        actual = hashlib.sha256(source.read_bytes()).hexdigest()
+        if actual != expected:
+            raise GenerateError(
+                f"build/overrides/{plugin}/port.json: {rel_path} has changed "
+                f"(sha256 {actual}, pinned {expected}). Its dispatch mechanics are "
+                f"hand-restated as prose in build/overrides/{plugin}/*/commands "
+                f"(and /skills) — review whether that prose still matches the new "
+                f"source, then update source_hash_pins to {actual!r}."
+            )
+
+
 def port_config(plugin: str, platform_conf: dict) -> dict:
     path = OVERRIDES_DIR / plugin / "port.json"
     config = {
@@ -370,9 +399,11 @@ def port_config(plugin: str, platform_conf: dict) -> dict:
         "asset_exclude": {},
         "asset_replacements": {},
         "manifest_overrides": {},
+        "source_hash_pins": {},
     }
     if path.is_file():
         config.update(load_json(path))
+    verify_source_hash_pins(plugin, config)
     return config
 
 
@@ -636,6 +667,20 @@ def main(argv=None) -> int:
             if manifest[plugin].get(platform) == "full":
                 generate_plugin(plugin, platform, platform_table, outputs)
     mirror_npm_source(outputs)
+
+    # The npm installer (build/npm/lib/installer.js) needs the full set of
+    # opencode-generated plugin names to tell "a command with no share/<plugin> dir
+    # because the plugin ships no assets" (e.g. ape) apart from "a command that matches
+    # no known plugin at all" (a real generator bug). It cannot derive that set from
+    # share/ alone, so it is recorded here, computed from the full `ready` list (not the
+    # `--only` subset) so a partial regeneration never truncates it.
+    opencode_plugins = sorted(p for p in ready if manifest[p].get("opencode") == "full")
+    if opencode_plugins:
+        outputs["opencode/share/.plugins.json"] = (
+            json.dumps(opencode_plugins, sort_keys=True, indent=2, ensure_ascii=False) + "\n",
+            0o644,
+        )
+
     write_outputs(outputs)
 
     for plugin in plugins:
@@ -651,5 +696,11 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except GenerateError as error:
+        # clear_paths() already deleted dist/ (or, for --only, the failing plugin's
+        # slice of it) before this error was raised, so the working tree is left with
+        # generated output missing or partial. Name the recovery step here rather than
+        # leaving the operator to rediscover it: `git restore -- dist/` puts the
+        # last-committed dist/ back.
         print(f"generate.py: {error}", file=sys.stderr)
+        print("generate.py: dist/ may now be missing or partial — run 'git restore -- dist/' to recover the last-committed tree", file=sys.stderr)
         sys.exit(1)

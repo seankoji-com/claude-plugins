@@ -20,11 +20,19 @@
 const installer = require("../lib/installer.js");
 
 function parseArgs(argv) {
-  const args = { command: null, prefix: null };
+  const args = { command: null, prefix: null, error: null };
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--prefix") {
+      // A trailing `--prefix` with no following value must not silently resolve to
+      // the default prefix — that turns a typo'd invocation like
+      // `claude-plugins-opencode uninstall --prefix` into an uninstall against the
+      // operator's real ~/.config/opencode instead of erroring out.
+      if (i + 1 >= argv.length) {
+        args.error = "--prefix requires a value";
+        break;
+      }
       args.prefix = argv[++i];
     } else if (arg.startsWith("--prefix=")) {
       args.prefix = arg.slice("--prefix=".length);
@@ -49,7 +57,13 @@ function usage() {
 }
 
 function main(argv) {
-  const { command, prefix } = parseArgs(argv);
+  const { command, prefix, error } = parseArgs(argv);
+
+  if (error) {
+    console.error(`error: ${error}`);
+    console.error(usage());
+    return 1;
+  }
 
   switch (command) {
     case "install": {

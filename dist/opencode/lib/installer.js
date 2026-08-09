@@ -48,7 +48,17 @@ function manifestPath(prefix) {
   return path.join(prefix, MANIFEST_NAME);
 }
 
+// The plugin set cannot be derived from share/<plugin> dirs alone: a plugin that ships
+// no assets (e.g. ape — build/overrides/ape/port.json sets asset_dirs: []) never gets a
+// share/ape/ directory, even though it does ship commands/ape-*.md. generate.py writes
+// share/.plugins.json with the full generated-for-opencode plugin set for exactly this
+// reason; fall back to the directory scan only if an older/hand-built package lacks it.
 function listPlugins(root) {
+  const manifestFile = path.join(root, "share", ".plugins.json");
+  if (fs.existsSync(manifestFile)) {
+    const names = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
+    if (Array.isArray(names)) return [...names].sort();
+  }
   const shareDir = path.join(root, "share");
   if (!fs.existsSync(shareDir)) return [];
   return fs
@@ -94,6 +104,38 @@ function writeFileWithMode(destPath, content, mode) {
   fs.chmodSync(destPath, mode);
 }
 
+// `prefixResolved` is `path.resolve(prefix) + path.sep`, computed once by the caller.
+function withinPrefix(file, prefixResolved) {
+  const resolved = path.resolve(file);
+  return (resolved + path.sep).startsWith(prefixResolved);
+}
+
+// Best-effort cleanup of now-empty directories left behind by removing `files`,
+// deepest first, never climbing past `prefix`. Shared by uninstall() (removing
+// everything) and install() (removing only this run's orphans) so the bounded-climb
+// guard exists in exactly one place.
+function removeEmptyDirsUpward(files, prefixResolved, prefix) {
+  const dirs = [...new Set(files.map((f) => path.dirname(path.resolve(f))))].sort(
+    (a, b) => b.length - a.length
+  );
+  for (const dir of dirs) {
+    let cur = dir;
+    while ((cur + path.sep).startsWith(prefixResolved) && cur !== prefix) {
+      try {
+        fs.rmdirSync(cur);
+      } catch {
+        break; // not empty (or already gone) — stop climbing this branch
+      }
+      cur = path.dirname(cur);
+    }
+  }
+}
+
+function readManifestIfPresent(mPath) {
+  if (!fs.existsSync(mPath)) return null;
+  return JSON.parse(fs.readFileSync(mPath, "utf8"));
+}
+
 function install(opts) {
   opts = opts || {};
   const root = pkgRoot();
@@ -101,8 +143,39 @@ function install(opts) {
   const plugins = listPlugins(root);
   const written = [];
 
+  const mPath = manifestPath(prefix);
+  const prevManifest = readManifestIfPresent(mPath);
+  const prevFiles = Array.isArray(prevManifest && prevManifest.files) ? prevManifest.files : [];
+
+  fs.mkdirSync(prefix, { recursive: true });
+  // Marked mid-install BEFORE any file is copied. If install() throws partway through
+  // (disk full, a permission error, a malformed source file), this state survives on
+  // disk and doctor() can report "install crashed mid-run" instead of its only other
+  // hypothesis for a stale/absent manifest — "--ignore-scripts skipped postinstall" —
+  // which looks identical otherwise. Carries the previous file list forward so a
+  // crash here doesn't itself look like an uninstall to doctor().
+  fs.writeFileSync(
+    mPath,
+    JSON.stringify(
+      {
+        manifestVersion: 1,
+        packageVersion: pkgVersion(),
+        prefix,
+        installedFrom: root,
+        installedAt: new Date().toISOString(),
+        state: "installing",
+        plugins,
+        files: prevFiles,
+      },
+      null,
+      2
+    ) + "\n",
+    "utf8"
+  );
+
   for (const plugin of plugins) {
     const srcShare = path.join(root, "share", plugin);
+    if (!fs.existsSync(srcShare)) continue; // plugin ships no assets (e.g. ape) — nothing to copy
     const destShare = path.join(prefix, "share", plugin);
     for (const srcFile of walkFiles(srcShare)) {
       const rel = path.relative(srcShare, srcFile);
@@ -121,7 +194,7 @@ function install(opts) {
       const plugin = pluginForCommandFile(filename, plugins);
       if (!plugin) {
         throw new Error(
-          `install: ${filename} does not match any known plugin under share/ — ` +
+          `install: ${filename} does not match any known plugin — ` +
             "the generated package is inconsistent (regenerate dist/opencode)"
         );
       }
@@ -135,6 +208,22 @@ function install(opts) {
   }
 
   written.sort();
+
+  // Orphan cleanup: an update must leave exactly what the current package produces,
+  // not the union of this install and every install before it. Anything the previous
+  // manifest recorded that this run did not rewrite — a renamed/dropped command, or a
+  // plugin that lost its last asset — is removed now, bounded to the prefix by the
+  // same guard uninstall() uses, so a future uninstall never has to know about it.
+  const prefixResolved = path.resolve(prefix) + path.sep;
+  const writtenSet = new Set(written);
+  const orphaned = prevFiles.filter((f) => !writtenSet.has(f) && withinPrefix(f, prefixResolved));
+  for (const file of orphaned) {
+    fs.rmSync(file, { force: true });
+  }
+  if (orphaned.length > 0) {
+    removeEmptyDirsUpward(orphaned, prefixResolved, prefix);
+  }
+
   const manifest = {
     manifestVersion: 1,
     packageVersion: pkgVersion(),
@@ -144,8 +233,7 @@ function install(opts) {
     plugins,
     files: written,
   };
-  fs.mkdirSync(prefix, { recursive: true });
-  fs.writeFileSync(manifestPath(prefix), JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  fs.writeFileSync(mPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
 
   return manifest;
 }
@@ -163,10 +251,19 @@ function uninstall(opts) {
   const manifest = JSON.parse(fs.readFileSync(mPath, "utf8"));
   const files = Array.isArray(manifest.files) ? manifest.files : [];
 
+  // The climb below resolves each dirname and reuses the same trailing-separator
+  // boundary test as this guard, rather than a bare string startsWith on the raw
+  // manifest value. Without that, a manifest entry like
+  // "<prefix>/../opencode/commands/x.md" passes this guard (it *resolves* inside the
+  // prefix) while its unresolved dirname climbs to "<prefix>/.." — the prefix's
+  // parent. That escape is not currently reachable, but only by accident: the
+  // manifest file itself still sits in the prefix during the climb, so rmdir hits
+  // ENOTEMPTY and breaks. Moving the `fs.rmSync(mPath)` below up above the climb — an
+  // innocuous-looking reorder — would make it live. removeEmptyDirsUpward's own guard
+  // is what keeps the fail-closed property from depending on that ordering.
   const prefixResolved = path.resolve(prefix) + path.sep;
   for (const file of files) {
-    const resolved = path.resolve(file);
-    if (!(resolved + path.sep).startsWith(prefixResolved)) {
+    if (!withinPrefix(file, prefixResolved)) {
       throw new Error(
         `uninstall: refusing — manifest path ${JSON.stringify(file)} is outside install prefix ${prefix}`
       );
@@ -179,19 +276,7 @@ function uninstall(opts) {
     removed.push(file);
   }
 
-  // Best-effort cleanup of now-empty directories, deepest first, never past prefix.
-  const dirs = [...new Set(files.map((f) => path.dirname(f)))].sort((a, b) => b.length - a.length);
-  for (const dir of dirs) {
-    let cur = dir;
-    while (cur.startsWith(prefixResolved.slice(0, -1)) && cur !== prefix) {
-      try {
-        fs.rmdirSync(cur);
-      } catch {
-        break; // not empty (or already gone) — stop climbing this branch
-      }
-      cur = path.dirname(cur);
-    }
-  }
+  removeEmptyDirsUpward(files, prefixResolved, prefix);
 
   fs.rmSync(mPath, { force: true });
   return { removed, note: `removed ${removed.length} file(s) from ${prefix}` };
@@ -227,6 +312,12 @@ function doctor(opts) {
 
   report.installed = true;
   const manifest = JSON.parse(fs.readFileSync(mPath, "utf8"));
+  if (manifest.state === "installing") {
+    report.problems.push(
+      `install appears to have crashed mid-run (manifest state is still "installing") — ` +
+        "run `claude-plugins-opencode install` again to finish it"
+    );
+  }
   const files = Array.isArray(manifest.files) ? manifest.files : [];
   for (const file of files) {
     if (!fs.existsSync(file)) report.missingFiles.push(file);

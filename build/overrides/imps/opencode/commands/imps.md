@@ -340,7 +340,7 @@ environmental and the gate's real behaviour is simply **not measured**. This is 
 a branch — there is deliberately **no** generated refusal for it. Practical consequence:
 if dispatched tasks stall with no output, suspect the gate, and add the allow-rules your
 tasks need to your own `opencode.json` under `permission.bash`. **This plugin never adds
-them for you and never passes `--dangerously-skip-permissions`.**
+them for you and never bypasses these prompts with an unattended-override flag.**
 
 **Step 1 — reconcile.** Read the state file. Cross-check it against git ground truth
 before trusting it — `git branch --list`, `git worktree list`, and the merge state of the
@@ -581,8 +581,8 @@ mis-tiered task. Re-tier it in the task table instead, where the operator can se
   instruction for the endstate PR.
 - Persona live-posting is a separate authorization from push/PR creation, not implied by
   it — only the `personas post live reviews` answer authorizes real GitHub reviews.
-- **Never pass `--dangerously-skip-permissions`, and never write permission allow-rules
-  into a user's `opencode.json` on their behalf.** Document what a run needs and let the
+- **Never bypass permission prompts with an unattended-override flag, and never write
+  permission allow-rules into a user's `opencode.json` on their behalf.** Document what a run needs and let the
   operator add it.
 - If a task touches a production system, pause and confirm before that task runs.
 - Worktree isolation is not airtight — after each merge step, check `git status --short`
