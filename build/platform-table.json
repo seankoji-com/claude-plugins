@@ -107,7 +107,8 @@
       "drop": [
         "allowed-tools",
         "disable-model-invocation",
-        "model"
+        "model",
+        "name"
       ],
       "emit": [
         "agent",
