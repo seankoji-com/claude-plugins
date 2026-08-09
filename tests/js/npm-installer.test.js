@@ -136,6 +136,83 @@ test('install() orphan sweep never touches a stale manifest entry outside the pr
   }
 })
 
+// postinstall runs install() automatically on every `npm install`. If a stale,
+// out-of-prefix manifest entry (tampering, or a bug in a prior version) were silently
+// dropped from the rewritten manifest instead of carried forward, the one fail-closed
+// signal uninstall() can give an operator ("refusing — manifest path ... is outside
+// install prefix") would never survive long enough to fire.
+test('install() carries a stale out-of-prefix manifest entry forward instead of silently dropping it', () => {
+  const installer = freshInstaller()
+  const prefix = mkPrefix()
+  const outsideDir = mkPrefix()
+  const outsideFile = path.join(outsideDir, 'not-installed-here.md')
+  try {
+    fs.writeFileSync(outsideFile, 'do not touch', 'utf8')
+    fs.mkdirSync(prefix, { recursive: true })
+    fs.writeFileSync(
+      installer.manifestPath(prefix),
+      JSON.stringify(
+        {
+          manifestVersion: 1,
+          packageVersion: '0.0.0-test',
+          prefix,
+          installedFrom: 'test',
+          installedAt: new Date().toISOString(),
+          plugins: [],
+          files: [outsideFile],
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    )
+
+    const manifest = installer.install({ prefix })
+    assert.ok(
+      manifest.files.includes(outsideFile),
+      'a stale out-of-prefix entry was dropped from the manifest instead of carried forward as evidence'
+    )
+
+    // The evidence must actually be actionable: uninstall() still refuses on it.
+    assert.throws(() => installer.uninstall({ prefix }), /outside install prefix/)
+  } finally {
+    fs.rmSync(prefix, { recursive: true, force: true })
+    fs.rmSync(outsideDir, { recursive: true, force: true })
+  }
+})
+
+test('install() reports removed orphans on the returned manifest for the caller to log', () => {
+  const installer = freshInstaller()
+  const prefix = mkPrefix()
+  try {
+    const staleFile = path.join(prefix, 'share', 'zzz-dropped-plugin', 'stale.md')
+    fs.mkdirSync(path.dirname(staleFile), { recursive: true })
+    fs.writeFileSync(staleFile, 'stale content', 'utf8')
+    fs.writeFileSync(
+      installer.manifestPath(prefix),
+      JSON.stringify(
+        {
+          manifestVersion: 1,
+          packageVersion: '0.0.0-test',
+          prefix,
+          installedFrom: 'test',
+          installedAt: new Date().toISOString(),
+          plugins: ['zzz-dropped-plugin'],
+          files: [staleFile],
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    )
+
+    const manifest = installer.install({ prefix })
+    assert.deepEqual(manifest.removedOrphans, [staleFile])
+  } finally {
+    fs.rmSync(prefix, { recursive: true, force: true })
+  }
+})
+
 test('install() is idempotent: re-running against the same prefix reproduces the same manifest files', () => {
   const installer = freshInstaller()
   const prefix = mkPrefix()

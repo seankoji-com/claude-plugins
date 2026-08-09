@@ -15,6 +15,11 @@ try {
   console.log(
     `claude-plugins-opencode: installed ${manifest.files.length} file(s) for ${manifest.plugins.length} plugin(s) into ${manifest.prefix}`
   );
+  if (manifest.removedOrphans && manifest.removedOrphans.length > 0) {
+    console.log(
+      `claude-plugins-opencode: removed ${manifest.removedOrphans.length} stale file(s) no longer produced by this package`
+    );
+  }
 } catch (err) {
   console.error(`claude-plugins-opencode postinstall failed: ${err.message}`);
   console.error(

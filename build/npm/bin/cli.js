@@ -96,6 +96,9 @@ function main(argv) {
     case "install": {
       const manifest = installer.install({ prefix });
       console.log(`installed ${manifest.files.length} file(s) for ${manifest.plugins.length} plugin(s) into ${manifest.prefix}`);
+      if (manifest.removedOrphans && manifest.removedOrphans.length > 0) {
+        console.log(`removed ${manifest.removedOrphans.length} stale file(s) no longer produced by this package`);
+      }
       return 0;
     }
     case "uninstall": {

@@ -245,7 +245,16 @@ function install(opts) {
   // same guard uninstall() uses, so a future uninstall never has to know about it.
   const prefixResolved = path.resolve(prefix) + path.sep;
   const writtenSet = new Set(written);
-  const orphaned = prevFiles.filter((f) => !writtenSet.has(f) && withinPrefix(f, prefixResolved));
+  const stale = prevFiles.filter((f) => !writtenSet.has(f));
+  const orphaned = stale.filter((f) => withinPrefix(f, prefixResolved));
+  // A stale entry that does NOT resolve inside the prefix is exactly what uninstall()
+  // treats as fatal tampering ("refusing — manifest path ... is outside install
+  // prefix"). Dropping it here (by simply not carrying it into `files` below) would
+  // erase that evidence on every `npm install` — postinstall runs install()
+  // automatically, so the fail-closed signal would never survive long enough for an
+  // operator to see it via uninstall(). Keep it in the manifest instead of deleting it
+  // or silently forgetting it; the file itself is left untouched either way.
+  const outOfPrefixStale = stale.filter((f) => !withinPrefix(f, prefixResolved));
   for (const file of orphaned) {
     fs.rmSync(file, { force: true });
   }
@@ -260,9 +269,13 @@ function install(opts) {
     installedFrom: root,
     installedAt: new Date().toISOString(),
     plugins,
-    files: written,
+    files: [...written, ...outOfPrefixStale].sort(),
   };
-  fs.writeFileSync(mPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  writeManifestFile(mPath, manifest);
+  // Not persisted in the manifest file itself (it's install()'s own run summary, not
+  // install state) — cli.js/postinstall.js use this to print what changed, instead of
+  // an update silently deleting files with no log line anywhere.
+  manifest.removedOrphans = orphaned;
 
   return manifest;
 }

@@ -27,6 +27,12 @@ permissions:
 jobs:
   publish-npm:
     runs-on: ubuntu-latest
+    # concurrency's cancel-in-progress: false means a hung step here (a wedged
+    # dist-lint invocation, `npm publish` stuck on a network stall) would otherwise
+    # hold this serialized group for GitHub's default 360-minute job timeout, with
+    # every later dispatch queued behind it and no signal beyond a spinner. Bound the
+    # wedge instead of the whole default-length job.
+    timeout-minutes: 15
     # workflow_dispatch can be re-triggered before a prior run finishes; without this,
     # two concurrent runs could both reach `npm publish` for the same version and race.
     # Not cancel-in-progress — an in-flight publish must be allowed to finish, not be

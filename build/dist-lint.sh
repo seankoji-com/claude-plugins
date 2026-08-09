@@ -88,18 +88,24 @@ check_regen_diff() {
     return 1
   }
   mkdir -p "$tmp/build" "$tmp/plugins"
-  local cp_err
+  # Check the actual exit status ($? from the command substitution below, not "is
+  # stderr non-empty") -- a warning-with-exit-0 `cp` (macOS occasionally writes one for
+  # xattr/ACL metadata it can't fully preserve) must not fail this lint, and a silent
+  # non-zero `cp` with no stderr output must not slip past it.
+  local cp_err cp_status
   cp_err="$(cp -R "$repo_root/build/." "$tmp/build/" 2>&1 1>/dev/null)"
-  if [ -n "$cp_err" ]; then
-    echo "regen-diff: cp -R $repo_root/build/. failed:" >&2
-    echo "$cp_err" >&2
+  cp_status=$?
+  if [ "$cp_status" -ne 0 ]; then
+    echo "regen-diff: cp -R $repo_root/build/. failed (exit $cp_status):" >&2
+    [ -n "$cp_err" ] && echo "$cp_err" >&2
     rm -rf "$tmp"
     return 1
   fi
   cp_err="$(cp -R "$repo_root/plugins/." "$tmp/plugins/" 2>&1 1>/dev/null)"
-  if [ -n "$cp_err" ]; then
-    echo "regen-diff: cp -R $repo_root/plugins/. failed:" >&2
-    echo "$cp_err" >&2
+  cp_status=$?
+  if [ "$cp_status" -ne 0 ]; then
+    echo "regen-diff: cp -R $repo_root/plugins/. failed (exit $cp_status):" >&2
+    [ -n "$cp_err" ] && echo "$cp_err" >&2
     rm -rf "$tmp"
     return 1
   fi
@@ -299,9 +305,19 @@ check_gate_stripped() {
 # task that adds them (mirrors the README-marker check's leniency, item 9's own text).
 
 _unsafe_rm_lines() {
-  # rm -f/-rf invoked without a literal `--` end-of-options marker anywhere on the line.
+  # rm -f/-rf invoked without a literal `--` end-of-options marker immediately after the
+  # flag. Deliberately NOT `grep -v -- '--'` on the whole line -- that excludes a line
+  # from "unsafe" if `--` appears ANYWHERE on it, including inside an unrelated trailing
+  # comment (e.g. `rm -f "$path"  # see --help`), which is a false negative: the `rm`
+  # invocation itself still has no end-of-options marker. Match the exact
+  # flag-then-`--`-marker shape instead (mirrors the positive check a few lines below).
+  # A whole-line `#` comment (e.g. `# ... via \`rm -rf --\`` in a doc comment) is prose,
+  # not an invocation, and is excluded the same way the JS/Python frozen-sources filters
+  # above exclude comment-only diff lines -- grep -n's own "N:" prefix is stripped first
+  # so the `^[[:space:]]*#` anchor lines up against the real line content.
   grep -nE '(^|[^A-Za-z0-9_])rm[[:space:]]+-[A-Za-z]*f[A-Za-z]*([[:space:]]|$)' "$1" 2>/dev/null \
-    | grep -v -- '--'
+    | grep -vE '(^|[^A-Za-z0-9_])rm[[:space:]]+-[A-Za-z]*f[A-Za-z]*[[:space:]]+--([[:space:]]|$)' \
+    | grep -vE '^[0-9]+:[[:space:]]*#'
 }
 
 _has_prefix_guard() {
@@ -647,16 +663,22 @@ self_test() {
     "check_gate_stripped '$tmp/gate/broken'" \
     "check_gate_stripped '$tmp/gate/correct'"
 
-  # 8. out-of-prefix uninstall path (synthetic scripts, not the real install-agy.sh)
+  # 8. out-of-prefix uninstall path (synthetic scripts, not the real install-agy.sh).
+  # correct.sh also carries a doc comment that mentions `rm -rf --` in prose, and a
+  # trailing `# see --help`-style comment on its real `rm -f --` call, to prove
+  # _unsafe_rm_lines' `--` check is anchored to the actual invocation, not "does `--`
+  # appear anywhere on the line" (a whole-line `grep -v -- '--'` would have let a truly
+  # unsafe `rm -f $path  # see --help` line in broken2.sh below slip through undetected).
   mkdir -p "$tmp/uninstall"
   cat > "$tmp/uninstall/correct.sh" <<'FIXTURE'
 #!/usr/bin/env bash
+# remove_path_guarded <prefix> <path> — removes a single path (via `rm -rf --`)
 while IFS= read -r path; do
   case "$path" in
     "$PREFIX"/*) ;;
     *) echo "refusing to remove path outside prefix: $path" >&2; exit 1 ;;
   esac
-  rm -f -- "$path"
+  rm -f -- "$path"  # see --help for flag details
 done < manifest.txt
 FIXTURE
   cat > "$tmp/uninstall/broken.sh" <<'FIXTURE'
@@ -665,8 +687,17 @@ while IFS= read -r path; do
   rm -f $path
 done < manifest.txt
 FIXTURE
+  cat > "$tmp/uninstall/broken2.sh" <<'FIXTURE'
+#!/usr/bin/env bash
+while IFS= read -r path; do
+  rm -f "$path"  # see --help
+done < manifest.txt
+FIXTURE
   st_case "uninstall-prefix" \
     "check_uninstall_prefix_file '$tmp/uninstall/broken.sh'" \
+    "check_uninstall_prefix_file '$tmp/uninstall/correct.sh'"
+  st_case "uninstall-prefix-trailing-comment-dashes" \
+    "check_uninstall_prefix_file '$tmp/uninstall/broken2.sh'" \
     "check_uninstall_prefix_file '$tmp/uninstall/correct.sh'"
 
   # 8b. out-of-prefix uninstall path, JS variant (synthetic files, not the real
