@@ -315,6 +315,28 @@ check_uninstall_prefix_file() {
   return 0
 }
 
+# The JS equivalent of check_uninstall_prefix_file, for the npm channel: the file that
+# actually performs the removal (fs.rmSync) is build/npm/lib/installer.js, not the thin
+# bin/cli.js it's called from, and the shell-oriented check above (rm -f/-rf, a
+# case-statement guard) cannot recognize either JS construct at all — it would silently
+# treat any JS file as "no manifest-driven removal here, nothing to enforce". Same
+# structural-heuristic spirit as the shell check, not a control-flow proof that every
+# fs.rmSync call site is actually preceded by the guard at runtime: a file that removes
+# paths via fs.rmSync with no startsWith(...)-based guard and no throw naming the
+# out-of-prefix case at all has certainly never asserted the invariant anywhere, which is
+# exactly the class of regression this exists to catch.
+check_uninstall_prefix_js_file() {
+  local file="$1"
+  grep -qE 'fs\.rmSync\(' "$file" 2>/dev/null || return 0  # no removal here — nothing to enforce
+  if ! grep -qE '\.startsWith\(' "$file" 2>/dev/null \
+    || ! grep -qE 'throw[[:space:]]+new[[:space:]]+Error' "$file" 2>/dev/null \
+    || ! grep -qiE 'outside' "$file" 2>/dev/null; then
+    echo "uninstall-prefix: $file: calls fs.rmSync but is missing a .startsWith(...) prefix guard, a throw new Error refusal, or wording naming the out-of-prefix case" >&2
+    return 1
+  fi
+  return 0
+}
+
 check_uninstall_prefix_repo() {
   local root="$1"
   local -a candidates=()
@@ -324,12 +346,16 @@ check_uninstall_prefix_repo() {
     while IFS= read -r f; do candidates+=("$f"); done \
       < <(find "$root/build/npm/bin" -maxdepth 1 -type f 2>/dev/null | sorted)
   fi
+  [ -f "$root/build/npm/lib/installer.js" ] && candidates+=("$root/build/npm/lib/installer.js")
   if [ ${#candidates[@]} -eq 0 ]; then
     return 0  # no uninstaller script exists yet in this worktree
   fi
   local status=0 c
   for c in "${candidates[@]}"; do
-    check_uninstall_prefix_file "$c" || status=1
+    case "$c" in
+      *.js) check_uninstall_prefix_js_file "$c" || status=1 ;;
+      *) check_uninstall_prefix_file "$c" || status=1 ;;
+    esac
   done
   return $status
 }
@@ -571,6 +597,37 @@ FIXTURE
   st_case "uninstall-prefix" \
     "check_uninstall_prefix_file '$tmp/uninstall/broken.sh'" \
     "check_uninstall_prefix_file '$tmp/uninstall/correct.sh'"
+
+  # 8b. out-of-prefix uninstall path, JS variant (synthetic files, not the real
+  # build/npm/lib/installer.js) — the shell check above cannot recognize fs.rmSync or a
+  # JS guard at all, so this is a separate function over a separate fixture pair.
+  cat > "$tmp/uninstall/correct.js" <<'FIXTURE'
+const fs = require("fs");
+const path = require("path");
+function uninstall(files, prefix) {
+  const prefixResolved = path.resolve(prefix) + path.sep;
+  for (const file of files) {
+    const resolved = path.resolve(file);
+    if (!(resolved + path.sep).startsWith(prefixResolved)) {
+      throw new Error(`refusing — path is outside install prefix ${prefix}`);
+    }
+  }
+  for (const file of files) {
+    fs.rmSync(file, { force: true });
+  }
+}
+FIXTURE
+  cat > "$tmp/uninstall/broken.js" <<'FIXTURE'
+const fs = require("fs");
+function uninstall(files) {
+  for (const file of files) {
+    fs.rmSync(file, { force: true });
+  }
+}
+FIXTURE
+  st_case "uninstall-prefix-js" \
+    "check_uninstall_prefix_js_file '$tmp/uninstall/broken.js'" \
+    "check_uninstall_prefix_js_file '$tmp/uninstall/correct.js'"
 
   # 9. frozen-sources — synthetic git repos (never $ROOT's own history)
   local fz_correct="$tmp/frozen/correct" fz_broken="$tmp/frozen/broken"
