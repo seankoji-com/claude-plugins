@@ -1,6 +1,6 @@
 {
   "name": "elephant-goldfish",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Self-validating /elephant-goldfish:elephant design-doc command + Gemini goldfish judge, plus /elephant-goldfish:thinking for steps 1-2 of Rensin's three-step process.",
   "author": {
     "name": "seankoji",
