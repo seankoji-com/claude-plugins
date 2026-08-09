@@ -105,6 +105,22 @@ _DIVERGENT_PAIRS = {
     ),
 }
 
+# (plugin, stem) -> minimum acceptable raw similarity, floored to the value recorded in
+# _DIVERGENT_PAIRS' reason string above when this pair was last reviewed. Listing a pair in
+# _DIVERGENT_PAIRS silences the drift-budget check but must never mean "no further content
+# check at all" -- an editor who trims one copy's shared/matching text without touching the
+# other still pushes raw similarity down, and this floor catches that even though the pair is
+# legitimately divergent by design. Raise the floor (with an updated reason string above) when
+# a deliberate edit genuinely increases divergence; a silent drop below it is the stale-copy bug
+# the drift budget above already guards against for near-duplicate pairs.
+_DIVERGENT_FLOOR = {
+    ("imps", "imps"): 0.70,
+    ("prompt-builder", "prompt-builder"): 0.67,
+    ("ape", "forage"): 0.87,
+    ("elephant-goldfish", "elephant"): 0.57,
+    ("elephant-goldfish", "thinking"): 0.73,
+}
+
 
 class TestOverridePlatformDrift(unittest.TestCase):
     def setUp(self):
@@ -169,6 +185,29 @@ class TestOverridePlatformDrift(unittest.TestCase):
                             "prose, add a reason. If one copy was edited without the other and "
                             "they used to be near-duplicates, that's the bug -- fix the stale "
                             "copy instead."
+                        ),
+                    )
+                    floor = _DIVERGENT_FLOOR.get(key)
+                    self.assertIsNotNone(
+                        floor,
+                        msg=(
+                            f"\n({plugin!r}, {stem!r}) is in _DIVERGENT_PAIRS but not in "
+                            "_DIVERGENT_FLOOR -- a divergent pair with no floor gets no content "
+                            "check at all. Add its currently-measured raw similarity "
+                            f"({similarity:.2f}) as its floor."
+                        ),
+                    )
+                    self.assertGreaterEqual(
+                        similarity,
+                        floor,
+                        msg=(
+                            f"\nbuild/overrides/{plugin}/{{opencode/commands,agy/skills}}/"
+                            f"{stem}.md raw similarity dropped to {similarity:.2f}, below its "
+                            f"recorded floor of {floor} in _DIVERGENT_FLOOR. This pair is "
+                            "recorded as legitimately divergent by design, not unboundedly so -- "
+                            "if one copy was edited without the other, fix the stale copy. If "
+                            "this drop is a genuine, reviewed increase in platform-specific "
+                            "divergence, lower the floor and update the _DIVERGENT_PAIRS reason."
                         ),
                     )
                     checked += 1

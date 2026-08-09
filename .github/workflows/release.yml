@@ -53,11 +53,14 @@ jobs:
             exit 1
           fi
 
-      # fetch-depth: 0 is load-bearing, not tidiness — dist-lint.sh's frozen-sources
-      # invariant (exercised below) diffs plugins/*/{commands,agents,scripts} against
-      # origin/master; a shallow single-ref checkout has neither ref and the lint step
-      # fails unconditionally. Same reasoning as validate.yml's cross-platform-regen job,
-      # pinned to the same actions/checkout version it uses.
+      # fetch-depth: 0 matches validate.yml's cross-platform-regen job and the same
+      # actions/checkout version it uses. NOTE: the frozen-sources invariant that needs
+      # full history to diff plugins/*/{commands,agents,scripts} against origin/master is
+      # opt-in (--check-frozen-sources) and NOT exercised by the plain `bash
+      # build/dist-lint.sh` below — see validate.yml's own comment on that flag. This job
+      # runs regen-diff only, which needs no git history at all; fetch-depth: 0 is kept
+      # here for consistency and to leave room for adding --check-frozen-sources later,
+      # not because today's step depends on it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0

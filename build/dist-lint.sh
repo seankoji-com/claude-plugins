@@ -586,11 +586,25 @@ self_test() {
   trap 'rm -rf "$tmp"' RETURN
 
   # 1. regen-diff — uses the REAL repo's build/+plugins/ (read-only copy) as the
-  #    generator input, and diffs against (a) the real committed dist/ [must pass] and
-  #    (b) a corrupted copy of it [must fail]. Never touches $ROOT/dist itself.
-  mkdir -p "$tmp/regen/correct" "$tmp/regen/broken"
-  cp -R "$ROOT/dist/." "$tmp/regen/correct/" 2>/dev/null
-  cp -R "$ROOT/dist/." "$tmp/regen/broken/" 2>/dev/null
+  #    generator input for BOTH fixtures: the "correct" one is a fresh generate.py run
+  #    of that same input, not a copy of the real committed $ROOT/dist. Using the
+  #    committed dist/ here would make this case's "accepts correct fixture" half
+  #    depend on dist/ already matching a fresh regeneration — the exact thing regen-diff
+  #    itself checks — so a stale committed dist/ would fail self-test for a reason
+  #    unrelated to the invariant's own logic, muddying two independent signals into
+  #    one. Generating the fixture keeps this case self-contained and correct
+  #    regardless of whether $ROOT/dist happens to be stale right now.
+  mkdir -p "$tmp/regen/correct" "$tmp/regen/broken" \
+    "$tmp/regen/gen_src/build" "$tmp/regen/gen_src/plugins"
+  cp -R "$ROOT/build/." "$tmp/regen/gen_src/build/" 2>/dev/null
+  cp -R "$ROOT/plugins/." "$tmp/regen/gen_src/plugins/" 2>/dev/null
+  if ! (cd "$tmp/regen/gen_src" && python3 build/generate.py >/dev/null 2>&1); then
+    echo "self-test: could not generate the regen-diff fixture" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  cp -R "$tmp/regen/gen_src/dist/." "$tmp/regen/correct/" 2>/dev/null
+  cp -R "$tmp/regen/gen_src/dist/." "$tmp/regen/broken/" 2>/dev/null
   local corrupt_target
   corrupt_target="$(find "$tmp/regen/broken" -type f | sorted | head -1)"
   if [ -n "$corrupt_target" ]; then

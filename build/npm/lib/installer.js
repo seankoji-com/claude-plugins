@@ -147,13 +147,49 @@ function removeEmptyDirsUpward(files, prefixResolved, prefix) {
   }
 }
 
+// Wraps JSON.parse with a diagnostic error naming the file and the remedy, instead of a
+// raw SyntaxError with a line/column an end user can't act on. writeManifestFile below is
+// atomic, but a manifest written before that guarantee existed (or corrupted by something
+// outside this tool) still needs a legible failure here rather than a crash.
+function readJsonManifest(mPath) {
+  const raw = fs.readFileSync(mPath, "utf8");
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    const corrupt = new Error(
+      `manifest at ${mPath} is corrupt or truncated (${err.message}). This can happen if a ` +
+        `prior install crashed mid-write (e.g. disk full). Remove it and re-run install to ` +
+        `recover: rm ${JSON.stringify(mPath)} && claude-plugins-opencode install`
+    );
+    corrupt.code = "EMANIFESTCORRUPT";
+    corrupt.manifestPath = mPath;
+    throw corrupt;
+  }
+}
+
 function readManifestIfPresent(mPath) {
   if (!fs.existsSync(mPath)) return null;
-  return JSON.parse(fs.readFileSync(mPath, "utf8"));
+  try {
+    return readJsonManifest(mPath);
+  } catch (err) {
+    if (err.code !== "EMANIFESTCORRUPT") throw err;
+    // install() must not get stuck in the same SyntaxError doctor()'s "run install again"
+    // advice would otherwise loop on forever: treat a corrupt manifest the same way as no
+    // manifest at all (a fresh install), after telling the operator why.
+    process.stderr.write(`warning: ${err.message}\n`);
+    return null;
+  }
 }
 
 function writeManifestFile(mPath, fields) {
-  fs.writeFileSync(mPath, JSON.stringify(fields, null, 2) + "\n", "utf8");
+  // Atomic on POSIX: write to a sibling temp file, then rename into place. rename(2)
+  // within the same directory/filesystem cannot leave a partially-written manifest on
+  // disk even if the process is killed or the disk fills up between the two calls —
+  // unlike the plain writeFileSync this replaces, which can be interrupted mid-write and
+  // leave truncated (unparseable) JSON for the next install/doctor/uninstall to trip on.
+  const tmp = `${mPath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(fields, null, 2) + "\n", "utf8");
+  fs.renameSync(tmp, mPath);
 }
 
 function install(opts) {
@@ -290,7 +326,7 @@ function uninstall(opts) {
   if (!fs.existsSync(mPath)) {
     return { removed: [], note: `nothing to uninstall — no manifest at ${mPath}` };
   }
-  const manifest = JSON.parse(fs.readFileSync(mPath, "utf8"));
+  const manifest = readJsonManifest(mPath);
   const files = Array.isArray(manifest.files) ? manifest.files : [];
 
   // The climb below resolves each dirname and reuses the same trailing-separator
@@ -353,7 +389,15 @@ function doctor(opts) {
   }
 
   report.installed = true;
-  const manifest = JSON.parse(fs.readFileSync(mPath, "utf8"));
+  let manifest;
+  try {
+    manifest = readJsonManifest(mPath);
+  } catch (err) {
+    // doctor()'s entire purpose is diagnosis without throwing — report the corrupt
+    // manifest as a problem (with the same recovery instructions) rather than crashing.
+    report.problems.push(err.message);
+    return report;
+  }
   if (manifest.state === "installing") {
     report.problems.push(
       `install appears to have crashed mid-run (manifest state is still "installing") — ` +
