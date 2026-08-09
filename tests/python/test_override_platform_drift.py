@@ -31,8 +31,14 @@ genuine, necessary platform-specific line already in the file. A future edit tha
 unexplained-diff footprint beyond its recorded ceiling fails here; shrinking it (folding a
 difference into `replacements` instead, or genuinely simplifying) is always allowed, silently.
 Only pairs whose *unreduced* line similarity (difflib.SequenceMatcher) is >= NEAR_DUPLICATE_RATIO
-carry a budget at all -- a pair that starts out substantially different by design (e.g. ape's
-forage.md) isn't a near-duplicate and gets no entry, rather than an artificially high one.
+carry a numeric budget at all -- a pair that starts out substantially different by design (e.g.
+ape's forage.md) isn't a near-duplicate and a numeric budget on it would be meaningless (its
+reduced-diff line count runs into the hundreds, i.e. "most of the file", not a handful of stray
+lines). But "below the ratio" must never mean "silently unchecked": every (plugin, stem) pair
+this test discovers is required to appear in either _DRIFT_BUDGET (near-duplicate, numeric
+ceiling) or _DIVERGENT_PAIRS (legitimately divergent, reason on record) -- a pair in neither is an
+unreviewed gap, not permission, and fails the test with a name-and-shame message telling the
+maintainer which registry to add it to.
 """
 
 import difflib
@@ -71,6 +77,32 @@ _DRIFT_BUDGET = {
     ("imps", "imp-agency"): 0,
     ("imps", "prs"): 4,
     ("imps", "issue-mode"): 8,
+}
+
+# (plugin, stem) -> why this pair's raw similarity is below _NEAR_DUPLICATE_RATIO on purpose,
+# rather than a stale copy nobody noticed. Reduced-diff line counts (same substitution reduction
+# _DRIFT_BUDGET's numbers use) are recorded here as evidence: these are not "a near-duplicate a
+# few lines over budget", they are largely-independent documents by design. Every pair the test
+# discovers below the ratio must be listed here -- see the module docstring.
+_DIVERGENT_PAIRS = {
+    ("imps", "imps"): (
+        "different CLI harness/dispatch mechanics per platform (opencode-harness.md vs Agy's "
+        "own dispatch prose); reduced-diff ~344 of 634 lines, raw similarity 0.70"
+    ),
+    ("prompt-builder", "prompt-builder"): (
+        "different invocation surface per platform; reduced-diff ~107 of 165 lines, raw "
+        "similarity 0.67"
+    ),
+    ("ape", "forage"): (
+        "different foraging CLI mechanics per platform (the module docstring's own example of "
+        "a pair that isn't a near-duplicate); reduced-diff ~32 of 130 lines, raw similarity 0.88"
+    ),
+    ("elephant-goldfish", "elephant"): (
+        "different platform command/skill framing on a short file; raw similarity 0.58"
+    ),
+    ("elephant-goldfish", "thinking"): (
+        "different platform command/skill framing on a short file; raw similarity 0.73"
+    ),
 }
 
 
@@ -121,8 +153,26 @@ class TestOverridePlatformDrift(unittest.TestCase):
                 similarity = difflib.SequenceMatcher(
                     None, oc_text.splitlines(), agy_text.splitlines()
                 ).ratio()
+                key = (plugin, stem)
                 if similarity < _NEAR_DUPLICATE_RATIO:
-                    continue  # legitimately platform-specific prose, not a near-duplicate
+                    # Below the ratio must never mean silently unchecked -- require an explicit,
+                    # on-record reason so a future pair that quietly drifts apart (rather than
+                    # being divergent by design) can't hide in the same branch as ape/forage.
+                    self.assertIn(
+                        key,
+                        _DIVERGENT_PAIRS,
+                        msg=(
+                            f"\nbuild/overrides/{plugin}/{{opencode/commands,agy/skills}}/{stem}.md "
+                            f"are only {similarity:.2f} similar (below _NEAR_DUPLICATE_RATIO="
+                            f"{_NEAR_DUPLICATE_RATIO}) and have no entry in _DIVERGENT_PAIRS "
+                            "explaining why. If this is legitimately divergent hand-authored "
+                            "prose, add a reason. If one copy was edited without the other and "
+                            "they used to be near-duplicates, that's the bug -- fix the stale "
+                            "copy instead."
+                        ),
+                    )
+                    checked += 1
+                    continue
 
                 pairs = list(replacement_pairs) + list(_PLATFORM_LABEL_PAIRS)
                 if stem in command_names:
