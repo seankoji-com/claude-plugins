@@ -279,11 +279,14 @@ jobs:
   cross-platform-regen:
     runs-on: ubuntu-latest
     steps:
-      # fetch-depth: 0 is load-bearing, not tidiness. dist-lint.sh's frozen-sources check
-      # diffs plugins/*/{commands,agents,scripts} against origin/master; with the default
-      # shallow single-ref fetch neither origin/master nor a local master exists on a
-      # pull_request checkout, resolve_base_ref() returns 1, and the lint step fails on
-      # every PR. Matches the `validate` job's checkout above.
+      # fetch-depth: 0 matches the `validate` job's checkout above; kept for parity and
+      # because it's cheap on this repo's history, even though dist-lint.sh's
+      # frozen-sources check — the one invariant here that needs origin/master — is
+      # opt-in (--check-frozen-sources) and NOT part of the plain `bash build/dist-lint.sh`
+      # run below. Wiring frozen-sources into this permanent push/pull_request gate would
+      # compare every future, unrelated PR against a moving origin/master and reject any
+      # of them that legitimately touch a command/agent/script file — see dist-lint.sh's
+      # own --help text and the comment above check_frozen_sources for the full reasoning.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -308,6 +311,7 @@ jobs:
       # dist-lint runs FIRST, against the pristine checkout. Its regen-diff invariant
       # generates into its own mktemp and compares both directions against the *committed*
       # dist/ — that signal is destroyed once `generate.py` has overwritten dist/ in place.
+      # Deliberately NOT --check-frozen-sources: see the checkout step's comment above.
       - name: Lint the committed dist/ (build/dist-lint.sh)
         run: bash build/dist-lint.sh
 

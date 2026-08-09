@@ -39,13 +39,24 @@ release practice exists.
 
 ## Architecture (decided; do not revisit)
 
-**Build-time generation.** Claude sources are frozen — files under
-`plugins/*/commands/`, `plugins/*/agents/`, `plugins/*/scripts/` keep byte-identical
-behavior. Exactly two named exceptions: (1) comment-only platform-assumption headers on
-the two workflow scripts; (2) `plugins/imps/references/opencode-harness.md` — narrowing
-its maintainer-checkout scoping note, because the harness is already shipped surface and
-this PR makes it the default OpenCode dispatch backend. That edit changes what Claude
-users read and is reviewed as such.
+**Build-time generation.** Claude sources are frozen for the duration of this PR — files
+under `plugins/*/commands/`, `plugins/*/agents/`, `plugins/*/scripts/` keep byte-identical
+behavior across it. Three named exceptions: (1) comment-only platform-assumption headers
+on the two workflow scripts; (2) `plugins/imps/references/opencode-harness.md` —
+narrowing its maintainer-checkout scoping note, because the harness is already shipped
+surface and this PR makes it the default OpenCode dispatch backend, an edit that changes
+what Claude users read and is reviewed as such; (3) the `SERVER_VERSION = "..."` line in
+any `plugins/*/scripts/*.py`, which `.github/workflows/version-bump.yml` rewrites on
+every PR that bumps that plugin's version (a pre-existing, intentional mechanism from
+#161 keeping `SERVER_VERSION` in lockstep with `plugin.json` — see AGENTS.md's
+"Cross-plugin audit log" section) and which this PR did not introduce or control (see
+`plugins/offload-sidecar/scripts/offload_sidecar.py`, bumped by that bot mid-run).
+`build/dist-lint.sh --check-frozen-sources` enforces exactly these three, line-by-line,
+against `origin/master` — as an opt-in, point-in-time check for this PR's own diff, never
+wired into the standing push/PR CI gate (see that flag's `--help` text and
+`docs/MAINTAINING.md`'s "Cross-platform generator" section for why permanent wiring would
+be wrong: `origin/master` moves with every merge, so a check comparing against it would
+eventually reject legitimate, unrelated future edits to a command/agent/script file).
 
 Generator: **`build/generate.py`, Python 3, stdlib only** (no PyYAML — frontmatter is
 split on `---` delimiter lines and re-rendered from templates). Mappings in
@@ -185,9 +196,9 @@ the gate's handle, not a substitute for evidence.
       Verify: test -x build/dist-lint.sh && bash build/dist-lint.sh --self-test
       Done when: fixtures for regen-diff, unsubstituted-ref, absolute-path, manifest, budget, mirrored-block, gate-stripped, **out-of-prefix uninstall path**, **frozen Claude sources**, and **README marker vs. generation-manifest agreement** each fail when broken and pass when correct. The last three are the only enforcement their constraints get anywhere in this run. The marker check validates only READMEs that **have** a marker — a missing marker is item 32's failure, not dist-lint's, so the lint is not red in the worktrees that precede it. `dist-lint.sh` also accepts `--scope <plugin>` to lint one plugin's output.
 
-- [ ] Claude sources are untouched except the two named exceptions
-      Verify: test -d dist && test -z "$(git diff origin/master --name-only -- plugins/*/commands plugins/*/agents plugins/*/scripts | grep -vE 'imps-run\.workflow\.js|ape-forage\.workflow\.js')"
-      Done when: only the two workflow scripts appear; the harness-reference edit is reviewed under its own Phase D item. [JUDGMENT]
+- [ ] Claude sources are untouched except the three named exceptions
+      Verify: test -d dist && bash build/dist-lint.sh --check-frozen-sources
+      Done when: `dist-lint.sh --check-frozen-sources` exits 0 — it enforces, line-by-line against `origin/master`, that only (a) comment-only changes on the two workflow scripts and (b) a `SERVER_VERSION = "..."` line in any `plugins/*/scripts/*.py` are present; the harness-reference edit is reviewed under its own Phase D item. [JUDGMENT]
 
 - [ ] elephant-goldfish generates for OpenCode with placeholder-based script paths and matrix-conformant frontmatter
       Verify: test -d dist/opencode && grep -rq '__PLUGIN_ROOT__' dist/opencode && test -z "$(grep -rE '\.claude/|CLAUDE_PLUGIN_ROOT' dist/opencode | grep -v 'audit\.jsonl')"
@@ -227,9 +238,9 @@ the gate's handle, not a substitute for evidence.
       Verify: grep -rq '__PLUGIN_ROOT__' dist/opencode && grep -rqE '__PLUGIN_ROOT__' build/npm/bin/* && grep -rqE 'sed|replace' build/npm/bin/*
       Done when: the installer replaces every placeholder with the resolved absolute path in installed copies only, re-running produces the same result, and the manifest records what was written. Documented: relocating an install requires re-running it.
 
-- [ ] offload-sidecar gains per-platform MCP registration examples matching Phase A′'s env verdict; Python untouched
-      Verify: grep -q 'mcpServers' plugins/offload-sidecar/README.md && grep -qi 'opencode' plugins/offload-sidecar/README.md && test -z "$(git diff origin/master --name-only -- plugins/offload-sidecar/scripts/)"
-      Done when: the Agy example uses the confirmed `{command, args}` shape; if env passthrough is unsupported, the README says so plainly instead of shipping an example that cannot carry credentials.
+- [ ] offload-sidecar gains per-platform MCP registration examples matching Phase A′'s env verdict; Python untouched except the SERVER_VERSION exception
+      Verify: grep -q 'mcpServers' plugins/offload-sidecar/README.md && grep -qi 'opencode' plugins/offload-sidecar/README.md && test -z "$(git diff origin/master -- plugins/offload-sidecar/scripts/ | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' | grep -vE '^[+-]SERVER_VERSION = "[^"]*"$')"
+      Done when: the Agy example uses the confirmed `{command, args}` shape; if env passthrough is unsupported, the README says so plainly instead of shipping an example that cannot carry credentials. `offload_sidecar.py` may differ from `origin/master` only in its `SERVER_VERSION` line (the version-bump bot's lockstep mechanism — see AGENTS.md's "Cross-plugin audit log" section, and the same exception `dist-lint.sh --check-frozen-sources` enforces); any other change fails the check. offload-sidecar is note-only (not generatable), so this deliberately does not go through `dist-lint.sh`'s scoped run, which would fail on an unrelated regen-diff check for a plugin with no `dist/` output.
 
 - [ ] The OpenCode-reads-Claude-skills channel is documented, not built
       Verify: grep -qi 'skills' docs/MAINTAINING.md && grep -q 'OPENCODE_DISABLE_CLAUDE_CODE' docs/MAINTAINING.md

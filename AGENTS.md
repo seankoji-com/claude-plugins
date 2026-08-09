@@ -100,11 +100,20 @@ they hold qualitative "Active rules" narratives a single JSON line can't express
 ## Cross-platform distribution
 
 Claude sources under `plugins/*/commands/`, `plugins/*/agents/`, `plugins/*/scripts/`
-are frozen — byte-identical behavior on Claude Code. `build/generate.py` derives the
+drive Claude Code behavior directly and also feed `build/generate.py`, which derives the
 OpenCode and Agy artifacts under `dist/` from those sources plus
-`build/platform-table.json` and `build/overrides/<plugin>/`; never hand-edit anything
-under `dist/` directly, and never regenerate and commit the result outside a dedicated
-regeneration change. Full generator, install-path, and versioning detail lives in
+`build/platform-table.json` and `build/overrides/<plugin>/`. Editing them is normal
+plugin development — Claude behavior is not frozen forever, only within a given
+generator run — but any change to them needs a matching `dist/` regeneration
+(`python3 build/generate.py`) committed alongside it, in a dedicated regeneration
+change: never hand-edit anything under `dist/` directly, and never regenerate-and-commit
+outside that dedicated change. `build/dist-lint.sh`'s `regen-diff` check is what CI
+enforces on every push/PR to catch drift between sources and `dist/`; its separate
+`--check-frozen-sources` flag is an opt-in, point-in-time check (diffs against
+`origin/master`) for verifying one specific change left Claude sources untouched — it is
+not, and must never become, a standing CI gate, since `origin/master` moves with every
+merge and would eventually reject any legitimate future edit to a command/agent/script
+file. Full generator, install-path, and versioning detail lives in
 `docs/MAINTAINING.md`.
 
 ## Validate before committing

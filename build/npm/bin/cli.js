@@ -45,11 +45,29 @@ function parseArgs(argv) {
         break;
       }
       args.prefix = value;
+    } else if (arg.startsWith("-") && arg !== "-") {
+      // Any other dash-prefixed token is a mistyped or unknown flag, not a
+      // positional command — falling through to `rest` would let e.g.
+      // `uninstall -prefix /tmp/x` (missing a dash) or `--prefixx` be swallowed as
+      // extra positionals while `--prefix` stays unset, so resolvePrefix() falls
+      // back to the *real* OPENCODE_CONFIG_DIR / ~/.config/opencode — turning a
+      // typo into an uninstall against the operator's live install.
+      args.error = `unknown flag: ${arg}`;
+      break;
     } else {
       rest.push(arg);
     }
   }
-  args.command = rest[0] || null;
+  if (!args.error) {
+    if (rest.length > 1) {
+      // Extra positional args past the command are almost always a mistyped flag
+      // that slipped through as plain text (e.g. a stray value with no leading
+      // dash) — reject rather than silently ignoring everything after rest[0].
+      args.error = `unexpected argument(s): ${rest.slice(1).join(" ")}`;
+    } else {
+      args.command = rest[0] || null;
+    }
+  }
   return args;
 }
 

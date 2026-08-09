@@ -201,11 +201,14 @@ substitute_plugin_root() {
   if [ ! -d "$installed_dir" ]; then
     # AGY_PLUGIN_PREFIX is this script's guess at where `agy plugin install`
     # places files — not something agy tells us. A wrong guess must not look
-    # like a clean, complete install: log it, don't just skip silently, so
-    # `installed N plugin(s)` isn't printed over plugins still carrying the
-    # literal __PLUGIN_ROOT__ placeholder.
+    # like a clean, complete install: log it, don't just skip silently. Return
+    # 2 (not 0) so the caller can tell "substitution skipped" apart from "ran
+    # fine" — install_cmd tracks this per plugin, names the affected plugin(s)
+    # in its final summary, and exits non-zero, instead of printing
+    # `installed N plugin(s)` over plugins still carrying the literal
+    # __PLUGIN_ROOT__ placeholder with no other signal than this one log line.
     log "install-agy.sh:   WARNING — expected install dir not found, __PLUGIN_ROOT__ substitution skipped: $installed_dir"
-    return 0
+    return 2
   fi
   while IFS= read -r f; do
     grep -q '__PLUGIN_ROOT__' "$f" 2>/dev/null || continue
@@ -290,6 +293,7 @@ install_cmd() {
   fi
 
   local plugin_dir plugin_name installed_count=0
+  local -a skipped_substitution_plugins=()
   {
     printf 'ref=%s\n' "$REF"
     printf 'sha=%s\n' "$sha"
@@ -308,7 +312,17 @@ install_cmd() {
     # it) instead of leaving an installed, half-substituted plugin with no
     # manifest entry at all.
     printf 'path:%s\n' "${AGY_PLUGIN_PREFIX%/}/$plugin_name" >> "$written"
-    substitute_plugin_root "${AGY_PLUGIN_PREFIX%/}/$plugin_name"
+    # `|| rc=$?` keeps `set -e` from aborting on this line so we can tell rc=2
+    # ("dir not found — substitution skipped, but the plugin is otherwise
+    # installed") apart from a real rc=1 io failure, which stays fatal below.
+    local rc=0
+    substitute_plugin_root "${AGY_PLUGIN_PREFIX%/}/$plugin_name" || rc=$?
+    if [ "$rc" -eq 2 ]; then
+      skipped_substitution_plugins+=("$plugin_name")
+    elif [ "$rc" -ne 0 ]; then
+      log "install-agy.sh: ERROR — __PLUGIN_ROOT__ substitution failed for $plugin_name"
+      exit 1
+    fi
     installed_count=$((installed_count + 1))
   done
 
@@ -344,6 +358,19 @@ install_cmd() {
   fi
 
   mv -f -- "$written" "$MANIFEST_PATH"
+
+  if [ "${#skipped_substitution_plugins[@]}" -gt 0 ]; then
+    # Every plugin is on disk and manifest-tracked (that's still true), but
+    # this must not read as a clean, complete install: name exactly which
+    # plugin(s) still carry the literal __PLUGIN_ROOT__ placeholder, and exit
+    # non-zero so a caller checking $? — not scraping a WARNING line among a
+    # dozen others — sees the degraded result.
+    log "install-agy.sh: installed $installed_count plugin(s) at $REF ($sha), but __PLUGIN_ROOT__ substitution was SKIPPED for: ${skipped_substitution_plugins[*]}"
+    log "install-agy.sh: manifest: $MANIFEST_PATH"
+    log "install-agy.sh: AGY_PLUGIN_PREFIX ($AGY_PLUGIN_PREFIX) did not match where agy actually placed these plugins — fix the prefix and re-run, or substitute __PLUGIN_ROOT__ manually"
+    exit 1
+  fi
+
   log "install-agy.sh: installed $installed_count plugin(s) at $REF ($sha)"
   log "install-agy.sh: manifest: $MANIFEST_PATH"
 }
@@ -459,6 +486,18 @@ self_test() {
   remove_manifest_paths "$manifest2" "$prefix" || true
   if [ ! -e "$lookalike" ]; then
     log "install-agy.sh --self-test: FAILED — prefix-lookalike path was deleted; guard is not boundary-safe: $lookalike"
+    failures=$((failures + 1))
+  fi
+
+  # substitute_plugin_root must distinguish "install dir not found" (rc=2,
+  # recoverable — install_cmd records it and keeps going) from "ran fine"
+  # (rc=0) so a wrong AGY_PLUGIN_PREFIX guess can never print as a clean,
+  # complete install. This is the one part of the missing-install-dir path
+  # self_test can exercise without a real `agy` binary or a live install.
+  local missing_dir_rc=0
+  substitute_plugin_root "$tmp_root/does-not-exist" || missing_dir_rc=$?
+  if [ "$missing_dir_rc" -ne 2 ]; then
+    log "install-agy.sh --self-test: FAILED — substitute_plugin_root on a missing install dir returned $missing_dir_rc, expected 2 (skipped, not silent success)"
     failures=$((failures + 1))
   fi
 

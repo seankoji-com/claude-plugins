@@ -8,7 +8,8 @@
 # invariant build/generate.py is supposed to guarantee, independently, against the
 # committed tree — plus three invariants ("out-of-prefix uninstall path", "frozen Claude
 # sources", "README marker vs. generation-manifest agreement") that get NO enforcement
-# anywhere else in this run.
+# anywhere else in this run. "frozen Claude sources" is opt-in (--check-frozen-sources),
+# not part of the default lint CI runs on every push/PR — see that flag's --help text.
 #
 # Usage:
 #   build/dist-lint.sh                 # lint the whole committed dist/ + repo state
@@ -29,14 +30,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   cat <<'EOF'
-Usage: build/dist-lint.sh [--scope <plugin>] [--self-test]
+Usage: build/dist-lint.sh [--scope <plugin>] [--check-frozen-sources] [--self-test]
 
-  (no flags)         lint the committed dist/ and repo state, whole-tree
-  --scope <plugin>   lint just that plugin's slice of dist/ (+ its README marker,
-                      its plugins/<plugin>/{commands,agents,scripts} frozen-sources slice)
-  --self-test        prove each of the 10 invariants below fails on a broken fixture and
-                      passes on a correct one; touches nothing under $ROOT
-  -h, --help         this text
+  (no flags)               lint the committed dist/ and repo state, whole-tree
+  --scope <plugin>         lint just that plugin's slice of dist/ (+ its README marker)
+  --check-frozen-sources   also diff plugins/*/{commands,agents,scripts} (or, with
+                            --scope, just that plugin's slice) against origin/master and
+                            fail on anything beyond the named exceptions. Opt-in and NOT
+                            part of the default lint: it compares against a moving base
+                            ref, so wired into every push/PR it would reject any future,
+                            unrelated change to a command/agent/script file. Use it once,
+                            e.g. right before merging a change that must prove it left
+                            Claude sources untouched.
+  --self-test              prove each of the 10 invariants below fails on a broken fixture
+                            and passes on a correct one; touches nothing under $ROOT
+  -h, --help               this text
 
 Invariants checked: regen-diff, unsubstituted-ref, absolute-path, manifest, budget,
 mirrored-block, gate-stripped, uninstall-prefix, frozen-sources, readme-marker.
@@ -390,7 +398,15 @@ check_uninstall_prefix_repo() {
 #        audit log" section). Without this exception, that bot commit trips this check
 #        on every future PR touching such a plugin, on a diff the PR author neither
 #        introduced nor controls.
-# The only enforcement this invariant gets anywhere in this run.
+# The only enforcement this invariant gets anywhere in this run — and it must stay
+# opt-in (run_lint only calls it when --check-frozen-sources is passed; see main()).
+# The comparison base (origin/master, or master with no remote) moves with every merge,
+# so wired into the default lint that CI runs on every push/PR, this would reject any
+# later, unrelated PR that legitimately edits a command/agent/script file — there is no
+# way for such a PR to ever satisfy "byte-identical to the base ref" once this migration
+# itself has merged and become part of that base ref. There is no unfreeze procedure
+# because there is no permanent freeze: this check verifies one specific thing, this
+# migration's own diff, and is meant to be run explicitly for that purpose, not forever.
 
 check_frozen_sources() {
   local root="$1" scope="${2:-}" base status=0
@@ -399,11 +415,18 @@ check_frozen_sources() {
     return 1
   }
 
+  # Git pathspecs, not bash globs: a bash array assignment like
+  # `paths=(plugins/*/commands ...)` expands against the CALLER's cwd at the moment this
+  # function runs, not against $root — call this from any other directory (a foreign cwd
+  # that happens to contain a plugins/ dir, or none at all) and the glob silently expands
+  # to something else, or to nothing, and the check fails open. `:(glob)` pathspec magic
+  # is expanded by git itself, scoped to the repo at $root by the `cd "$root"` below, so
+  # the caller's cwd can never change what gets compared.
   local -a paths
   if [ -n "$scope" ]; then
     paths=("plugins/$scope/commands" "plugins/$scope/agents" "plugins/$scope/scripts")
   else
-    paths=(plugins/*/commands plugins/*/agents plugins/*/scripts)
+    paths=(':(glob)plugins/*/commands/**' ':(glob)plugins/*/agents/**' ':(glob)plugins/*/scripts/**')
   fi
 
   local changed
@@ -415,13 +438,23 @@ check_frozen_sources() {
     [ -n "$f" ] || continue
     case "$f" in
       */imps-run.workflow.js|*/ape-forage.workflow.js)
+        # `^[+-]` picks every added/removed content line; excluding only the diff's own
+        # `+++ `/`--- ` file-header lines (note the trailing space, part of git's literal
+        # header format) — NOT the broader `^[+-][^+-]`, which also silently swallows any
+        # real changed line whose own content happens to start with + or - (e.g. a line
+        # added reading `++globalCounter;` diffs as `+++globalCounter;`, matching neither
+        # `^[+-][^+-]` nor a real header, and would slip through undetected as "just a
+        # header line"). Matches the same fix in
+        # tests/python/test_override_platform_drift.py's diff filter.
         fdiff="$(cd "$root" && git diff "$base" -- "$f" 2>/dev/null \
-          | grep -E '^[+-][^+-]' | grep -vE '^[+-][[:space:]]*(//|/\*|\*)' || true)"
+          | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' \
+          | grep -vE '^[+-][[:space:]]*(//|/\*|\*)' || true)"
         [ -n "$fdiff" ] && bad+=("$f (non-comment change)")
         ;;
       plugins/*/scripts/*.py)
         fdiff="$(cd "$root" && git diff "$base" -- "$f" 2>/dev/null \
-          | grep -E '^[+-][^+-]' | grep -vE '^[+-]SERVER_VERSION = "[^"]*"$' || true)"
+          | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' \
+          | grep -vE '^[+-]SERVER_VERSION = "[^"]*"$' || true)"
         [ -n "$fdiff" ] && bad+=("$f (change beyond SERVER_VERSION)")
         ;;
       *)
@@ -736,7 +769,7 @@ FIXTURE
 # ------------------------------------------------------------------------------ run_lint
 
 run_lint() {
-  local scope="$1" status=0 dist="$ROOT/dist"
+  local scope="$1" check_frozen="${2:-0}" status=0 dist="$ROOT/dist"
 
   if [ -n "$scope" ] && [ ! -d "$ROOT/plugins/$scope" ]; then
     echo "dist-lint: --scope $scope: no such plugin directory plugins/$scope" >&2
@@ -753,7 +786,17 @@ run_lint() {
   check_mirrored_block "$ROOT" && echo "ok   mirrored-block" || { echo "FAIL mirrored-block"; status=1; }
   check_gate_stripped "$dist" && echo "ok   gate-stripped" || { echo "FAIL gate-stripped"; status=1; }
   check_uninstall_prefix_repo "$ROOT" && echo "ok   uninstall-prefix" || { echo "FAIL uninstall-prefix"; status=1; }
-  check_frozen_sources "$ROOT" "$scope" && echo "ok   frozen-sources" || { echo "FAIL frozen-sources"; status=1; }
+  # frozen-sources is opt-in (--check-frozen-sources), NOT part of the default lint that
+  # CI's push/pull_request gate runs on every commit. It diffs plugins/*/{commands,agents,
+  # scripts} against origin/master — fine as a one-time check of *this migration's* diff,
+  # but origin/master keeps moving, so wired into a permanent gate it would reject any
+  # future, unrelated PR that legitimately edits a command/agent/script file. Run it
+  # explicitly (e.g. once, before merging this migration) with --check-frozen-sources.
+  if [ "$check_frozen" = "1" ]; then
+    check_frozen_sources "$ROOT" "$scope" && echo "ok   frozen-sources" || { echo "FAIL frozen-sources"; status=1; }
+  else
+    echo "skip frozen-sources (opt-in: --check-frozen-sources)"
+  fi
   check_readme_marker "$ROOT" "$scope" && echo "ok   readme-marker" || { echo "FAIL readme-marker"; status=1; }
 
   return $status
@@ -763,9 +806,11 @@ run_lint() {
 
 scope=""
 mode="lint"
+check_frozen=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --self-test) mode="self-test"; shift ;;
+    --check-frozen-sources) check_frozen=1; shift ;;
     --scope)
       if [ $# -lt 2 ]; then
         echo "dist-lint: --scope requires a value" >&2
@@ -784,6 +829,6 @@ if [ "$mode" = "self-test" ]; then
   self_test
   exit $?
 else
-  run_lint "$scope"
+  run_lint "$scope" "$check_frozen"
   exit $?
 fi

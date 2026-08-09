@@ -15,14 +15,29 @@ check the matrix yourself before trusting prose — don't extrapolate.
 
 ## Cross-platform generator
 
-Claude sources are frozen: `plugins/*/commands/`, `plugins/*/agents/`, `plugins/*/scripts/`
-keep byte-identical behavior on Claude Code (two narrow, explicitly-named exceptions —
-see `docs/plans/cross-platform-compat.md`). `build/generate.py` (Python 3, stdlib only)
-derives OpenCode and Agy artifacts from those sources plus `build/platform-table.json`
-(the single Claude-term → platform-term mapping) and `build/overrides/<plugin>/`
-(irreducible prose differences as section-replacement blocks). Output lands in committed
-`dist/` — `dist/opencode/` and `dist/agy/<plugin>/` — and is never hand-edited; a
-maintainer edits the sources or the override blocks and reruns the generator.
+`plugins/*/commands/`, `plugins/*/agents/`, `plugins/*/scripts/` drive Claude Code
+behavior directly and are also the generator's input. `build/generate.py` (Python 3,
+stdlib only) derives OpenCode and Agy artifacts from those sources plus
+`build/platform-table.json` (the single Claude-term → platform-term mapping) and
+`build/overrides/<plugin>/` (irreducible prose differences as section-replacement
+blocks). Output lands in committed `dist/` — `dist/opencode/` and `dist/agy/<plugin>/` —
+and is never hand-edited; a maintainer edits the sources or the override blocks and
+reruns the generator, committing the regenerated `dist/` alongside the source change in
+the same, dedicated regeneration commit.
+
+Editing Claude sources is normal, ongoing plugin development, not something this build
+freezes forever — only within a single generator run does the generator itself leave
+them untouched. What CI enforces on every push/PR is `build/dist-lint.sh`'s `regen-diff`
+check: that committed `dist/` is exactly what `generate.py` produces from the current
+sources. A separate, narrower invariant — that a *specific* change left
+`plugins/*/{commands,agents,scripts}` byte-identical to a prior state — is available via
+`build/dist-lint.sh --check-frozen-sources`, but it is opt-in and point-in-time (it diffs
+against `origin/master`, which moves with every merge) rather than a standing CI gate;
+see `docs/plans/cross-platform-compat.md` for how and when to run it, and
+`build/dist-lint.sh`'s own `--help` and comments for the three narrow, explicitly-named
+exceptions it allows (two comment-only platform-assumption headers, plus the
+`SERVER_VERSION`-only line `version-bump.yml` rewrites — see AGENTS.md's "Cross-plugin
+audit log" section).
 
 `build/dist-lint.sh` is the mechanical gate on generated output (the reviewer diff
 excludes `dist/` itself), including a self-test that the shared maintainer block stays

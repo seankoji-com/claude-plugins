@@ -19,6 +19,7 @@ const path = require('node:path')
 // runs the code; tests/npm-install-smoke.sh is skip-by-default and needs npm registry
 // access; tests/run-js.sh's existing suite never required installer.js at all.
 const INSTALLER_PATH = path.join(__dirname, '..', '..', 'dist', 'opencode', 'lib', 'installer.js')
+const CLI_PATH = path.join(__dirname, '..', '..', 'dist', 'opencode', 'bin', 'cli.js')
 
 function freshInstaller() {
   // node:test workers cache modules across files in the same process; delete.cache so
@@ -28,6 +29,8 @@ function freshInstaller() {
   delete require.cache[require.resolve(INSTALLER_PATH)]
   return require(INSTALLER_PATH)
 }
+
+const { parseArgs } = require(CLI_PATH)
 
 function mkPrefix() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'npm-installer-test-'))
@@ -188,4 +191,31 @@ test('uninstall() fails closed: a manifest entry outside the prefix is refused a
     fs.rmSync(prefix, { recursive: true, force: true })
     fs.rmSync(outsideDir, { recursive: true, force: true })
   }
+})
+
+// A mistyped --prefix must never silently resolve to the default prefix
+// ($OPENCODE_CONFIG_DIR / ~/.config/opencode) — that turns a typo like
+// `uninstall -prefix /tmp/x` into a real uninstall against the operator's live install.
+test('parseArgs() rejects an unknown dash-prefixed flag instead of swallowing it as a positional', () => {
+  const result = parseArgs(['uninstall', '-prefix', '/tmp/x'])
+  assert.match(result.error, /unknown flag: -prefix/)
+  assert.equal(result.prefix, null)
+})
+
+test('parseArgs() rejects a mistyped long flag (--prefixx) instead of ignoring it', () => {
+  const result = parseArgs(['uninstall', '--prefixx', '/tmp/x'])
+  assert.match(result.error, /unknown flag: --prefixx/)
+  assert.equal(result.prefix, null)
+})
+
+test('parseArgs() rejects extra positional arguments after the command', () => {
+  const result = parseArgs(['uninstall', 'extra-arg'])
+  assert.match(result.error, /unexpected argument\(s\): extra-arg/)
+})
+
+test('parseArgs() still accepts a well-formed --prefix', () => {
+  const result = parseArgs(['uninstall', '--prefix', '/tmp/x'])
+  assert.equal(result.error, null)
+  assert.equal(result.command, 'uninstall')
+  assert.equal(result.prefix, '/tmp/x')
 })
