@@ -52,12 +52,27 @@ each file ships with for the absolute path of its own plugin's installed `share/
 directory. A manifest recording every written path is left at
 `~/.config/opencode/.seankoji-plugins-manifest.json`.
 
-If you installed with `--ignore-scripts`, `postinstall` never ran. Run the CLI's own
-`install` subcommand instead:
+If `postinstall` did not run, nothing was copied and the plugins are not deployed. Run
+the CLI's own `install` subcommand, which does exactly what `postinstall` does:
 
 ```bash
 claude-plugins-opencode install
 ```
+
+`--ignore-scripts` is only one way to end up there. Recent npm versions gate install
+scripts by default and print:
+
+```
+npm warn allow-scripts 1 package has install scripts not yet covered by allowScripts
+```
+
+That particular message is **advisory** — the script still ran — but the same mechanism
+blocks it once scripts are denied for this package, and CI images and hardened setups
+frequently disable them outright. So don't infer from "I didn't pass `--ignore-scripts`"
+that `postinstall` ran.
+
+`claude-plugins-opencode doctor` is the reliable check: it reports whether the install
+actually landed, rather than whether npm printed a warning.
 
 ## CLI
 
@@ -73,8 +88,9 @@ claude-plugins-opencode install|uninstall|doctor [--prefix <dir>]
 - `uninstall` — removes exactly the files the manifest records, and only files inside the
   resolved install prefix; it refuses (and deletes nothing) if any manifest path resolves
   outside the prefix.
-- `doctor` — reports install health, including the specific case of `postinstall` having
-  been skipped by `--ignore-scripts`.
+- `doctor` — reports install health, including the case where `postinstall` never ran
+  (whether from `--ignore-scripts`, npm's own install-script gating, or a crash partway
+  through). Run it whenever you are unsure the install landed.
 
 `--prefix` (or the `OPENCODE_CONFIG_DIR` environment variable) overrides the default
 `~/.config/opencode`.

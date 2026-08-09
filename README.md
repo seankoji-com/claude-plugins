@@ -63,10 +63,12 @@ npm install -g @seankoji/claude-plugins-opencode
 ```
 
 `postinstall` copies commands and scripts into `~/.config/opencode/{commands,share}`.
-If you installed with `--ignore-scripts`, run the bundled CLI's own subcommand
+If `postinstall` didn't run, nothing was copied — run the bundled CLI's own subcommand
 instead: `claude-plugins-opencode install` (also `uninstall`/`doctor`) — the binary
-keeps its unscoped name. Published manually via `workflow_dispatch`; this repo carries
-no git tags.
+keeps its unscoped name. `--ignore-scripts` is only one route there: npm also gates
+install scripts on its own, and CI images often disable them, so
+`claude-plugins-opencode doctor` is the reliable check rather than whether you passed a
+flag. Published manually via `workflow_dispatch`; this repo carries no git tags.
 
 **Working inside this repo?** The committed [`.npmrc`](./.npmrc) already maps the
 `@seankoji` scope to GitHub Packages, so you only need the credential:
