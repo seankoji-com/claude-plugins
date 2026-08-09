@@ -15,10 +15,11 @@ back to a dedicated run branch cut off the default branch.
 **Platform: OpenCode.** On Claude Code this command hands the whole run to a background
 `Workflow` script that dispatches isolated sub-agents. OpenCode has neither, so **this
 command is the driver**: it plans, writes the run state file, then walks the task DAG
-itself, dispatching one task at a time through the bundled harness at
-`__PLUGIN_ROOT__/scripts/opencode-dispatch.sh`. Everything below is written for that
-model. Where a Claude Code mechanism is named, it is named as a comparison, never as an
-instruction to perform here.
+itself, dispatching one task at a time through the `opencode-dispatch.sh` oracle-loop
+harness — **not bundled with this artifact**; see "Where `$IMPS_HARNESS` comes from" in
+Step 3 for where to point it. Everything below is written for that model. Where a Claude
+Code mechanism is named, it is named as a comparison, never as an instruction to perform
+here.
 <!-- END-SECTION -->
 
 <!-- REPLACE-SECTION: ## Context discipline (applies to every phase) -->

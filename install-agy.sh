@@ -115,12 +115,25 @@ path_within_prefix() {
 # manifest-wide sweep below and uninstall_cmd's per-path fallback share the
 # same fail-closed check instead of each re-implementing (and possibly
 # drifting from) it.
+#
+# Returns 0 only if the path is actually gone afterward. `rm -rf` can exit
+# nonzero (or, on some setups, exit 0 while leaving unremovable entries
+# behind — e.g. a permission-denied file inside the tree) without raising
+# under `set -e` here, because this call sits inside the `if` test below —
+# one of the contexts where bash's errexit is defined to not apply. Checking
+# both the exit status and the post-condition means every caller gets an
+# honest success/failure signal instead of a "removed" log line that isn't
+# true.
 remove_path_guarded() {
   local prefix="$1" path="$2"
   if path_within_prefix "$prefix" "$path"; then
-    rm -rf -- "$path"
-    log "install-agy.sh: removed $path"
-    return 0
+    if rm -rf -- "$path" && [ ! -e "$path" ]; then
+      log "install-agy.sh: removed $path"
+      return 0
+    else
+      log "install-agy.sh: FAILED to fully remove $path"
+      return 1
+    fi
   else
     log "install-agy.sh: REFUSING to remove path outside install prefix: $path"
     return 1
@@ -249,13 +262,43 @@ EOF
 # in $AGY_CONFIG_DIR forever. A $written with no `path:` lines (failure before
 # anything installed) is just removed, so a real prior manifest is never
 # clobbered with an empty one.
+#
+# Before overwriting $manifest_path, any `path:` entry already on disk from a
+# PRIOR complete install is carried forward if this partial attempt's $written
+# has no entry for that same plugin name. Without this, a failure partway
+# through the loop (which only reaches some of dist/agy/*/, not necessarily
+# the same set the old manifest recorded) would drop the untouched plugins'
+# manifest entries entirely — they stay installed on disk but become
+# unrecorded, and so un-uninstallable, even though nothing about them failed.
 finalize_partial_install() {
   local tmp_checkout="$1" written="$2" manifest_path="$3"
   rm -rf -- "$tmp_checkout"
   if [ -f "$written" ]; then
     if grep -q '^path:' "$written" 2>/dev/null; then
+      if [ -f "$manifest_path" ]; then
+        local old_line old_path old_name have_names=" "
+        while IFS= read -r old_line || [ -n "$old_line" ]; do
+          case "$old_line" in
+            path:*) : ;;
+            *) continue ;;
+          esac
+          have_names="$have_names$(basename "${old_line#path:}") "
+        done < "$written"
+        while IFS= read -r old_line || [ -n "$old_line" ]; do
+          case "$old_line" in
+            path:*) old_path="${old_line#path:}" ;;
+            *) continue ;;
+          esac
+          [ -z "$old_path" ] && continue
+          old_name="$(basename "$old_path")"
+          case "$have_names" in
+            *" $old_name "*) continue ;;
+          esac
+          printf 'path:%s\n' "$old_path" >> "$written"
+        done < "$manifest_path"
+      fi
       mv -f -- "$written" "$manifest_path"
-      log "install-agy.sh: install stopped early — manifest reflects only the plugin(s) installed before the failure; re-run to finish or --uninstall to remove them"
+      log "install-agy.sh: install stopped early — manifest reflects the plugin(s) installed before the failure plus any prior install untouched by this attempt; re-run to finish or --uninstall to remove them"
     else
       rm -f -- "$written"
     fi
@@ -339,6 +382,7 @@ install_cmd() {
   # channel. Runs only after every plugin in this install has succeeded
   # (installed_count check above), so a failed install never removes an old,
   # still-valid install.
+  local -a undead_orphans=()
   if [ -f "$MANIFEST_PATH" ]; then
     local old_line old_path orphan_name
     while IFS= read -r old_line || [ -n "$old_line" ]; do
@@ -350,9 +394,19 @@ install_cmd() {
       grep -qxF "path:$old_path" "$written" && continue
       orphan_name="$(basename "$old_path")"
       log "install-agy.sh: removing orphaned plugin no longer in dist/agy/ at $REF: $orphan_name"
-      agy plugin uninstall "$orphan_name" 2>/dev/null || true
+      agy plugin uninstall "$orphan_name" 2>&1 | while IFS= read -r al; do log "install-agy.sh:   agy plugin uninstall: $al"; done || true
       if [ -e "$old_path" ]; then
-        remove_path_guarded "$AGY_PLUGIN_PREFIX" "$old_path" || true
+        # remove_path_guarded now returns nonzero (and logs why) whenever
+        # $old_path is not actually gone afterward. Do NOT drop this orphan
+        # from the manifest in that case — an unrecorded path that is still
+        # on disk is exactly the "loaded, un-uninstallable, false success"
+        # failure mode this sweep exists to avoid. Re-adding its `path:` line
+        # keeps it tracked (and thus reachable by a future --uninstall or
+        # re-run) instead of silently vanishing here.
+        if ! remove_path_guarded "$AGY_PLUGIN_PREFIX" "$old_path"; then
+          printf 'path:%s\n' "$old_path" >> "$written"
+          undead_orphans+=("$orphan_name")
+        fi
       fi
     done < "$MANIFEST_PATH"
   fi
@@ -368,6 +422,18 @@ install_cmd() {
     log "install-agy.sh: installed $installed_count plugin(s) at $REF ($sha), but __PLUGIN_ROOT__ substitution was SKIPPED for: ${skipped_substitution_plugins[*]}"
     log "install-agy.sh: manifest: $MANIFEST_PATH"
     log "install-agy.sh: AGY_PLUGIN_PREFIX ($AGY_PLUGIN_PREFIX) did not match where agy actually placed these plugins — fix the prefix and re-run, or substitute __PLUGIN_ROOT__ manually"
+    exit 1
+  fi
+
+  if [ "${#undead_orphans[@]}" -gt 0 ]; then
+    # Same principle as the substitution-skip branch above: this is not a
+    # clean result, so it must not exit 0 or log only "installed N
+    # plugin(s)" — that line was the sole signal of a false success this
+    # finding described. Say plainly which orphan(s) could not be removed
+    # and that they remain manifest-tracked (still installed, still
+    # reachable by --uninstall), then exit non-zero.
+    log "install-agy.sh: installed $installed_count plugin(s) at $REF ($sha), but FAILED to remove orphaned plugin(s): ${undead_orphans[*]}"
+    log "install-agy.sh: manifest: $MANIFEST_PATH (orphan(s) kept in the manifest, not silently dropped)"
     exit 1
   fi
 
