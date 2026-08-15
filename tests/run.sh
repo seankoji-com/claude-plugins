@@ -352,6 +352,27 @@ else
   skip "imps/tests/sandbox-wrap-shape.sh" "missing or not executable: $imps_sandbox_wrap_shape"
 fi
 
+# Same visibility invariant and shape as sandbox-wrap-shape.sh above, one
+# layer up the stack: this proves sandbox-smoke.sh's OWN assertion/counting/
+# exit-code logic (not real containment — only the Darwin+SANDBOX_MODE inline
+# run further down proves that) by running sandbox-smoke.sh as a real
+# subprocess against a stubbed sandbox-wrap.sh selected via CLAUDE_PLUGIN_ROOT.
+# No macOS sandbox, no credentials, no spend — runs unconditionally, including
+# on ubuntu-latest CI, which is exactly where the Darwin-gated block below
+# cannot run at all.
+imps_sandbox_smoke_shape="$ROOT/plugins/imps/tests/sandbox-smoke-shape.sh"
+if [ -x "$imps_sandbox_smoke_shape" ]; then
+  sandbox_smoke_shape_out="$(bash "$imps_sandbox_smoke_shape" 2>&1)"
+  sandbox_smoke_shape_rc=$?
+  if [ "$sandbox_smoke_shape_rc" -eq 0 ]; then
+    report "imps/tests/sandbox-smoke-shape.sh" 1
+  else
+    report "imps/tests/sandbox-smoke-shape.sh" 0 "$sandbox_smoke_shape_out"
+  fi
+else
+  skip "imps/tests/sandbox-smoke-shape.sh" "missing or not executable: $imps_sandbox_smoke_shape"
+fi
+
 # Sibling of worktree-shape.sh (which owns the --worktree shape gate); this one
 # owns opencode-dispatch.sh's other free guards: the new --expect-oracle /
 # --result-branch bad_arguments paths, create_result_ref's durability claim
