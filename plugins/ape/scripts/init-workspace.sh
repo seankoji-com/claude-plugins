@@ -2,6 +2,7 @@
 # Phase 0 helper for /ape:forage — creates the workspace and reports whether a
 # fingerprint already exists, as a single preapprovable command (no ad hoc
 # compound bash the permission system can't statically analyze).
+# fail-fast: partial workspace init is worse than none
 set -euo pipefail
 
 slug="$(basename "$(pwd)")"

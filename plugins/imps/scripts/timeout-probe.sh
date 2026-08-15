@@ -20,6 +20,7 @@
 # A here-string (`<<<`, bash 2.05b+) rather than an unquoted heredoc: the
 # heredoc form would re-expand `$` and `\` in the fixture content, reopening
 # exactly the shell re-parsing the `eval` this replaced was removed for.
+# fail-soft: test probe helper, runs to completion
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

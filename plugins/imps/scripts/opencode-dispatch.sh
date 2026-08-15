@@ -130,6 +130,7 @@
 #
 # See plugins/imps/references/opencode-harness.md for setup, the Claude Code
 # permission entry, and the measurement protocol.
+# fail-soft: explicit abort() guards handle critical errors; normal flow continues
 set -uo pipefail
 
 # Structural guarantee for "the final line of stdout is always exactly one

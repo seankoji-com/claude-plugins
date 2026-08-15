@@ -3,6 +3,7 @@
 # single preapprovable command instead of a multi-line compound bash block.
 #
 # Usage: search-repos.sh "<query 1>" ["<query 2>" ...]
+# fail-soft: run every query even if some fail; exit 0 if any succeed, 1 only if all fail
 set -uo pipefail
 
 # Track query exit codes. Policy: exit non-zero only if ALL queries fail.

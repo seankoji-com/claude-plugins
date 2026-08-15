@@ -44,6 +44,7 @@
 # produce — if the backend is unavailable or the mode is unrecognised. There is
 # deliberately no `none` mode on the flag surface; see the DANGEROUSLY_DISABLE
 # block below.
+# fail-soft: explicit die() guards handle critical setup errors; normal flow continues
 set -uo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
