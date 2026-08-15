@@ -163,6 +163,52 @@ to police mechanically; the discipline is in what you type.
 
 ---
 
+## Slug disambiguation
+
+The project slug keys imps state files under `~/.config/opencode/imps/runs/`. Historically
+the slug was derived from `basename "${CLAUDE_PROJECT_DIR:-$(pwd)}"` alone, which
+collides when two different repos share the same directory name (e.g.
+`~/work/proj-a/widgets` and `~/work/proj-b/widgets` both resolve to `widgets`
+and share one state file).
+
+The recommended pattern disambiguates with the remote origin:
+
+```bash
+SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
+OLD_SLUG="$SLUG"
+if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
+  OWNER_REPO=$(echo "$REMOTE_URL" \
+    | sed -E \
+      -e 's|^https?://[^/]+/||' \
+      -e 's|^git@[^:]+:||' \
+      -e 's|^ssh://[^/]+/[^/]+/||' \
+      -e 's|\.git$||' -e 's|/$||' \
+    | tr '/' '_')
+  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then
+    SLUG="${OWNER_REPO}__${SLUG}"
+  fi
+fi
+# Migration: rename old basename-only state files if they exist
+if [ "$SLUG" != "$OLD_SLUG" ] \
+  && [ -f "~/.config/opencode/imps/runs/$OLD_SLUG.json" ] \
+  && [ ! -f "~/.config/opencode/imps/runs/$SLUG.json" ]; then
+  for ext in json md; do
+    [ -f "~/.config/opencode/imps/runs/$OLD_SLUG.$ext" ] && \
+      mv "~/.config/opencode/imps/runs/$OLD_SLUG.$ext" \
+         "~/.config/opencode/imps/runs/$SLUG.$ext" 2>/dev/null || true
+  done
+fi
+```
+
+This produces slugs like `seankoji__claude-plugins__claude-plugins` (owner + repo
++ basename, double-underscore separated). The migration block preserves existing
+state by renaming old-format files to the new slug on first invocation.
+
+Slug derivations throughout this file should follow this pattern. The snippet
+above is canonical — copy it whenever deriving `SLUG`.
+
+---
+
 ## Guard: resume check
 
 Before anything else, check for an existing run state file:
