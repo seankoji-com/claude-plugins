@@ -56,6 +56,16 @@
 # Exit codes: 0 all assertions passed · 1 an assertion failed (named on stdout)
 # · 2 the backend is unavailable · 77 cannot run here (Seatbelt does not nest,
 # so this is meaningless from inside another sandbox — see the nesting probe).
+#
+# tests/run.sh (unit fixtures) sources this file with __SOURCED__=1 to call the
+# pure helpers below (note, assert, ...) directly, without running the
+# sandbox-dependent "do the thing" tail — see the guard comment past the
+# function definitions. plugins/imps/tests/sandbox-smoke-shape.sh instead runs
+# this script end-to-end as a real subprocess against a STUBBED sandbox-wrap.sh
+# (via CLAUDE_PLUGIN_ROOT), so the tail's own assertion/counting/exit-code
+# logic is exercised on any platform, including ubuntu-latest CI, without a
+# real macOS sandbox. Neither replaces the Darwin+SANDBOX_MODE inline run in
+# tests/run.sh, which is the only one that proves real containment.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -74,6 +84,52 @@ assert() {
     fails=$((fails + 1))
   fi
 }
+
+cleanup() {
+  rm -rf "$WT" "$DATADIR" "$HOME_READ_PROBE" "$HOME_WRITE_PROBE"
+  [ "$CREATED_HOME_PROBE_DIR" = 1 ] && rmdir "$HOME_PROBE_DIR" 2>/dev/null
+  [ "$CREATED_GH_CONFIG" = 1 ] && rmdir "$GH_CONFIG_DIR" 2>/dev/null
+}
+
+run_capture() { # run_capture <errfile> <cmd...>
+  local errfile="$1"; shift
+  bash "$WRAP" --worktree "$WT" --gitmeta "$GITMETA" --datadir "$DATADIR" -- "$@" >/dev/null 2>"$errfile"
+}
+run() { run_capture /dev/null "$@"; }
+
+# expect_allow/expect_deny take a shell snippet run *inside* the sandbox. On
+# failure, the wrapped command's own stderr is shown (not discarded) so a FAIL
+# line is actually diagnosable instead of just a name.
+expect_allow() {
+  local n="$1"; shift
+  local errfile; errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
+  if run_capture "$errfile" /bin/sh -c "$*"; then assert "$n" 1; else assert "$n" 0 "$(cat "$errfile")"; fi
+  rm -f "$errfile"
+}
+expect_deny() {
+  local n="$1"; shift
+  local errfile; errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
+  if run_capture "$errfile" /bin/sh -c "$*"; then assert "$n" 0 "expected denial, command succeeded"; else assert "$n" 1; fi
+  rm -f "$errfile"
+}
+
+# One probe per path denied by sandbox/deny-credentials.sbpl.in. `cat || ls` is
+# the union of "content readable" and "metadata readable" — the profile denies
+# file-read*, which covers both, so a correct profile fails both and a partial
+# grant is still caught. Absent targets are skipped rather than counted, except
+# gh-config-denied, whose target this script creates when absent (above).
+expect_deny_path() { # expect_deny_path <name> <path>
+  if [ -e "$2" ]; then
+    expect_deny "$1" "cat '$2' 2>/dev/null || ls '$2'"
+  else
+    note "$1: $2 absent on this host — skipped, NOT counted as a pass"
+  fi
+}
+
+# tests/run.sh sources this file with __SOURCED__=1 to unit-test the pure
+# helpers above (note, assert) without running the sandbox-dependent tail
+# below. Everything past this line performs real filesystem/sandbox work.
+${__SOURCED__:+false} : || return 0
 
 [ -x "$WRAP" ] || { echo "sandbox-smoke: missing $WRAP" >&2; exit 2; }
 if ! bash "$WRAP" --check; then
@@ -99,11 +155,6 @@ CREATED_HOME_PROBE_DIR=0
 # assertion is never vacuous — see the header comment.
 GH_CONFIG_DIR="$HOME_CANON/.config/gh"
 CREATED_GH_CONFIG=0
-cleanup() {
-  rm -rf "$WT" "$DATADIR" "$HOME_READ_PROBE" "$HOME_WRITE_PROBE"
-  [ "$CREATED_HOME_PROBE_DIR" = 1 ] && rmdir "$HOME_PROBE_DIR" 2>/dev/null
-  [ "$CREATED_GH_CONFIG" = 1 ] && rmdir "$GH_CONFIG_DIR" 2>/dev/null
-}
 # EXIT alone can miss SIGINT/SIGTERM in some shells/states, and this cleanup's
 # job (removing probe files from $HOME) matters even on an interrupted run.
 trap cleanup EXIT HUP INT TERM
@@ -121,11 +172,6 @@ fi
 # wholesale (only <worktree>/<gitmeta>/<datadir> specifically) — assertions
 # 3-4 prove the worktree/gitmeta grants themselves work, not just that
 # something under $TMPDIR happens to be reachable.
-run_capture() { # run_capture <errfile> <cmd...>
-  local errfile="$1"; shift
-  bash "$WRAP" --worktree "$WT" --gitmeta "$GITMETA" --datadir "$DATADIR" -- "$@" >/dev/null 2>"$errfile"
-}
-run() { run_capture /dev/null "$@"; }
 
 # Nesting probe. Seatbelt does not nest: applied from inside an existing sandbox
 # (Claude Code's own Bash sandbox, most obviously) every wrapped call dies with
@@ -146,21 +192,6 @@ if ! printf 'imps sandbox read probe\n' >"$HOME_READ_PROBE" 2>/dev/null; then
   echo "sandbox-smoke: cannot write $HOME_READ_PROBE — already running confined; skipping." >&2
   exit 77
 fi
-# expect_allow/expect_deny take a shell snippet run *inside* the sandbox. On
-# failure, the wrapped command's own stderr is shown (not discarded) so a FAIL
-# line is actually diagnosable instead of just a name.
-expect_allow() {
-  local n="$1"; shift
-  local errfile; errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
-  if run_capture "$errfile" /bin/sh -c "$*"; then assert "$n" 1; else assert "$n" 0 "$(cat "$errfile")"; fi
-  rm -f "$errfile"
-}
-expect_deny() {
-  local n="$1"; shift
-  local errfile; errfile="$(mktemp "$TMP_CANON/imps-smoke-err.XXXXXX")"
-  if run_capture "$errfile" /bin/sh -c "$*"; then assert "$n" 0 "expected denial, command succeeded"; else assert "$n" 1; fi
-  rm -f "$errfile"
-}
 
 expect_deny  "home-write-denied"      "touch '$HOME_WRITE_PROBE'"
 # Belt and braces: a backend that let the write through but reported failure
@@ -369,18 +400,6 @@ else
 fi
 rm -f "$setup_errfile"
 
-# One probe per path denied by sandbox/deny-credentials.sbpl.in. `cat || ls` is
-# the union of "content readable" and "metadata readable" — the profile denies
-# file-read*, which covers both, so a correct profile fails both and a partial
-# grant is still caught. Absent targets are skipped rather than counted, except
-# gh-config-denied, whose target this script creates when absent (above).
-expect_deny_path() { # expect_deny_path <name> <path>
-  if [ -e "$2" ]; then
-    expect_deny "$1" "cat '$2' 2>/dev/null || ls '$2'"
-  else
-    note "$1: $2 absent on this host — skipped, NOT counted as a pass"
-  fi
-}
 expect_deny_path "auth-json-denied"    "$HOME_CANON/.local/share/opencode/auth.json"
 expect_deny_path "gh-config-denied"    "$GH_CONFIG_DIR"
 expect_deny_path "ssh-denied"          "$HOME_CANON/.ssh"
