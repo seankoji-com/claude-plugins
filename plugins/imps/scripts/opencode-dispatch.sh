@@ -482,15 +482,6 @@ expect_oracle_verdict() {
   esac
 }
 
-# Test-only probe: same reason run_with_timeout_probe exists — tests/run.sh's
-# unit harness calls "$func" "$(cat arg)", exactly one argument, so a two-arg
-# function is not fixturable verbatim. Splits one newline-delimited argument
-# rather than contorting the production signature to suit the harness.
-expect_oracle_verdict_probe() {
-  local expected="" observed=""
-  { IFS= read -r expected; IFS= read -r observed; } <<<"$1"
-  expect_oracle_verdict "$expected" "$observed"
-}
 
 # create_result_ref <worktree> <sha> <auto-ref> [branch]
 # Writes the unconditional durability ref first, THEN the optional named
