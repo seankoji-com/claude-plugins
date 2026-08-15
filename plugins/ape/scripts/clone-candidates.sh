@@ -3,6 +3,7 @@
 # background and reports the tail of a log, as a single preapprovable command.
 #
 # Usage: clone-candidates.sh <workspace-dir> <url> <name> <sparse:0|1> [<url> <name> <sparse:0|1> ...]
+# fail-soft: report every clone result, aggregate errors — continue to log tail even if some clones failed
 set -uo pipefail
 
 workspace="$1"

@@ -25,6 +25,7 @@
 # on stderr and exits 0 rather than breaking the caller's primary command — this is
 # telemetry, not a gate. Malformed arguments (bad enum, non-numeric duration) exit 1,
 # since those are bugs in the calling command, not the environment.
+# fail-soft by design: telemetry must never break the caller (see AGENTS.md)
 set -uo pipefail
 
 AUDIT_FILE="${AUDIT_LOG_FILE:-}"

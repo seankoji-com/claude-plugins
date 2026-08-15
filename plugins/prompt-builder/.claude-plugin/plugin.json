@@ -1,6 +1,6 @@
 {
   "name": "prompt-builder",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Iterative prompt engineering assistant — diagnoses the brief, structures it with Anthropic's evidence-based prompting techniques (XML tags, chain-of-thought, few-shot), drafts, critiques, and delivers a finished artefact with test cases and failure modes.",
   "author": {
     "name": "seankoji",

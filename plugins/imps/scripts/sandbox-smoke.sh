@@ -66,6 +66,7 @@
 # logic is exercised on any platform, including ubuntu-latest CI, without a
 # real macOS sandbox. Neither replaces the Darwin+SANDBOX_MODE inline run in
 # tests/run.sh, which is the only one that proves real containment.
+# fail-soft: run all sandbox assertions, report collective status
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

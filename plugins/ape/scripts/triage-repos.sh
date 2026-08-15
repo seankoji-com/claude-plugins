@@ -4,6 +4,7 @@
 # permission system can't statically analyze.
 #
 # Usage: triage-repos.sh "<owner/repo 1>" ["<owner/repo 2>" ...]
+# fail-soft: run every repo check even if some fail, report all results
 set -uo pipefail
 
 for r in "$@"; do
