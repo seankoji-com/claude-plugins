@@ -1159,7 +1159,7 @@ in the prompts above stand for those current IDs.
   recorded worktree path; if anything about a merge looks off, check `git status
   --short` and `git log --oneline -3` in the actual main checkout before assuming the
   tree is clean.
-- Never bypass commit signing (`--no-gpg-sign` or similar) because the 1Password
-  SSH-signing agent looks locked or contended — that's usually transient under
-  concurrent swarm agents. Retry the commit a few times with a short pause between
-  attempts before surfacing it as blocked.
+- Never bypass commit signing (`--no-gpg-sign` or similar) because the SSH-signing
+  agent looks locked or contended — that's usually transient under concurrent swarm
+  agents. Retry the commit a few times with a short pause between attempts before
+  surfacing it as blocked.
