@@ -45,7 +45,7 @@ by hand.
 | **`gh` CLI** (authenticated) | Issue-driven mode (issue reads, PR creates, CI checks). |
 | **GitHub MCP** (`mcp__github__*`) | PR/issue reads in `/imps:prs`; improves issue-driven mode. |
 | **Bundled agent types** (`🦇`, `😈`, `👺`) | Registered automatically once installed (`agents/*.md`). If registration fails for any reason, `agent()` calls inside the Workflow script fall back the same way any Agent-tool call does. |
-| **The `Workflow` tool** | **Hard dependency for the free-text run — no fallback.** `/imps:imps` syncs `scripts/imps-run.workflow.js` into `~/.claude/workflows/` and invokes it; if `Workflow` is unavailable in the session, the command stops and says so rather than falling back to an inline protocol. |
+| **The `Workflow` tool** | **Hard dependency for the free-text run — no fallback.** `/imps:imps` syncs `scripts/imps-run.workflow.js` into `~/.claude/workflows/imps-run.js` and invokes it; if `Workflow` is unavailable in the session, the command stops and says so rather than falling back to an inline protocol. |
 
 Optional:
 
