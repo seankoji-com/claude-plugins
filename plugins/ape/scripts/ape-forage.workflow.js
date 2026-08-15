@@ -40,6 +40,7 @@ export const meta = {
 // untrusted third-party repo content, so the schema itself is one of several
 // layers (also enforced again in clone-candidates.sh, and the Clone-phase
 // command line quotes every value regardless of what the model returns).
+// keep in sync with: the url_re / name_re patterns in clone-candidates.sh
 const FULL_NAME_PATTERN = '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
 const GITHUB_URL_PATTERN = '^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\\.git)?$'
 
@@ -293,7 +294,7 @@ async function cloneAttempt(list) {
     `Run this exact command and report its output, then verify each cloned repo directory is non-empty:
 bash ${shQuote(`${args.pluginRoot}/scripts/clone-candidates.sh`)} ${shQuote(args.workspaceDir)} ${cloneArgs}
 
-The script exits 0 regardless of individual clone failures (it swallows them into its log) — after it returns, check each of these directories under ${args.workspaceDir}/repos/ yourself and report which are present and non-empty vs missing/empty:
+The script validates every candidate up front and exits 1 without cloning anything if any URL or name is invalid. Once validation passes, individual clone failures are fail-soft (it swallows them into its log and exits 1 only in aggregate if any clone failed) — after it returns, check each of these directories under ${args.workspaceDir}/repos/ yourself and report which are present and non-empty vs missing/empty:
 ${list.map((c) => c.fullName.replace('/', '__')).join(', ')}
 
 Return via the required schema: "cloned" = the fullName list (original owner/repo form) that verified non-empty, "failed" = the rest.`,
