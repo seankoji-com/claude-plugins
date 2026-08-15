@@ -41,7 +41,7 @@ jobs:
           done
 
       - name: Install PyYAML for frontmatter validation
-        run: python3 -m pip install --user pyyaml
+        run: python3 -m pip install --user --break-system-packages pyyaml==6.0.2
 
       - name: Validate command/agent frontmatter against JSON Schema contracts
         run: |
