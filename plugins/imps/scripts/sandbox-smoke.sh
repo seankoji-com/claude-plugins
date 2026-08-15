@@ -74,6 +74,8 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
 WRAP="$PLUGIN_ROOT/scripts/sandbox-wrap.sh"
 
 fails=0
+skips=0
+skipped_names=()
 note() { printf 'note %s\n' "$*"; }
 assert() {
   local name="$1" ok="$2" detail="${3:-}"
@@ -124,6 +126,8 @@ expect_deny_path() { # expect_deny_path <name> <path>
     expect_deny "$1" "cat '$2' 2>/dev/null || ls '$2'"
   else
     note "$1: $2 absent on this host — skipped, NOT counted as a pass"
+    skips=$((skips + 1))
+    skipped_names[${#skipped_names[@]}]="$1"
   fi
 }
 
@@ -411,4 +415,9 @@ if [ "$fails" -ne 0 ]; then
   echo "sandbox-smoke: $fails assertion(s) failed" >&2
   exit 1
 fi
-echo "sandbox-smoke: all assertions passed"
+if [ "$skips" -ne 0 ]; then
+  IFS=,; skipped_list="${skipped_names[*]}"; unset IFS
+  echo "sandbox-smoke: all assertions passed ($skips skipped: $skipped_list)"
+else
+  echo "sandbox-smoke: all assertions passed"
+fi
