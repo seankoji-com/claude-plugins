@@ -77,11 +77,12 @@ execute-tier harness (`opencode-dispatch.sh`) to record which offload tier ran a
 how many oracle-loop attempts it took.
 
 The appender is `scripts/audit-log.sh`, bundled **identically into every plugin that
-uses it** (`plugins/imps/scripts/`, `plugins/prompt-builder/scripts/`,
-`plugins/claude-tuneup/scripts/`) rather than pulled from one shared location — plugins
-in this marketplace install independently, so there is no cross-plugin runtime path to
-require a shared lib from. `tests/run.sh` diffs the copies against each other; if you
-change the script, change all three and let the diff check catch drift.
+uses it** (`plugins/elephant-goldfish/scripts/`, `plugins/imps/scripts/`,
+`plugins/prompt-builder/scripts/`, `plugins/claude-tuneup/scripts/`) rather than pulled
+from one shared location — plugins in this marketplace install independently, so there is
+no cross-plugin runtime path to require a shared lib from. `tests/run.sh` diffs the copies
+against each other; if you change the script, change all four and let the diff check catch
+drift.
 
 The free-text logs (`learnings.md`, `claude-tuneup.notes.md`) are not being replaced —
 they hold qualitative "Active rules" narratives a single JSON line can't express well.
