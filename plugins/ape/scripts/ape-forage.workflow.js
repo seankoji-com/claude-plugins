@@ -40,6 +40,11 @@ export const meta = {
   ],
 }
 
+// Synthesis reads reports straight off disk (see synthesisPrompt below) rather than
+// trusting each analyst agent's inline return value, so the report-completeness check
+// ahead of Synthesis needs real filesystem access.
+const fs = require('node:fs')
+
 // owner/repo segments as GitHub allows them; url is restricted to a plain
 // https://github.com/<owner>/<repo>[.git] form. These are model-filled from
 // untrusted third-party repo content, so the schema itself is one of several
@@ -343,6 +348,36 @@ const analysisResults = await parallel(
   })
 )
 log(`Analysis: ${analysisResults.filter(Boolean).length}/${clonedSelection.length} analysts returned`)
+
+// An analyst's inline return above is just a short pointer summary — synthesis reads
+// every report straight off disk (see synthesisPrompt). An agent call that "returned"
+// without ever writing its report (or that failed and resolved to null in `parallel`,
+// or wrote an empty file) must not be silently absorbed into a partial synthesis: name
+// the gap and block instead.
+function missingOrEmptyReports(selection) {
+  return selection
+    .filter((c) => {
+      const dirName = c.fullName.replace('/', '__')
+      const reportPath = `${args.workspaceDir}/reports/${dirName}.md`
+      try {
+        return fs.statSync(reportPath).size === 0
+      } catch {
+        return true
+      }
+    })
+    .map((c) => c.fullName)
+}
+
+const missingReports = missingOrEmptyReports(clonedSelection)
+if (missingReports.length > 0) {
+  log(`Analysis: ${missingReports.length}/${clonedSelection.length} report(s) missing or empty — blocking before synthesis`)
+  return {
+    status: 'blocked',
+    reason: 'missing_reports',
+    missing: missingReports,
+    notes: `${missingReports.length} of ${clonedSelection.length} analyst report(s) are missing or empty: ${missingReports.join(', ')}. Synthesis requires a complete report set.`,
+  }
+}
 
 phase('Synthesis')
 const synthesis = await agent(synthesisPrompt(args.workspaceDir, args.focusArea, args.fingerprint, ranking.rejected), {
