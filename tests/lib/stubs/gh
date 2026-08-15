@@ -2,10 +2,20 @@
 # Deterministic stand-in for the real `gh` CLI. tests/run.sh prepends this
 # stub's directory to PATH so scripts under test see fixed output instead of
 # making live network calls.
+#
+# Exec fixtures can vary stub behavior by passing specific values as arguments.
+# search-repos.sh fixtures: pass a query starting with "FAIL-" to trigger a
+# search failure (auth/network error simulation), or a normal query for success.
 set -euo pipefail
 
 case "$1" in
   search)
+    # Check if query argument (position after "repos") starts with "FAIL-" to simulate failure.
+    # gh search repos "<query>" --limit ... => $1=search, $2=repos, $3=<query>
+    if [[ "${3:-}" == FAIL-* ]]; then
+      echo "stub gh: search failed (simulated error)" >&2
+      exit 1
+    fi
     echo '[{"fullName":"acme/example","description":"stub result","stargazersCount":42,"updatedAt":"2026-01-01T00:00:00Z","license":{"key":"mit"},"url":"https://github.com/acme/example"}]'
     ;;
   repo)
