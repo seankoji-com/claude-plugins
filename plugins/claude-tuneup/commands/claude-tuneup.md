@@ -157,9 +157,13 @@ Present candidates grouped by scope via `AskUserQuestion` (multi-select) — gua
 
 Pre-step A — validate before touching anything: for each of `~/.claude/settings.json` (resolve the symlink first), `.claude/settings.json` (if present), and `.claude/settings.local.json` (if present), run `jq '.' <file> >/dev/null`. If ANY fails to parse, STOP immediately — no backup, no edits. Backing up an already-malformed file preserves the corruption, and edits on top of it compound it with no path back to known-good. Report the offending file and its parse error, then abort the run.
 
-Pre-step B — back up `~/.claude/settings.json` to `<dir>/settings.json.bak.$(date +%Y%m%d-%H%M%S)`. Resolve the symlink first so the `.bak` lives in the storage dir (where the matching `.gitignore` rule covers it).
+Pre-step B — back up every settings file the audit may edit so a validation failure can roll back atomically. For each of these files that exists, create a timestamped snapshot in the same directory:
 
-Prune stale backups right after creating the new one: keep only the 5 most-recent `settings.json.bak.*` in `<dir>` and delete the rest — `ls -t <dir>/settings.json.bak.* 2>/dev/null | tail -n +6 | xargs -r rm -f`. Keep-last-5 (not age-based) because runs are irregular — a `-mtime +30` cutoff would let backups pile up indefinitely between infrequent runs, while keep-last-5 bounds disk usage regardless of run cadence.
+- `~/.claude/settings.json` → `<dir>/settings.json.bak.$(date +%Y%m%d-%H%M%S)`. Resolve the symlink first so the `.bak` lives in the storage dir (where the matching `.gitignore` rule covers it).
+- `.claude/settings.json` → `.claude/settings.json.bak.$(date +%Y%m%d-%H%M%S)`
+- `.claude/settings.local.json` → `.claude/settings.local.json.bak.$(date +%Y%m%d-%H%M%S)`
+
+Prune stale backups right after creating the new ones: for each backup glob, keep only the 5 most-recent files and delete the rest — `ls -t <glob> 2>/dev/null | tail -n +6 | xargs -r rm -f`. Run this for `<dir>/settings.json.bak.*`, `.claude/settings.json.bak.*`, and `.claude/settings.local.json.bak.*`. Keep-last-5 (not age-based) because runs are irregular — a `-mtime +30` cutoff would let backups pile up indefinitely between infrequent runs, while keep-last-5 bounds disk usage regardless of run cadence.
 
 **3a. Duplicates & cross-file prefix subsumption**
 
@@ -236,7 +240,7 @@ Sort `permissions.allow` alphabetically after edits.
 
 ### 5. Validate
 
-Post-edit safety net (the pre-flight check in step 3 catches pre-existing corruption; this catches edits that broke a previously-valid file). For each modified file: `jq '.' <file> >/dev/null`. On parse failure, restore from the `.bak.` snapshot and stop with a clear error.
+Post-edit safety net (the pre-flight check in step 3 catches pre-existing corruption; this catches edits that broke a previously-valid file). For each modified file: `jq '.' <file> >/dev/null`. On parse failure, restore all backed-up files from their `.bak.` snapshots atomically — `cp <file>.bak.<ts> <file>` for each backed-up file — and stop with a clear error listing which file(s) failed validation. Restoring all three files (even if only one failed) keeps the settings set consistent rather than leaving one rolled-back file alongside newly-edited siblings.
 
 ### 6. Commit (project only)
 
@@ -273,7 +277,7 @@ Then print the concise summary:
 - Phase 2: D duplicates stripped, P moved global → project, G removed/moved project → global
 - E env vars flagged
 - C CLAUDE.md items flagged
-- Backup at `~/.claude/settings.json.bak.<ts>` (or `/tmp/claude-settings.json.bak.<ts>` if the storage dir was blocked)
+- Backups at `~/.claude/settings.json.bak.<ts>`, `.claude/settings.json.bak.<ts>`, `.claude/settings.local.json.bak.<ts>` (each in its source directory; `/tmp/` fallback if the source dir was blocked)
 - If committed: commit SHA
 - If Phase 3 ran: F findings logged to `claude-tuneup.notes.md`
 
