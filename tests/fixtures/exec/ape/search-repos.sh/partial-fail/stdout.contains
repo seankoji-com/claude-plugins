@@ -1,3 +1,4 @@
-^=== FAIL-auth-error === \(FAILED\)$
+^=== bash testing ===$
 ^=== FAIL-network-error === \(FAILED\)$
+"fullName":"acme/example"
 stub gh: search failed
