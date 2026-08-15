@@ -272,6 +272,29 @@ jobs:
       - name: Run tests/run-js.sh
         run: bash tests/run-js.sh
 
+  macos-syntax:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Confirm Bash version
+        run: bash --version
+
+      - name: Bash syntax check all shipped scripts (Bash 3.2 target)
+        # These scripts target macOS system Bash 3.2; `bash -n` is a syntax-only
+        # parse (no execution) and catches Bash 4+ constructs that would break on
+        # the oldest supported interpreter.  The full behavioral test harness
+        # (tests/run.sh) requires Bash 4+ and runs in the `behavioral-tests` job
+        # on ubuntu-latest — this job only verifies that shipped scripts parse
+        # under the oldest supported Bash.
+        run: |
+          set -e
+          for f in plugins/*/scripts/*.sh; do
+            echo "  bash -n $f"
+            bash -n "$f"
+          done
+          echo "All shipped scripts parse under $(bash --version | head -1)"
+
   # Regenerates dist/opencode and dist/agy from the committed sources on a clean
   # ubuntu-latest checkout and fails if the result differs from what's committed. This
   # is also the cross-machine determinism check: generate.py is required to produce a
