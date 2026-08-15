@@ -41,8 +41,9 @@ function pkgVersion() {
   } catch (err) {
     throw new Error(
       `package.json at ${pkgJsonPath} is corrupt or truncated (${err.message}). This can happen if ` +
-        `a prior install crashed mid-write (e.g. disk full). Remove it and re-run install to recover: ` +
-        `rm ${JSON.stringify(pkgJsonPath)} && npm install`
+        `a prior install crashed mid-write (e.g. disk full). Reinstall the package to recover, e.g. ` +
+        `npm install -g @seankoji/claude-plugins-opencode (deleting this file and running a bare ` +
+        `npm install here will not fix a global install).`
     );
   }
 }
@@ -68,8 +69,15 @@ function listPlugins(root) {
     try {
       const names = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
       if (Array.isArray(names)) return [...names].sort();
-    } catch {
-      // Parse error or non-array content: fall through to directory scan below
+      process.stderr.write(
+        `warning: plugin manifest at ${manifestFile} does not contain a JSON array; falling back to a ` +
+          `directory scan of share/, which misses plugins with no share/<plugin> dir (e.g. ape)\n`
+      );
+    } catch (err) {
+      process.stderr.write(
+        `warning: plugin manifest at ${manifestFile} is corrupt or truncated (${err.message}); falling ` +
+          `back to a directory scan of share/, which misses plugins with no share/<plugin> dir (e.g. ape)\n`
+      );
     }
   }
   const shareDir = path.join(root, "share");
