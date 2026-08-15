@@ -54,6 +54,6 @@
     "description": "Swarm orchestrator — decomposes a task into dependency-mapped units, dispatches them serially into isolated git worktrees, merges through deterministic gates, and runs a persona-review panel. Includes /imp-agency: a whole-repo audit that produces an imps-ready remediation plan. (The Claude Code build of this plugin drives the same run from a background Workflow script; here the skill drives it directly.)"
   },
   "source_hash_pins": {
-    "scripts/imps-run.workflow.js": "f0d65ad141e8d7194a1e36265eb55254853db311823cdc98d03100a7bd53009d"
+    "scripts/imps-run.workflow.js": "a084314f8070c4328d7af39512e81d8cba13512f781e99cf5032e768d5ac6ebf"
   }
 }
