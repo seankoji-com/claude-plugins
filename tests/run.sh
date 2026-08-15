@@ -177,48 +177,83 @@ ${other#"$ROOT"/} differs from ${first#"$ROOT"/}"
   report "consistency/audit-log.sh" "$consistent" "$detail"
 fi
 
-# Thinking bundled-asset consistency: /elephant-goldfish:thinking drives its whole pipeline
-# through ${CLAUDE_PLUGIN_ROOT}/... paths — three scripts and six templates. A renamed or
-# deleted asset leaves the command syntactically fine and semantically broken: the Bash call
-# fails at runtime, mid-interrogation, after the user has already spent 20 minutes. Assert
-# every path the command names actually ships. (Replaces the former recon/thinking-literals
-# check, whose literals all belonged to the removed verify phase.)
-thinking_assets_check() {
-  local eg="$ROOT/plugins/elephant-goldfish"
-  local command="$eg/commands/thinking.md"
-  local ok=1 detail="" found=0
+# Bundled-asset consistency: every plugin command that references
+# ${CLAUDE_PLUGIN_ROOT}/... must ship every path it names. A renamed or deleted
+# asset leaves the command syntactically fine and semantically broken at runtime.
+# Check ALL commands, not just thinking.md — the regression class the original
+# elephant-goldfish-only check was written to catch is equally relevant to every
+# other command.
+bundled_assets_check() {
+  local ok=1 detail=""
+  shopt -s nullglob
+  local commands=("$ROOT"/plugins/*/commands/*.md)
+  shopt -u nullglob
 
-  if [ ! -f "$command" ]; then
-    report "consistency/thinking-assets" 0 "missing $command"
+  if [ "${#commands[@]}" -eq 0 ]; then
+    report "consistency/bundled-assets" 0 "no command files found"
     return
   fi
 
-  # Every ${CLAUDE_PLUGIN_ROOT}/<subdir>/<file> reference, deduplicated.
-  while IFS= read -r ref; do
-    [ -n "$ref" ] || continue
-    found=$((found + 1))
-    if [ ! -f "$eg/$ref" ]; then
-      ok=0
-      detail="$detail
-commands/thinking.md references \${CLAUDE_PLUGIN_ROOT}/$ref, which does not exist"
+  for command_file in "${commands[@]}"; do
+    # Derive plugin dir: "plugins/<plugin>/commands/<name>.md" -> plugin dir is
+    # "plugins/<plugin>".
+    local rel="${command_file#"$ROOT"/}"
+    local plugin_dir="${rel%%/commands/*}"
+
+    # Pre-filter: only files with ${CLAUDE_PLUGIN_ROOT}/<path> (path-based refs
+    # with a trailing / and at least one alphanum). Excludes bare ${CLAUDE_PLUGIN_ROOT}
+    # without a path — those are just informational, not bundled-asset references.
+    if ! grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9]' "$command_file"; then
+      continue
     fi
-  done <<EOF
-$(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9_./-]+' "$command" \
-    | sed 's|\${CLAUDE_PLUGIN_ROOT}/||' | sort -u)
+
+    local cs_ok=1 cs_detail="" cs_found=0 cs_skipped=0
+
+    # Extract every ${CLAUDE_PLUGIN_ROOT}/<subpath> reference, deduplicated.
+    while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      cs_found=$((cs_found + 1))
+
+      # Skip template patterns like <script>.py*, <slug>.md, scripts/* —
+      # these describe a convention, not a specific bundled asset.
+      case "$ref" in
+      *[\<\>\*\?]*)
+        cs_skipped=$((cs_skipped + 1))
+        continue
+        ;;
+      esac
+
+      # Use -e (not -f): references may name directories (e.g. scripts/, personas/)
+      # as well as regular files.
+      if [ ! -e "$ROOT/$plugin_dir/$ref" ]; then
+        cs_ok=0
+        cs_detail="$cs_detail
+${rel} references \${CLAUDE_PLUGIN_ROOT}/$ref, which does not exist"
+      fi
+    done <<EOF
+$(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9_./-]+' "$command_file" |
+      sed 's|\${CLAUDE_PLUGIN_ROOT}/||' | sort -u)
 EOF
 
-  # A command that suddenly references nothing means the extraction broke, not that the
-  # command got simpler — fail rather than reporting a vacuous pass.
-  if [ "$found" -lt 3 ]; then
-    ok=0
-    detail="$detail
-found only $found bundled-asset references in commands/thinking.md (expected at least 3)"
-  fi
+    # Vacuous-pass guard: the file matched the pre-filter (it has path-based
+    # ${CLAUDE_PLUGIN_ROOT} references), so if extraction yields zero total
+    # matches the regex is broken — fail rather than reporting a vacuous pass.
+    if [ "$cs_found" -lt 1 ]; then
+      cs_ok=0
+      cs_detail="$cs_detail
+${rel} contains \${CLAUDE_PLUGIN_ROOT}/ references but none were extracted (extraction failure)"
+    fi
 
-  report "consistency/thinking-assets" "$ok" "$detail"
+    if [ "$cs_ok" -eq 0 ]; then
+      ok=0
+      detail="$detail$cs_detail"
+    fi
+  done
+
+  report "consistency/bundled-assets" "$ok" "$detail"
 }
 
-thinking_assets_check
+bundled_assets_check
 
 # Seatbelt is last-match-wins, so deny-credentials.sbpl.in's worktrees/modules
 # chain is ordered, not just present: deny the subtrees, re-allow only this
