@@ -40,6 +40,9 @@ jobs:
             pipx run check-jsonschema --schemafile schemas/plugin.schema.json "$plugin_json"
           done
 
+      - name: Install PyYAML for frontmatter validation
+        run: python3 -m pip install --user pyyaml
+
       - name: Validate command/agent frontmatter against JSON Schema contracts
         run: |
           fail=0
