@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "elephant-goldfish",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "source": "./plugins/elephant-goldfish",
       "description": "Design-doc command with a different-lineage Gemini judge, plus /elephant-goldfish:thinking — steps 1 and 2 of Rensin's process: interrogate the problem, build the rubric, emit the plan."
     },
