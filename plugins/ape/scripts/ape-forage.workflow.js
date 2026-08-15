@@ -22,6 +22,11 @@
 // trusted to be followed correctly every run.
 //
 // args shape (all required): { pluginRoot, fingerprint, focusArea, workspaceDir }
+//
+// workspaceDir is expected to be a disambiguated path from init-workspace.sh
+// (remote-origin + basename) — repo subdirectories under repos/ are further
+// disambiguated via fullName.replace('/', '__') (owner__repo) and are
+// therefore safe against identically-named repo collisions.
 
 export const meta = {
   name: 'ape-forage',
