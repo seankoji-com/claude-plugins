@@ -31,6 +31,7 @@
 #   below (model selector, one-shot prompt flag) still match. Do NOT point GEMINI_MODEL at
 #   a Claude model — that reintroduces the clone problem this script exists to avoid.
 
+# fail-fast: setup validation and judge consensus require early exit on critical errors
 set -euo pipefail
 
 DOC="${1:-elephant.md}"

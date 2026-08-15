@@ -35,6 +35,15 @@ export const meta = {
   ],
 }
 
+// owner/repo segments as GitHub allows them; url is restricted to a plain
+// https://github.com/<owner>/<repo>[.git] form. These are model-filled from
+// untrusted third-party repo content, so the schema itself is one of several
+// layers (also enforced again in clone-candidates.sh, and the Clone-phase
+// command line quotes every value regardless of what the model returns).
+// keep in sync with: the url_re / name_re patterns in clone-candidates.sh
+const FULL_NAME_PATTERN = '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+const GITHUB_URL_PATTERN = '^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(\\.git)?$'
+
 const CANDIDATES_SCHEMA = {
   type: 'object',
   properties: {
@@ -44,8 +53,8 @@ const CANDIDATES_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          fullName: { type: 'string', description: 'owner/repo' },
-          url: { type: 'string' },
+          fullName: { type: 'string', description: 'owner/repo', pattern: FULL_NAME_PATTERN },
+          url: { type: 'string', pattern: GITHUB_URL_PATTERN },
           stars: { type: 'number' },
           pushedMonth: { type: 'string', description: 'YYYY-MM of last push' },
           license: { type: 'string' },
@@ -70,8 +79,8 @@ const RANKING_SCHEMA = {
       items: {
         type: 'object',
         properties: {
-          fullName: { type: 'string' },
-          url: { type: 'string' },
+          fullName: { type: 'string', pattern: FULL_NAME_PATTERN },
+          url: { type: 'string', pattern: GITHUB_URL_PATTERN },
           diskUsageMB: { type: 'number' },
           rationale: { type: 'string' },
         },
@@ -269,15 +278,23 @@ if (ranking.selected.length < 2) {
 }
 
 phase('Clone')
+// Single-quote a value for safe embedding in the shell command line below.
+// url/fullName are model-filled from untrusted third-party repo content
+// (README text, search results) — never string-concatenate them into a
+// command unquoted, even though clone-candidates.sh also validates them.
+function shQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`
+}
+
 async function cloneAttempt(list) {
   const cloneArgs = list
-    .map((c) => `${c.url} ${c.fullName.replace('/', '__')} ${c.diskUsageMB > 300 ? 1 : 0}`)
+    .map((c) => [shQuote(c.url), shQuote(c.fullName.replace('/', '__')), c.diskUsageMB > 300 ? 1 : 0].join(' '))
     .join(' ')
   return agent(
     `Run this exact command and report its output, then verify each cloned repo directory is non-empty:
-bash ${args.pluginRoot}/scripts/clone-candidates.sh ${args.workspaceDir} ${cloneArgs}
+bash ${shQuote(`${args.pluginRoot}/scripts/clone-candidates.sh`)} ${shQuote(args.workspaceDir)} ${cloneArgs}
 
-The script exits 0 regardless of individual clone failures (it swallows them into its log) — after it returns, check each of these directories under ${args.workspaceDir}/repos/ yourself and report which are present and non-empty vs missing/empty:
+The script validates every candidate up front and exits 1 without cloning anything if any URL or name is invalid. Once validation passes, individual clone failures are fail-soft (it swallows them into its log and exits 1 only in aggregate if any clone failed) — after it returns, check each of these directories under ${args.workspaceDir}/repos/ yourself and report which are present and non-empty vs missing/empty:
 ${list.map((c) => c.fullName.replace('/', '__')).join(', ')}
 
 Return via the required schema: "cloned" = the fullName list (original owner/repo form) that verified non-empty, "failed" = the rest.`,

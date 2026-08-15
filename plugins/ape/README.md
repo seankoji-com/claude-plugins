@@ -22,7 +22,7 @@ under `dist/opencode/` and `dist/agy/ape/`; see
 | Requirement | Needed for |
 | --- | --- |
 | **`gh` CLI** (authenticated) | Discovery and clone phases (`gh search`, `gh repo view`, `gh repo clone`). `/ape:forage` runs `gh auth status` at Phase 0 and stops if unauthenticated. |
-| **The `Workflow` tool** | **Hard dependency — no fallback.** `/ape:forage` syncs `scripts/ape-forage.workflow.js` into `~/.claude/workflows/` and invokes it; if `Workflow` is unavailable, the command has nothing to run. |
+| **The `Workflow` tool** | **Hard dependency — no fallback.** `/ape:forage` syncs `scripts/ape-forage.workflow.js` into `~/.claude/workflows/ape-forage.js` and invokes it; if `Workflow` is unavailable, the command has nothing to run. |
 
 ## How it runs
 

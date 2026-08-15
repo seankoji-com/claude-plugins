@@ -31,8 +31,9 @@
 # COVERAGE, stated precisely — three of opencode-dispatch.sh's guards need the
 # macOS sandbox and a real model attempt for end-to-end proof: attempt_timeout,
 # oracle_preflight_mismatch, and no_model_changes. What is closed here for free is
-# their DECISION LOGIC — expect_oracle_verdict / classify_oracle_state as unit
-# fixtures, restore_worktree_clean / stage_model_changes against a real scratch
+# their DECISION LOGIC — expect_oracle_verdict (via its expect_oracle_verdict_probe
+# fixture vehicle, the harness only fixtures one-arg functions) / classify_oracle_state
+# as unit fixtures, restore_worktree_clean / stage_model_changes against a real scratch
 # worktree. The CALL SITES that wire those decisions into an abort
 # (opencode-dispatch.sh's preflight block and its oracle-green block) sit behind
 # run_oracle_sandboxed -> sandbox-wrap.sh -> Seatbelt, so they are reviewed, not

@@ -20,6 +20,10 @@
 # A here-string (`<<<`, bash 2.05b+) rather than an unquoted heredoc: the
 # heredoc form would re-expand `$` and `\` in the fixture content, reopening
 # exactly the shell re-parsing the `eval` this replaced was removed for.
+# no set -e: a source/parse failure or a bad run_with_timeout call does not abort
+# the script — it falls through to `echo "$?"`, so a caller-visible failure shows
+# up as a printed exit code (e.g. 127 for a missing function), not as this probe
+# itself dying. Callers must check the echoed value, not this script's own status.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"

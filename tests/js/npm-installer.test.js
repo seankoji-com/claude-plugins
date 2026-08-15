@@ -328,3 +328,99 @@ test('a utf8 decode round trip really does corrupt binary bytes (the bug isBinar
   // And the guard catches exactly this input, so the lossy path is never taken.
   assert.equal(freshInstaller().isBinary(bytes), true)
 })
+
+// --- JSON.parse error handling -------------------------------------------------
+
+test('pkgVersion() throws a descriptive error on malformed package.json', () => {
+  // pkgRoot() is `path.resolve(__dirname, "..")` -- a closure over the module's own
+  // location, not injectable. To exercise the real throw we relocate a copy of
+  // installer.js (plus its co-required siblings, currently none) under <tmp>/lib/, so
+  // requiring <tmp>/lib/installer.js makes pkgRoot() resolve to <tmp> and pkgVersion()
+  // read <tmp>/package.json for real.
+  //
+  // The corrupt package.json has to be written AFTER the require, not before: Node's own
+  // CJS loader walks up from <tmp>/lib/installer.js looking for the nearest package.json
+  // to decide the file's module type (commonjs vs esm), and throws its own
+  // ERR_INVALID_PACKAGE_CONFIG at require-time if that file is unparsable JSON -- before
+  // installer.js's pkgVersion() ever gets a chance to run. pkgVersion() re-reads the file
+  // at call time, so requiring against a valid/absent package.json first and corrupting
+  // it afterward reaches the throw we actually want to test.
+  const tmpDir = mkPrefix()
+  try {
+    const libDir = path.join(tmpDir, 'lib')
+    fs.mkdirSync(libDir, { recursive: true })
+    fs.copyFileSync(INSTALLER_PATH, path.join(libDir, 'installer.js'))
+
+    const relocatedInstallerPath = path.join(libDir, 'installer.js')
+    delete require.cache[require.resolve(relocatedInstallerPath)]
+    const inst = require(relocatedInstallerPath)
+
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), '{invalid json}', 'utf8')
+
+    assert.throws(() => inst.pkgVersion(), /is corrupt or truncated/)
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  }
+})
+
+test('listPlugins() falls back to directory scan when .plugins.json is malformed', () => {
+  const installer = freshInstaller()
+  const prefix = mkPrefix()
+  const shareDir = path.join(prefix, 'share')
+  try {
+    // Create a directory structure with a malformed .plugins.json and real plugin dir
+    fs.mkdirSync(shareDir, { recursive: true })
+    fs.mkdirSync(path.join(shareDir, 'test-plugin'))
+    fs.writeFileSync(path.join(shareDir, '.plugins.json'), '{invalid json}', 'utf8')
+
+    // listPlugins should fall back to directory scan and find test-plugin
+    const plugins = installer.listPlugins(prefix)
+    assert.ok(
+      plugins.includes('test-plugin'),
+      'listPlugins should fall back to directory scan when .plugins.json is malformed'
+    )
+  } finally {
+    fs.rmSync(prefix, { recursive: true, force: true })
+  }
+})
+
+test('listPlugins() falls back to directory scan when .plugins.json is not an array', () => {
+  const installer = freshInstaller()
+  const prefix = mkPrefix()
+  const shareDir = path.join(prefix, 'share')
+  try {
+    // Create a directory structure with .plugins.json that is valid JSON but not an array
+    fs.mkdirSync(shareDir, { recursive: true })
+    fs.mkdirSync(path.join(shareDir, 'test-plugin'))
+    fs.writeFileSync(path.join(shareDir, '.plugins.json'), '{"key": "value"}', 'utf8')
+
+    // listPlugins should fall back to directory scan and find test-plugin
+    const plugins = installer.listPlugins(prefix)
+    assert.ok(
+      plugins.includes('test-plugin'),
+      'listPlugins should fall back to directory scan when .plugins.json is not an array'
+    )
+  } finally {
+    fs.rmSync(prefix, { recursive: true, force: true })
+  }
+})
+
+// --- package.json / package-lock.json version lockstep -------------------------
+//
+// Nothing else in the checked-in checks catches a bumped package.json version whose
+// package-lock.json was not regenerated to match -- `npm ci` (what CI and every real
+// install runs) fails outright on that mismatch. Pin the invariant here so a forgotten
+// lockfile bump fails fast in this suite instead of surfacing as an opaque npm ci error.
+test('build/npm package-lock.json version stays in lockstep with package.json', () => {
+  const pkgJsonPath = path.join(__dirname, '..', '..', 'build', 'npm', 'package.json')
+  const lockPath = path.join(__dirname, '..', '..', 'build', 'npm', 'package-lock.json')
+  const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'))
+  const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
+
+  assert.equal(lock.version, pkg.version, 'package-lock.json "version" is out of sync with package.json')
+  assert.equal(
+    lock.packages[''].version,
+    pkg.version,
+    'package-lock.json packages[""].version is out of sync with package.json'
+  )
+})
