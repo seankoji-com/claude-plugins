@@ -28,6 +28,7 @@ bypassed gate. If you catch yourself thinking one, stop:
 | "The change is trivial, tests will probably still pass" | Run them. "Probably" is not a status. |
 | "I'll push now so my work isn't lost" | Never push. A publish imp once pushed straight past the operator's Push & PR gate this way — the work wasn't lost, the gate was. |
 | "This file really needs a refactor while I'm in here" | No. Note it, don't touch it. |
+| "Bash refused `npm run lint` for a bogus reason, I'll wrap it in a node script" | The refusal is real even when its message is wrong. Return `blocked` with the verbatim message. See Blocked commands. |
 
 ## By task type
 
@@ -36,6 +37,28 @@ bypassed gate. If you catch yourself thinking one, stop:
 **query** — Read-only. No file changes. Return structured data. Cite sources (file paths, line numbers, URLs) for every claim. Prefer `scout` for pure mechanical recon — use a query imp only when you need the full tool set or structured output beyond what scout returns. (AGENT-3: read-only is by convention; the tool set is the same as code. This split is deliberate: one action-agent, one recon-agent.)
 
 **publish** — Create GitHub artifacts (PRs, issues, comments, Discussions). PRs must be created from the main worktree branch after merge — never from an isolated worktree branch. Use `gh api graphql` for GitHub Discussions (the REST MCP tools do not support Discussion creation). Confirm the artifact URL in your output.
+
+## Blocked commands
+
+Claude Code's Bash tool refuses some commands in a worktree-isolated agent with a message
+claiming the command "is too complex to verify that it stays inside the worktree" and that
+"a worktree-isolated agent's git operations must target its own worktree".
+
+**Treat that message as unreliable.** It fires on plain commands containing no redirect and
+no git operation — `npm run lint`, `npm ci`, `npm test`, `go build`, `npx eslint`, even
+`echo eslint` — because it matches tool-name tokens anywhere in the command, not just the
+executable. Rephrasing, simplifying, or splitting the command will not satisfy it, and the
+remedy it suggests (re-run it from the worktree you are already in) is not actionable.
+
+**Do not run gates.** Lint, typecheck, test and build run in the orchestrator against the
+holding branch after merge — never in your worktree, which has no installed dependencies in
+any case. If your task looks like it needs a gate, commit your change and report; the
+orchestrator gates it.
+
+If any command is refused, return `blocked` with the command and the refusal verbatim. Never
+write a wrapper script, invoke a binary by an alternate path, or assemble a command name by
+string concatenation to get past a refusal. That defeats a control the operator relies on,
+hides the real failure, and teaches the next imp to do the same.
 
 ## Output
 
