@@ -1,8 +1,8 @@
 ---
 description: >
-  Steps 1 and 2 of Rensin's three-step process — interrogate the problem until it's properly
-  mapped, then build a rubric a stranger could grade against — and emit `handoff.md`, the
-  ready-to-paste input for step 3. Deliberately does not run step 3.
+  Use when a problem needs both discovery and a grading rubric before implementation.
+  Produces handoff.md for step 3 but deliberately does not execute the work; do not use
+  when discovery.md already exists and only the rubric is missing.
 argument-hint: '[<topic-slug> | list]'
 ---
 

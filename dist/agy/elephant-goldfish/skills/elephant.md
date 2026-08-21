@@ -1,9 +1,9 @@
 ---
 name: elephant
 description: >
-  Write or update elephant.md — a durable design doc — then cold-validate it against a
-  different-lineage judge with no repo access. `check` = read-only factual drift pass
-  instead of the judge. Anything else = a goldfish's failure report to fold in.
+  Use when elephant.md must be written, updated, or cold-validated as a durable design
+  document. `check` runs only a factual drift pass; use /thinking when
+  the problem still needs discovery and an evaluation rubric.
 ---
 
 # /elephant

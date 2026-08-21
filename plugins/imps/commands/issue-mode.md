@@ -1,10 +1,9 @@
 ---
 name: imps:issue-mode
 description: >
-  Issue-driven mode of /imps: scout GitHub issues → rolling dispatch in isolated
-  worktrees → holding branch → deterministic gates → persona-panel review
-  (code=opus, browser=sonnet off a collector bundle) → operator handoff. Stack-agnostic
-  — resolves the repo's conventions at startup. Self-tunes after every run.
+  Use when named GitHub issues should be implemented as a coordinated batch in isolated
+  worktrees, integrated through a holding branch, and reviewed before operator handoff.
+  Do not use for a free-form task without issue numbers; use /imps:imps instead.
 argument-hint: '<issue numbers...> | {"issues": [...], "holdingBranch": "..."}'
 ---
 

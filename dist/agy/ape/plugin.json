@@ -1,4 +1,4 @@
 {
-  "description": "Apes open-source repos for techniques transferable to your codebase — discovery, ranking, cloning, per-repo analysis, and synthesis run as a real Workflow script, so the orchestrator only sees the fingerprint and final recommendations.",
+  "description": "Forages broadly across open-source repositories or studies one named GitHub source in depth, separating transferable patterns into adopt, adapt, and reject decisions.",
   "name": "ape"
 }

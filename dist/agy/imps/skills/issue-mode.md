@@ -1,6 +1,6 @@
 ---
 name: issue-mode
-description: Issue-driven mode of /imps — scout GitHub issues, dispatch fixes serially in isolated worktrees, integrate on a holding branch, run deterministic gates, then a persona review panel, then operator handoff. Stack-agnostic.
+description: Use when named GitHub issues should be implemented as a coordinated serial batch in isolated worktrees, integrated through a holding branch, and reviewed before operator handoff. Do not use for a free-form task without issue numbers; use /imps instead.
 ---
 
 # /issue-mode — issue-driven mode

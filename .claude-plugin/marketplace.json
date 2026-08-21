@@ -27,13 +27,13 @@
       "name": "imps",
       "version": "0.3.44",
       "source": "./plugins/imps",
-      "description": "Swarm orchestrator — decomposes tasks into parallel model-routed agents, dispatches via a real Workflow script, merges through gates and persona review. Plus /imps:imp-agency: whole-repo audit → imps-ready remediation plan."
+      "description": "Swarm orchestration with model-routed execution, deterministic gates, whole-repo audits, PR monitoring, and proof-led blast-radius analysis."
     },
     {
       "name": "ape",
       "version": "0.2.14",
       "source": "./plugins/ape",
-      "description": "Apes open-source repos for techniques transferable to your codebase — discovery, ranking, cloning, per-repo analysis, and synthesis run as a real Workflow script, so the orchestrator only sees the fingerprint and final recommendations."
+      "description": "Forages broadly across open-source repositories or studies one named GitHub source in depth for transferable patterns."
     },
     {
       "name": "offload-sidecar",

@@ -25,7 +25,7 @@ function loadWorkflowFunctions({ agent, parallel, phase, args, log }) {
     'phase',
     'args',
     'log',
-    `${body}\nreturn { runDispatch, stageTasks, dispatchImp, parseTaskDecision, parseGateDecision, validateStateRead, nowIso, fixLoopRound, adjudicateFindings, writeParkedFindings, constraintsPointer, constraintsPointerForReviewer, headImpReview, personaReview, fixGate }`
+    `${body}\nreturn { runDispatch, stageTasks, dispatchImp, parseTaskDecision, parseGateDecision, validateStateRead, nowIso, fixLoopRound, adjudicateFindings, writeParkedFindings, constraintsPointer, constraintsPointerForReviewer, headImpReview, personaReview, fixGate, finalizeRun }`
   )
   return factory(agent, parallel, phase || (() => {}), args || {}, log || (() => {}))
 }
@@ -287,6 +287,22 @@ test('the constraints pointer names the GOAL.md path and the exact section headi
   assert.ok(pointer.includes('"Global Constraints"'), 'the section name is a pinned contract name')
   // The reviewer variant adds the one thing a writer does not need.
   assert.match(constraintsPointerForReviewer(), /MAJOR finding/)
+})
+
+test('finalizeRun persists a bounded checkbox-free decision trail in GOAL.md', async () => {
+  const { agent, calls } = captureAgent()
+  const { finalizeRun } = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+
+  await finalizeRun({}, null, [], { tokens_spent: 0, model_counts: {} })
+
+  assert.equal(calls.length, 1)
+  const prompt = calls[0].prompt
+  assert.match(prompt, /## Decision trail/)
+  assert.match(prompt, /next line beginning with "## "/)
+  assert.match(prompt, /never emit a second heading/)
+  assert.match(prompt, /no checkboxes/)
+  assert.match(prompt, /_None\._/)
+  assert.match(prompt, /Record only pivots, not routine actions/)
 })
 
 test('every code-writing and code-reviewing agent call carries the constraints pointer', async () => {

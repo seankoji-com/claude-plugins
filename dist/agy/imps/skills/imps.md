@@ -1,9 +1,9 @@
 ---
 name: imps
 description: >
-  Decompose a vague task into dependency-mapped imps, dispatch with model routing,
-  monitor progress, and merge code changes back to a dedicated run branch cut off
-  the default branch.
+  Use when a substantial task should be decomposed, dependency-mapped, dispatched to
+  model-routed imps, verified, and integrated on a dedicated run branch. Do not use for
+  read-only audits or a single diff's impact analysis.
 ---
 
 # /imps — summon the swarm
@@ -335,6 +335,9 @@ with synthetic tasks to make the table look bigger)
 ## Status
 Planned — not yet dispatched.
 
+## Decision trail
+_None._
+
 ## Parked findings
 _None._
 ```
@@ -607,7 +610,13 @@ prominent callout above the list if any criterion is unsatisfied, and a separate
 line if any is unverifiable — they are different claims. Both go **before** the Push & PR
 question, never after.
 
-**Finalize.** Print the results block:
+**Finalize.** Before printing results, assemble the run's nontrivial decision points:
+Head Imp amendments, conflicts resolved, skipped gates or tasks, and advisory-check
+failures. Replace the bounded body of GOAL.md's existing `## Decision trail` section with
+one plain, checkbox-free bullet per pivot, or `_None._` when there were none. Never append
+or emit a second heading; routine actions and achieved outcomes do not belong there.
+
+Then print the results block:
 
 ```
   merged:    #6 <label>    (3 files)

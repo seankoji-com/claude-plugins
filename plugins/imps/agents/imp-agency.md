@@ -30,8 +30,9 @@ only hears from you again if you `block`.
 - **The project profile** (full content, not a path — you must not re-derive it). It
   carries `DEFAULT_BRANCH`, current SHA, repo name/remote, the stack manifest,
   `GATE_CMDS`, the CI inventory, whether a UI surface exists and what serves it, the
-  browser-rig probe result, and the project-docs list. Thread it into every finder
-  prompt verbatim.
+  browser-rig probe result, the project-docs list, the primary user surface, and the
+  project-local verification-harness inventory. Thread it into every finder prompt
+  verbatim.
 - **The focus area / dimension set** — either "all applicable dimensions" or an explicit
   `--focus` subset of the dimension keys below.
 - **The `--out` path** — an absolute, whitespace-free path *outside the repo* where you
@@ -93,7 +94,7 @@ prompt. **Model routing follows reasoning shape,
 not dimension count:** the deep-judgment lenses — `purpose` (existential), `stack`
 (architecture), `security` (adversarial threat), `performance` (systemic), `tests`
 (critical-path judgment) — run on **opus**; the evidence-gathering lenses that check code
-against a documented reality (`docs`, `ci`, `ux`, `ops`, `dx`) run on **sonnet**. Do not
+against a documented reality (`docs`, `ci`, `ux`, `ops`, `dx`, `verification`) run on **sonnet**. Do not
 blanket-upgrade the sonnet lenses — a stronger model does not find more stale-doc
 references or missing lint gates.
 
@@ -109,6 +110,7 @@ references or missing lint gates.
 | `stack` | opus | Architectural coupling, single points of failure, EOL/abandoned deps (check real versions), version drift, places where the tech fights the problem — migration cost honestly weighed. Do NOT propose rewrites whose cost exceeds the pain |
 | `ops` | sonnet | Backups + restore verification, migrations discipline, idempotency of scheduled jobs, monitoring/alerting gaps, failure modes when a dependency is down. Check the runbook's procedures are executable |
 | `dx` | sonnet | Clone-to-running friction, pre-commit/lint/format coverage vs CI, script hygiene, dead code/config, what a second contributor without the maintainer's homelab can and cannot do |
+| `verification` | sonnet | Can a fresh operator repeatably launch or locate the primary user surface, run a doctor/preflight, drive at least one safe representative path, capture useful evidence, and clean up? Compare any feature map or scenario list with current routes, commands, and integrations. When feasible, exercise one existing project-local path read-only. Distinguish documentation drift, harness gaps, and product defects: a product defect must never be “fixed” by changing docs to describe broken behavior. Do not generate a harness during the audit; produce a remediation contract instead. |
 
 **Each finder prompt is self-contained — sub-imps never see this brief.** Every dispatch
 must carry: (1) the full profile verbatim, (2) its lens row from the table, (3) the
@@ -241,10 +243,10 @@ deleting a component is an operator decision, and imps must never auto-delete; r
 missing either are skipped with a warning, so never omit them, and never put a `- [ ]`
 anywhere except under `## Definition of Done` (a stray one becomes a phantom task).
 Section order is fixed — this template has no `## Status` heading, so `## Global
-Constraints` goes immediately after `## Definition of Done`, and `## Parked findings`
-goes immediately before `## Delete verdicts`; both are **checkbox-free** (no `- [ ]`
-anywhere in either — a stray one becomes a phantom task) and both render `_None._`
-when there is nothing to report:
+Constraints` goes immediately after `## Definition of Done`, `## Decision trail` follows
+it, and `## Parked findings` goes immediately before `## Delete verdicts`; all three are
+**checkbox-free** (no `- [ ]` anywhere in them — a stray one becomes a phantom task) and
+render `_None._` when there is nothing to report:
 
 ```markdown
 # GOAL — audit remediation: <repo> @ <sha> — <date>
@@ -274,6 +276,9 @@ summarized. Only constraints a reviewer could verdict against from a diff, not
 aspirational goals; distinct from the Definition of Done, which is true once and ticked
 — these are true of every checklist item, never ticked. Feed from any finder note flagged
 as applying repo-wide rather than to one dimension. Render `_None._` when none surfaced.>
+
+## Decision trail
+_None._
 
 ## Parked findings
 <NO checkboxes. This audit's synthesis never adjudicates a finding down to "parked" —
@@ -328,7 +333,7 @@ This is the deliverable, not a status update:
   "deferred_count": 6,
   "grades": { "purpose": "B", "docs": "B", "ci": "C", "security": "A", "…": "…" },
   "coverage_notes": "≤40 words — downgrades and uncovered surfaces",
-  "stats": { "dimensions_run": 10, "findings_confirmed": 14, "findings_refuted": 5 },
+  "stats": { "dimensions_run": 11, "findings_confirmed": 14, "findings_refuted": 5 },
   "notes": "≤30 words"
 }
 ```

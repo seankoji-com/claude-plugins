@@ -1,6 +1,9 @@
 ---
 name: prompt-builder
-description: Iteratively build high-quality, reusable Claude prompts — diagnose the brief, structure with evidence-based techniques, draft, critique, and deliver a finished artefact ready to run or save
+description: >
+  Use when the deliverable is a reusable Claude prompt that needs diagnosis, structured
+  drafting, critique, and a finished artifact. Do not use when the user wants the prompt's
+  underlying task executed now.
 ---
 
 **Before executing any steps**, output the following intro block so the user knows what's happening:

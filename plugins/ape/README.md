@@ -2,7 +2,9 @@
 
 # ape
 
-Imitation is the sincerest form of engineering. Apes techniques from open-source GitHub repos into your codebase: discovery across three axes → a ranking judgment call → shallow clones → per-repo deep analysis → synthesis — the whole expedition run as one `Workflow` script so the orchestrator's context only ever sees the fingerprint and the final recommendations.
+Imitation is the sincerest form of engineering. Ape can forage broadly across open-source
+GitHub repositories or study one operator-chosen repository in depth, then compare the
+evidence with the current project and separate what to adopt, adapt, or reject.
 
 ## Platforms
 
@@ -22,6 +24,7 @@ under `dist/opencode/` and `dist/agy/ape/`; see
 | Requirement | Needed for |
 | --- | --- |
 | **`gh` CLI** (authenticated) | Discovery and clone phases (`gh search`, `gh repo view`, `gh repo clone`). `/ape:forage` runs `gh auth status` at Phase 0 and stops if unauthenticated. |
+| **`git`** | `/ape:study` prepares an isolated, pinned clone of the named repository. |
 | **The `Workflow` tool** | **Hard dependency — no fallback.** `/ape:forage` syncs `scripts/ape-forage.workflow.js` into `~/.claude/workflows/ape-forage.js` and invokes it; if `Workflow` is unavailable, the command has nothing to run. |
 
 ## How it runs
@@ -72,6 +75,7 @@ one-shot clone retry are actual code now, not prose trusted to be followed corre
 | Component | File | Purpose |
 |-----------|------|---------|
 | Command | `commands/forage.md` | `/ape:forage [focus]` — Phase 0 (fingerprint) itself, syncs the Workflow script, invokes it, and presents the result |
+| Command | `commands/study.md` | `/ape:study <GitHub URL> [focus]` — synchronous depth-first comparison of one named repository or subdirectory |
 | Command | `commands/clean.md` | `/ape:clean [--all]` — sanctioned deletion of clones (keeps reports) |
 | Workflow script | `scripts/ape-forage.workflow.js` | The canonical orchestration — discovery, dedupe, ranking, clone+retry, analysis, synthesis. Synced into `~/.claude/workflows/ape-forage.js` before each run. |
 | Script | `scripts/init-workspace.sh` | Phase 0 helper — creates the workspace and reports whether a fingerprint already exists, as one command. |
@@ -79,13 +83,14 @@ one-shot clone retry are actual code now, not prose trusted to be followed corre
 | Script | `scripts/search-repos.sh` | Discovery helper — runs several `gh search` queries as one command. |
 | Script | `scripts/triage-repos.sh` | Discovery helper — runs several `gh repo view` metadata checks as one command instead of a shell for-loop. |
 | Script | `scripts/readme-peek.sh` | Discovery helper — peeks at one repo's README as one command instead of a multi-stage pipe chain. |
+| Script | `scripts/study-repo.sh` | Strict URL parser and isolated clone preparation for `/ape:study`. |
 
 ## Install
 
 Drop this directory into your plugin marketplace repo and add an entry:
 
 ```json
-{ "name": "ape", "source": "./plugins/ape", "description": "Forage OSS repos for transferable techniques" }
+{ "name": "ape", "source": "./plugins/ape", "description": "Forage broadly or study one OSS source for transferable techniques" }
 ```
 
 ## Usage
@@ -93,12 +98,20 @@ Drop this directory into your plugin marketplace repo and add an entry:
 ```
 /ape:forage testing        # focus the run
 /ape:forage                # broad: architecture, testing, DX
-/ape:clean               # delete clones, keep fingerprint + reports
-/ape:clean --all         # full wipe
+/ape:study https://github.com/owner/repo testing
+/ape:study https://github.com/owner/repo/tree/main/plugins/example
+/ape:clean                 # delete forage clones, keep fingerprint + reports
+/ape:clean --all           # full wipe
 ```
 
-All artifacts land in `~/tmp/repo-research/<project-dir-name>/`:
-`fingerprint.md` (cached ≤30 days), `repos/`, `reports/*.md`, `RECOMMENDATIONS.md`. Reports persisting on disk means you can re-run synthesis, or argue with a ranking, without re-foraging.
+All artifacts land in `~/tmp/repo-research/<project-dir-name>/`. Forage uses
+`fingerprint.md`, `repos/`, `reports/*.md`, and `RECOMMENDATIONS.md`. Study uses
+`studies/<owner>__<repo>/` for the pinned clone, source fingerprint, and comparison report.
+Reports persist so a later run can detect source or host-project drift before re-analysis.
+
+Use `/ape:forage` when the source is unknown and coverage matters. Use `/ape:study` when
+the user has already named the source and needs line-level transfer judgment. Study is
+synchronous, analyzes one repository, and never edits the current project.
 
 **Note:** `/ape:forage` invokes the `Workflow` tool, which runs in the background — the
 command's turn ends once the expedition is dispatched, and you're notified automatically

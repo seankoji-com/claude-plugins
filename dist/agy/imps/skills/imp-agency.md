@@ -1,11 +1,9 @@
 ---
 name: imp-agency
 description: >
-  Whole-repo audit — fitness for purpose first, then technical health — that produces an
-  /imps-ready remediation plan. A wrangler subagent fans out finders across the
-  applicable dimensions (a purpose finder may verdict delete; operator-gated), refutes
-  every P0/P1 adversarially, runs a completeness critic, and synthesizes a checklist-file
-  GOAL plan.
+  Use when an entire repository needs a read-only fitness and technical-health audit that
+  produces an /imps-ready remediation plan. Do not use for one change's downstream
+  effects; use /blast-radius for that narrower question.
 ---
 
 # /imp-agency — audit the repo, brief the imps
@@ -17,7 +15,7 @@ Arguments: `$ARGUMENTS`
 > 🔍 **imp-agency** — whole-repo audit → imps-ready plan
 >
 > A wrangler subagent runs the audit end to end — one finder per dimension (purpose,
-> docs, CI, tests, security, performance, UX, stack, ops, DX), every serious finding
+> docs, CI, tests, security, performance, UX, stack, ops, DX, verification), every serious finding
 > adversarially refuted, a completeness critic, then synthesis into an `/imps`
 > checklist plan. Effectiveness before craftsmanship: the purpose finder asks whether
 > each component earns its existence and may verdict **delete** — those land in an

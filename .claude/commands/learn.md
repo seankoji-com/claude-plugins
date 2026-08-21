@@ -1,8 +1,9 @@
 ---
 description: >
   Maintainer-only: read the accumulated learnings logs from imps, prompt-builder, and
-  claude-tuneup (plus audit.jsonl and any per-project imps logs), synthesize command-body
-  improvements, gate each batch with the operator, and ship approved edits as a draft PR.
+  claude-tuneup (plus audit.jsonl and any per-project imps logs), route repeated lessons
+  to the smallest enforceable plugin source, gate each batch with the operator, and ship
+  approved edits as a draft PR.
 argument-hint: '[plugin name to scope to, e.g. imps]'
 disable-model-invocation: true
 ---
@@ -11,14 +12,15 @@ disable-model-invocation: true
 
 **Before executing any steps**, output:
 
-> 🧵 **/learn** — folding accumulated learnings back into the commands that produced them
+> 🧵 **/learn** — folding accumulated learnings back into enforceable plugin behavior
 >
 > Reads `~/.claude/imps/learnings.md`, `~/.claude/prompt-builder/learnings.md`,
 > `~/.claude/claude-tuneup.notes.md`, and `~/.claude/audit.jsonl`, proposes command-body
-> edits, and gates every batch with you before writing anything.
+> improvements, prefers structural enforcement when the repository can express it, and
+> gates every batch with you before writing anything.
 
 This is a **repo-local maintainer command** — it only makes sense inside a claude-plugins
-checkout, since it edits `plugins/*/commands/*.md` sources that don't exist anywhere else.
+checkout, since it edits plugin sources and their tests that don't exist anywhere else.
 It deliberately reverses, in one reviewed pass, the "no self-edit mid-run" stance that
 `imps`, `prompt-builder`, and `claude-tuneup` each state explicitly in their own bodies —
 those commands stay deterministic at runtime; `/learn` is the offline, human-gated actor
@@ -32,13 +34,13 @@ operator this command only works inside a claude-plugins checkout — do not gue
 Read `marketplace.json` to get the list of plugins this repo actually ships. Build the
 log → command map, but only for plugins present in that list:
 
-| Log | Target command file(s) |
+| Log | Primary plugin scope |
 |---|---|
-| `~/.claude/imps/learnings.md` | `plugins/imps/commands/*.md` |
-| `~/.claude/prompt-builder/learnings.md` | `plugins/prompt-builder/commands/prompt-builder.md` |
-| `~/.claude/claude-tuneup.notes.md` | `plugins/claude-tuneup/commands/claude-tuneup.md` |
+| `~/.claude/imps/learnings.md` | `plugins/imps/` plus its focused tests and build overrides |
+| `~/.claude/prompt-builder/learnings.md` | `plugins/prompt-builder/` plus its focused tests and build overrides |
+| `~/.claude/claude-tuneup.notes.md` | `plugins/claude-tuneup/` plus its focused tests and build overrides |
 | `~/.claude/audit.jsonl` | cross-cutting: prioritize by `exit_status` tally per `command` |
-| `<any repo>/.claude/imps/learnings.md` (found via `find ~/repos -maxdepth 4 -path "*/.claude/imps/learnings.md"`, if `~/repos` exists) | `plugins/imps/commands/*.md` — lowest-priority source, see Phase 1 |
+| `<any repo>/.claude/imps/learnings.md` (found via `find ~/repos -maxdepth 4 -path "*/.claude/imps/learnings.md"`, if `~/repos` exists) | `plugins/imps/` — lowest-priority source, see Phase 1 |
 
 If `$ARGUMENTS` names a specific plugin, scope everything below to that plugin only.
 
@@ -51,7 +53,7 @@ claude-tuneup can share a second agent since they're small) to read and return *
 structured candidates, nothing raw:
 
 ```
-{target_file, rule_or_pattern, evidence: [{source_path, quote_or_paraphrase}], recurrence_count, change_type}
+{plugin, rule_or_pattern, evidence: [{source_path, quote_or_paraphrase}], recurrence_count, likely_enforcement}
 ```
 
 Instruct each agent to:
@@ -67,19 +69,34 @@ Instruct each agent to:
 - Rank any candidate sourced only from a per-project `.claude/imps/learnings.md` as
   low-confidence — those skew stack-specific and rarely generalize to the shared command body.
 
-## Phase 2 — Filter
+## Phase 2 — Filter and route
 
-For every candidate, `Grep` the target command file for the concept before keeping it —
-the subagents in Phase 1 have no visibility into current command text, so this step is
-mandatory, not optional (same discipline claude-tuneup.md uses for its own prefix-cover
-pre-filter). Drop anything already reflected in the body. Drop project-specific noise that
-won't generalize. What survives should be a short list per plugin, not a firehose.
+For every candidate, search the plugin's current commands, skills, agents, references,
+scripts, tests, generator overrides, and validators before keeping it. The Phase 1 agents
+have no visibility into current source, so this check is mandatory. Drop anything already
+enforced, and drop project-specific noise that will not generalize.
+
+For each survivor, choose the earliest reliable enforcement point in this order:
+
+1. deterministic runtime code or schema validation;
+2. generator, lint, or focused regression test;
+3. command, skill, agent, or reference instructions;
+4. README prose only when it is genuinely explanatory and cannot enforce behavior.
+
+Prefer an existing enforcement surface over a new abstraction. A recurring lesson should
+not become another paragraph if a small test, parser guard, state invariant, or shared
+helper can make the failure impossible. When instructions are still the right layer,
+treat command and skill descriptions as routing contracts: state when to select the
+capability and the closest meaningful exclusion.
+
+Record `{target_files, enforcement_route, why_this_layer}` for every survivor. What
+remains should be a short list per plugin, not a firehose.
 
 ## Phase 3 — Draft edits
 
-For each surviving candidate, draft a minimal, concrete edit (old_string/new_string form)
-to the target file, written in that file's own voice — match its heading structure and
-tone rather than pasting the raw learnings-log wording. Respect:
+For each surviving candidate, draft the smallest concrete change at the chosen enforcement
+point. Reuse current helpers and test styles. For prose, use old_string/new_string form in
+the target file's voice rather than pasting raw log wording. Respect:
 - AGENTS.md's no-machine-paths invariant — `${CLAUDE_PLUGIN_ROOT}` / `~` / `$HOME` only,
   never an absolute local path.
 - Any documented soft caps in the target file (e.g. a line-count cap on a section).
@@ -100,14 +117,19 @@ If nothing was approved, stop here and say so — no worktree, no commit.
 
 Otherwise, this is a code change: follow this session's background-job conventions —
 isolate in a worktree before the first edit if not already isolated, then:
-1. Apply only the approved edits.
+1. Apply only the approved edits, including the focused regression test for any new
+   structural invariant.
 2. **Do not touch any `plugin.json` `version` field** — `.github/workflows/version-bump.yml`
    bumps those automatically; a manual bump here would conflict with it.
-3. Validate: `jq . .claude-plugin/marketplace.json` and, for every touched plugin,
-   `jq -e '.name' plugins/<name>/.claude-plugin/plugin.json`.
-4. Commit (only the files actually touched — never `git add -A`), push, and
+3. If any command, agent, skill, script, or build override changed, run
+   `python3 build/generate.py` and include the generated `dist/` update as the dedicated
+   regeneration change required by AGENTS.md. Never hand-edit `dist/`.
+4. Run the focused test first, then the full relevant shell, JavaScript, Python, and
+   dist-lint gates. Also validate `jq . .claude-plugin/marketplace.json` and, for every
+   touched plugin, `jq -e '.name' plugins/<name>/.claude-plugin/plugin.json`.
+5. Commit (only the files actually touched — never `git add -A`), push, and
    `gh pr create --draft` with a body listing each applied change and its source evidence.
-5. Never push to master or force-push.
+6. Never push to master or force-push.
 
 ## Phase 6 — Self-log
 
@@ -123,6 +145,5 @@ plugin.
 
 - If every candidate gets filtered out in Phase 2, that's success, not failure — say so
   plainly ("logs reviewed, nothing new to fold in") rather than manufacturing a change.
-- This command reads logs; it never reads or modifies plugin runtime scripts
-  (`scripts/*.sh`) — only command `.md` bodies. Script-level fixes stay a manual, reviewed
-  change outside this command's scope.
+- Structural changes still require operator approval. “Prefer enforcement” changes where
+  a lesson lands, not the review boundary or the command's authority.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic stand-in for `git`, used only for clone-candidates.sh testing.
+# Deterministic stand-in for `git`, used by ape clone and study resolver fixtures.
 # Real clone output (progress percentages, transfer stats) is inherently
 # non-deterministic, so this only fakes the destination-directory side effect
 # and prints one stable line in the same place `git clone` would.
@@ -7,8 +7,18 @@ set -euo pipefail
 
 if [ "$1" = "clone" ]; then
   dest="${!#}"
-  mkdir -p "$dest"
+  mkdir -p "$dest/.git"
   echo "Cloning into '$dest'..."
+  exit 0
+fi
+
+if [ "$1" = "-C" ]; then
+  case "${3:-}" in
+    config) echo 'https://github.com/acme/example' ;;
+    fetch|checkout) ;;
+    rev-parse) echo '0123456789abcdef0123456789abcdef01234567' ;;
+    *) echo "stub git: unhandled -C subcommand: ${3:-}" >&2; exit 1 ;;
+  esac
   exit 0
 fi
 
