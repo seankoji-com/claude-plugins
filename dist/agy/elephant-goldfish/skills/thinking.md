@@ -210,7 +210,7 @@ Then log one audit line — best-effort telemetry, never a gate:
 
 ```bash
 bash "__PLUGIN_ROOT__/scripts/audit-log.sh" --plugin elephant-goldfish \
-  --command /thinking --exit-status completed \
+  --command /thinking --exit-status "${AUDIT_STATUS:-completed}" \
   --duration-ms <ms> --notes "<slug>: <output_type>, <n> artifacts"
 ```
 

@@ -69,7 +69,7 @@ possible at all — schema adapted from maestro's `audit.jsonl`
 {"id":"a-974bcc15","ts":"2026-07-09T02:15:37Z","plugin":"imps","command":"/imps:imps","scope":"project","project":"claude-plugins","exit_status":"completed","duration_ms":812345,"cost_estimate_usd":null,"tier":null,"attempts":null,"notes":"Shipped audit-log JSONL schema across imps, prompt-builder, claude-tuneup"}
 ```
 
-`exit_status` is one of `completed | partial | failed | cancelled`. `notes` is
+`exit_status` is one of `completed | partial | blocked | failed | cancelled`. `notes` is
 free text, truncated to 200 chars by the script. `cost_estimate_usd` is reserved for
 future token-cost instrumentation — always `null` today. `tier` and `attempts` are
 optional, `null` unless the caller passes `--tier`/`--attempts` — used by the opencode

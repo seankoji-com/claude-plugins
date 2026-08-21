@@ -286,11 +286,13 @@ path.
 to the shared cross-plugin audit log** (fail-soft — the script itself never blocks; this
 step is not optional, it's part of finishing the save):
 
-Set `AUDIT_STATUS` to the matching audit value before running the command below. For a
-human-facing `blocked` result, use `failed`.
+Set `AUDIT_STATUS` to `completed`, `partial`, `blocked`, `failed`, or `cancelled` before running
+the command below. The default keeps the example runnable; replace it when the run did not
+complete successfully.
 
 ```bash
 elapsed_ms=$(( ($(date +%s) - <captured start time>) * 1000 ))
+AUDIT_STATUS="${AUDIT_STATUS:-completed}"
 "${CLAUDE_PLUGIN_ROOT}/scripts/audit-log.sh" \
   --plugin prompt-builder \
   --command /prompt-builder \
@@ -302,10 +304,9 @@ elapsed_ms=$(( ($(date +%s) - <captured start time>) * 1000 ))
 
 Use `completed` only when the file was written and required checks passed. Use `partial` when
 the file exists but a required follow-up failed, `failed` when no usable artifact was delivered,
-and `cancelled` when the operator stopped the run. The human-facing `blocked` state maps to
-`failed` in the current audit schema, with the refusal preserved in `--notes`. If the audit-log
-command itself fails, report that telemetry failure separately; it must not change the prompt's
-actual status.
+and `cancelled` when the operator stopped the run. Preserve the exact refusal in `--notes`. If
+the audit-log command itself fails, report that telemetry failure separately; it must not change
+the prompt's actual status.
 
 Then state the path you saved to in the final message.
 

@@ -338,12 +338,17 @@ step is not optional, it's part of finishing the save). The log stays at the can
 `~/.claude/audit.jsonl` on every platform, because the bundled logger is home-relative and
 the schema is shared across plugins:
 
+Set `AUDIT_STATUS` to `completed`, `partial`, `blocked`, `failed`, or `cancelled` before
+running the command below. The default keeps the example runnable; replace it when the run did
+not complete successfully.
+
 ```bash
 elapsed_ms=$(( ($(date +%s) - <captured start time>) * 1000 ))
+AUDIT_STATUS="${AUDIT_STATUS:-completed}"
 "__PLUGIN_ROOT__/scripts/audit-log.sh" \
   --plugin prompt-builder \
   --command /prompt-builder \
-  --exit-status completed \
+  --exit-status "$AUDIT_STATUS" \
   --duration-ms "$elapsed_ms" \
   --scope user \
   --notes "<one-line: what was built, or the failure mode fixed>"
@@ -355,8 +360,9 @@ variable (matrix Item 0, from a binary scan of the `OPENCODE_*` surface). If you
 literal placeholder at runtime, the install step did not complete; report that rather than
 guessing a path.
 
-Use `--exit-status failed` if the operator reported the delivered prompt failed and this
-session was purely diagnosing/fixing it, with no new artifact delivered.
+Use `blocked` when a tool or permission refusal stopped the requested work. Preserve the exact
+refusal in `--notes`. Use `failed` when no usable artifact was delivered and `partial` when the
+file exists but a required follow-up failed.
 
 Then state the path you saved to in the final message.
 
