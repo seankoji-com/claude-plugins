@@ -351,6 +351,12 @@ quote or reason about its contents. Then:
     section T<N>, before acting"). Label-only imps improvise: observed failures
     include "couldn't find repo owner", "concluded nothing to publish", and
     unauthorized GitHub issues filed as the deliverable.
+    For a bug, regression, flake, performance problem, or unexplained failing gate, the spec
+    must also point to `references/diagnosis-loop.md` using the current resolved absolute
+    `${CLAUDE_PLUGIN_ROOT}` value — substitute it before writing the durable task spec; an
+    imp's Read tool will not expand that token later. Include the known failing command when
+    one exists. If none exists, constructing and running that red-capable command is the
+    task's first deliverable — never hand an imp a symptom plus permission to theorize.
   - **Model** — assign by reasoning complexity (see
     [Model selection reference](#model-selection-reference)). Always set `model:` explicitly.
   - **Type** — `code` (file changes, worktree-isolated) · `query` (read-only) ·
