@@ -137,10 +137,16 @@ Steps:
 1. git fetch origin <base_branch> <branch>
 2. git checkout -b pr-conflict-fix origin/<branch>
 3. git merge origin/<base_branch>   # conflicts expected
-4. Resolve conflicts: prefer the PR branch's intent. Keep both sides when unsure; add a
-   TODO comment only if the resolution is genuinely ambiguous.
-5. git add -A && git commit -m "chore: resolve merge conflicts with <base_branch>"
-6. git push origin HEAD:<branch>
+4. Reconstruct both intents before editing: inspect the commits unique to each side, the PR
+   body and linked issues, and the surrounding code/tests. Resolve each hunk so both intents
+   survive where compatible. If they conflict, choose the behavior that serves the PR's
+   stated goal and report the tradeoff. Never choose by branch precedence and never leave a
+   TODO as a substitute for a decision.
+5. Run the repository's relevant checks. If intent remains genuinely ambiguous, leave the
+   conflict unresolved and return resolved=false without committing or pushing.
+6. Stage only the resolved conflict files, commit with
+   `git commit -m "chore: resolve merge conflicts with <base_branch>"`, and push with
+   `git push origin HEAD:<branch>`.
 
 Return JSON: { "resolved": true|false, "conflict_files": [...], "pushed": true|false,
                "reason": "<if resolved=false, why>" }
@@ -170,6 +176,12 @@ Branch: <branch>. Repo: <repo>.
 
 Failure logs:
 <logs — truncated to 150 lines>
+
+First read `${CLAUDE_PLUGIN_ROOT}/references/diagnosis-loop.md`. Treat the captured failing CI
+result as step 1's red evidence; do not rerun the whole workflow merely to prove it fails.
+Reproduce the same symptom with the smallest local command you can, then continue at step 2.
+If the failure is CI-only and cannot be reproduced locally, return the missing evidence instead
+of guessing.
 
 Steps:
 1. git fetch origin <branch>

@@ -1,3 +1,5 @@
+<!-- PLATFORM-SUPPORT: opencode=full agy=full -->
+
 # elephant-goldfish
 
 Two commands from [Rensin's article](https://drensin.medium.com/elephants-goldfish-and-the-new-golden-age-of-software-engineering-c33641a48874), covering both halves of it:
@@ -12,6 +14,19 @@ design honest once it does. Neither requires the other.
 
 If you installed the `recon` plugin, it was removed from this marketplace in 0.2.0 — run
 `claude plugin uninstall recon@seankoji`.
+
+## Platforms
+
+| Claude Code | OpenCode | Agy |
+| --- | --- | --- |
+| native (this README) | full — generated | full — generated |
+
+This is the proof plugin for the cross-platform generator: script-backed (judge,
+state resolver, renderer) but platform-neutral, and its two `SKILL.md` files map
+directly onto Agy skills. Generated output lives under `dist/opencode/` and
+`dist/agy/elephant-goldfish/`; see
+[`docs/plans/cross-platform-compat.md`](../../docs/plans/cross-platform-compat.md) and
+[`docs/platform-matrix.md`](../../docs/platform-matrix.md) for how and why.
 
 ---
 

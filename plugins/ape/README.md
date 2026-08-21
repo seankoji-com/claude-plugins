@@ -1,13 +1,28 @@
+<!-- PLATFORM-SUPPORT: opencode=full agy=full -->
+
 # ape
 
 Imitation is the sincerest form of engineering. Apes techniques from open-source GitHub repos into your codebase: discovery across three axes → a ranking judgment call → shallow clones → per-repo deep analysis → synthesis — the whole expedition run as one `Workflow` script so the orchestrator's context only ever sees the fingerprint and the final recommendations.
+
+## Platforms
+
+| Claude Code | OpenCode | Agy |
+| --- | --- | --- |
+| native (this README) | full — generated | full — generated |
+
+Its Claude `Workflow` dispatch mechanics don't exist on either target, so
+OpenCode/Agy get per-platform dispatch prose from `build/overrides/ape/` instead;
+everything else — discovery, ranking, synthesis — ports as-is. Generated output lives
+under `dist/opencode/` and `dist/agy/ape/`; see
+[`docs/plans/cross-platform-compat.md`](../../docs/plans/cross-platform-compat.md) and
+[`docs/platform-matrix.md`](../../docs/platform-matrix.md) for how and why.
 
 ## Prerequisites
 
 | Requirement | Needed for |
 | --- | --- |
 | **`gh` CLI** (authenticated) | Discovery and clone phases (`gh search`, `gh repo view`, `gh repo clone`). `/ape:forage` runs `gh auth status` at Phase 0 and stops if unauthenticated. |
-| **The `Workflow` tool** | **Hard dependency — no fallback.** `/ape:forage` syncs `scripts/ape-forage.workflow.js` into `~/.claude/workflows/` and invokes it; if `Workflow` is unavailable, the command has nothing to run. |
+| **The `Workflow` tool** | **Hard dependency — no fallback.** `/ape:forage` syncs `scripts/ape-forage.workflow.js` into `~/.claude/workflows/ape-forage.js` and invokes it; if `Workflow` is unavailable, the command has nothing to run. |
 
 ## How it runs
 

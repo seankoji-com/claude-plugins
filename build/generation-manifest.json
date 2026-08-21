@@ -1,0 +1,32 @@
+{
+  "ape": {
+    "agy": "full",
+    "opencode": "full",
+    "reason": "Discovery, ranking and synthesis prose ports cleanly. Its Claude Workflow dispatch mechanics do not exist on either target, so they are replaced by per-platform dispatch prose in build/overrides/ape/."
+  },
+  "claude-tuneup": {
+    "agy": "excluded",
+    "opencode": "excluded",
+    "reason": "Its entire subject is Claude Code's own settings.json files, permission-rule syntax and transcript store. There is no equivalent surface on either target to port it to, so generating it would produce a command that cannot do its job."
+  },
+  "elephant-goldfish": {
+    "agy": "full",
+    "opencode": "full",
+    "reason": "Proof plugin for the generator. Script-backed but platform-neutral: the judge, state resolver and renderer are ordinary shell/Python invoked through the plugin-root placeholder, and its two SKILL.md files map directly onto Agy skills."
+  },
+  "imps": {
+    "agy": "full",
+    "opencode": "full",
+    "reason": "The orchestration prose ports, but the Claude Workflow script that drives it does not run on either target; per-platform dispatch backends and their prose come from build/overrides/imps/."
+  },
+  "offload-sidecar": {
+    "agy": "note-only",
+    "opencode": "note-only",
+    "reason": "Ships no command, agent or skill files — it is an MCP server plus a Python entrypoint. Nothing to generate; per-platform registration is documented in its README instead (Agy mcp_config.json shape from docs/platform-matrix.md Item 10, environment passthrough key from the PR 2 re-verification token ENV_PASSTHROUGH)."
+  },
+  "prompt-builder": {
+    "agy": "full",
+    "opencode": "full",
+    "reason": "Single self-contained command with no harness dependency beyond the bundled audit logger; the only platform-specific content is the audit-log invocation path."
+  }
+}

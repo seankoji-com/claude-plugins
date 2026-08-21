@@ -311,6 +311,11 @@ test('every code-writing and code-reviewing agent call carries the constraints p
   // The two reviewer calls, and only those, escalate a violation to a finding.
   const withMajor = calls.filter((c) => /MAJOR finding/.test(c.prompt)).map((c) => c.opts.label)
   assert.deepEqual(withMajor.sort(), ['head-imp-diff', 'persona-sre'])
+
+  const headImp = calls.find((c) => c.opts.label === 'head-imp-diff')
+  assert.ok(headImp.prompt.includes('three independent axes'), 'Head Imp lost the separated review axes')
+  assert.ok(headImp.prompt.includes('Definition of Done'), 'Head Imp lost the run intent source')
+  assert.ok(headImp.prompt.includes(GOAL_ARGS.goalFilePath), 'Head Imp intent source lost the GOAL.md path')
 })
 
 // --- Fix-round schema ------------------------------------------------------------------

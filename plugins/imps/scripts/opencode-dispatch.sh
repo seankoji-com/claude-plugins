@@ -130,6 +130,7 @@
 #
 # See plugins/imps/references/opencode-harness.md for setup, the Claude Code
 # permission entry, and the measurement protocol.
+# set -uo (not -e): abort() exits explicitly at every fail-closed gate; unchecked-command fallthrough is handled per call site
 set -uo pipefail
 
 # Structural guarantee for "the final line of stdout is always exactly one
@@ -486,6 +487,8 @@ expect_oracle_verdict() {
 # unit harness calls "$func" "$(cat arg)", exactly one argument, so a two-arg
 # function is not fixturable verbatim. Splits one newline-delimited argument
 # rather than contorting the production signature to suit the harness.
+# Called dynamically by tests/run.sh's unit-fixture harness (fixture dir name
+# == function name) — a plain grep finds no caller; do NOT delete as dead code.
 expect_oracle_verdict_probe() {
   local expected="" observed=""
   { IFS= read -r expected; IFS= read -r observed; } <<<"$1"

@@ -276,23 +276,37 @@ Every finished prompt gets written to a markdown file — never leave the delive
 
 If intended use is ambiguous, ask; if the operator has no preference, default to the archive path so the prompt is never lost.
 
+If the write, parent-directory creation, or validation is refused or fails, return `blocked` or
+`failed` with the exact tool error and attempted path. Do not say the prompt was saved, invent a
+fallback path, or bypass the refusal with a wrapper or alternate command. Use `partial` only when
+the file was written but a required follow-up check failed. Report the real state before giving a
+path.
+
 **Before stating the save path in the final message, you MUST append a structured entry
 to the shared cross-plugin audit log** (fail-soft — the script itself never blocks; this
 step is not optional, it's part of finishing the save):
 
+Set `AUDIT_STATUS` to `completed`, `partial`, `blocked`, `failed`, or `cancelled` before running
+the command below. The default keeps the example runnable; replace it when the run did not
+complete successfully.
+
 ```bash
 elapsed_ms=$(( ($(date +%s) - <captured start time>) * 1000 ))
+AUDIT_STATUS="${AUDIT_STATUS:-completed}"
 "${CLAUDE_PLUGIN_ROOT}/scripts/audit-log.sh" \
   --plugin prompt-builder \
   --command /prompt-builder \
-  --exit-status completed \
+  --exit-status "$AUDIT_STATUS" \
   --duration-ms "$elapsed_ms" \
   --scope user \
   --notes "<one-line: what was built, or the failure mode fixed>"
 ```
 
-Use `--exit-status failed` if the operator reported the delivered prompt failed and this
-session was purely diagnosing/fixing it, with no new artifact delivered.
+Use `completed` only when the file was written and required checks passed. Use `partial` when
+the file exists but a required follow-up failed, `failed` when no usable artifact was delivered,
+and `cancelled` when the operator stopped the run. Preserve the exact refusal in `--notes`. If
+the audit-log command itself fails, report that telemetry failure separately; it must not change
+the prompt's actual status.
 
 Then state the path you saved to in the final message.
 

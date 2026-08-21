@@ -1,0 +1,4 @@
+^=== bash testing ===$
+^=== FAIL-network-error === \(FAILED\)$
+"fullName":"acme/example"
+stub gh: search failed

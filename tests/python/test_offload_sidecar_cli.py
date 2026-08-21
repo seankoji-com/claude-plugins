@@ -468,10 +468,12 @@ class ConfigConsistencyTest(unittest.TestCase):
 
     def test_server_version_matches_plugin_and_marketplace(self):
         # SERVER_VERSION (offload_sidecar.py) is a hand-maintained constant
-        # reported in the MCP `initialize` response. version-bump.yml only
-        # ever writes plugin.json/marketplace.json, so nothing keeps
-        # SERVER_VERSION in sync automatically — a stale value is invisible
-        # to every other check in this class and to CI.
+        # reported in the MCP `initialize` response. version-bump.yml keeps it
+        # synced with plugin.json/marketplace.json (see .github/workflows/
+        # version-bump.yml), but that's CI automation, not a language-level
+        # guarantee -- this test is defense-in-depth so a stale value is
+        # never invisible to every other check in this class and to CI, even
+        # if the workflow's own sync step is ever bypassed or misses a case.
         with open(_PLUGIN_JSON_PATH, "r", encoding="utf-8") as f:
             plugin_version = json.load(f)["version"]
 

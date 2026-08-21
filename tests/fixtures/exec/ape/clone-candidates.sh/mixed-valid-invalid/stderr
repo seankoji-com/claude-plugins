@@ -1,0 +1,1 @@
+clone-candidates: invalid repository URL 'https://not-github.com/acme/bad' (must be https://github.com/<owner>/<repo>[.git])

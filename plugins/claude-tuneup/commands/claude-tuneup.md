@@ -256,22 +256,37 @@ Don't touch git state for `~/.claude/settings.json` (managed via dotfiles, not t
 
 ### 7. Report
 
+Classify the run before reporting it. Use `completed` only when every requested write passed
+JSON validation and the requested phases finished. Use `partial` when some approved changes
+landed but another change or phase failed, `blocked` when a tool or permission refusal stopped
+the requested work, `failed` when no usable change was applied, and `cancelled` when the operator
+stopped the run. Preserve the exact refusal or command error in the report. Never work around a
+blocked settings write with a wrapper, alternate path, or broader permission rule.
+The audit schema records `blocked` directly, with the exact refusal preserved in `--notes`.
+
 **Before printing the summary below, you MUST run this** (the script itself is
 fail-soft — a missing `jq` or unwritable log dir just warns and exits 0 — but this
 step is not optional; the run isn't done until it executes):
 
+Set `AUDIT_STATUS` to `completed`, `partial`, `blocked`, `failed`, or `cancelled` before running
+the command below. The default keeps the example runnable; replace it when the run did not
+complete successfully.
+
 ```bash
 elapsed_ms=$(( ($(date +%s) - <captured start time>) * 1000 ))
+AUDIT_STATUS="${AUDIT_STATUS:-completed}"
 "${CLAUDE_PLUGIN_ROOT}/scripts/audit-log.sh" \
   --plugin claude-tuneup \
   --command /claude-tuneup \
-  --exit-status completed \
+  --exit-status "$AUDIT_STATUS" \
   --duration-ms "$elapsed_ms" \
   --scope user \
   --notes "<one-line: N added, D duplicates stripped, F findings logged>"
 ```
 
 Then print the concise summary:
+
+- Run status: `completed`, `partial`, `blocked`, `failed`, or `cancelled`, with the exact error when applicable
 
 - Phase 1: N added (M global, K project) from T transcripts
 - Phase 2: D duplicates stripped, P moved global → project, G removed/moved project → global

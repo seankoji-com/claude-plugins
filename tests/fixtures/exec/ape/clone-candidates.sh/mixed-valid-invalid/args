@@ -1,0 +1,7 @@
+test-workspace
+https://github.com/acme/valid
+validrepo
+0
+https://not-github.com/acme/bad
+badrepo
+0

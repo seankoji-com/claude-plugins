@@ -428,6 +428,27 @@ else
   skip "imps/tests/sandbox-wrap-shape.sh" "missing or not executable: $imps_sandbox_wrap_shape"
 fi
 
+# Same visibility invariant and shape as sandbox-wrap-shape.sh above, one
+# layer up the stack: this proves sandbox-smoke.sh's OWN assertion/counting/
+# exit-code logic (not real containment — only the Darwin+SANDBOX_MODE inline
+# run further down proves that) by running sandbox-smoke.sh as a real
+# subprocess against a stubbed sandbox-wrap.sh selected via CLAUDE_PLUGIN_ROOT.
+# No macOS sandbox, no credentials, no spend — runs unconditionally, including
+# on ubuntu-latest CI, which is exactly where the Darwin-gated block below
+# cannot run at all.
+imps_sandbox_smoke_shape="$ROOT/plugins/imps/tests/sandbox-smoke-shape.sh"
+if [ -x "$imps_sandbox_smoke_shape" ]; then
+  sandbox_smoke_shape_out="$(bash "$imps_sandbox_smoke_shape" 2>&1)"
+  sandbox_smoke_shape_rc=$?
+  if [ "$sandbox_smoke_shape_rc" -eq 0 ]; then
+    report "imps/tests/sandbox-smoke-shape.sh" 1
+  else
+    report "imps/tests/sandbox-smoke-shape.sh" 0 "$sandbox_smoke_shape_out"
+  fi
+else
+  skip "imps/tests/sandbox-smoke-shape.sh" "missing or not executable: $imps_sandbox_smoke_shape"
+fi
+
 # Sibling of worktree-shape.sh (which owns the --worktree shape gate); this one
 # owns opencode-dispatch.sh's other free guards: the new --expect-oracle /
 # --result-branch bad_arguments paths, create_result_ref's durability claim
@@ -469,6 +490,48 @@ if [ -x "$imps_state_schema" ]; then
   fi
 else
   skip "imps/tests/state-schema.sh" "missing or not executable: $imps_state_schema"
+fi
+
+# Cross-platform e2e (OpenCode npm channel, Agy plugin channel). These exercise real
+# package-manager/registry machinery (tests/npm-install-smoke.sh talks to the npm
+# registry even for a local tarball path) or a live `agy` binary — neither of which a
+# sandboxed imp run may reach or invoke (see docs/plans/cross-platform-compat.md's
+# "No live opencode or agy model invocations" constraint). Off by default; a maintainer
+# opts in explicitly with XPLAT_E2E=1 (both channels) or the per-channel OPENCODE_E2E=1
+# / AGY_E2E=1. Same skip-vs-pass shape as sandbox-smoke.sh/imps-e2e.sh above: unset means
+# skip, never a silent "ok".
+xplat_npm_smoke="$ROOT/tests/npm-install-smoke.sh"
+if [ -n "${XPLAT_E2E:-}" ] || [ -n "${OPENCODE_E2E:-}" ]; then
+  if [ ! -x "$xplat_npm_smoke" ]; then
+    skip "xplat/npm-install-smoke.sh" "missing or not executable: $xplat_npm_smoke"
+  else
+    xplat_npm_out="$(bash "$xplat_npm_smoke" 2>&1)"
+    xplat_npm_rc=$?
+    if [ "$xplat_npm_rc" -eq 0 ] && printf '%s\n' "$xplat_npm_out" | grep -q '^skip:'; then
+      # npm-install-smoke.sh exits 0 on its own early "npm not on PATH" /
+      # "dist/opencode missing" outs — a real skip, not a pass. rc==0 alone
+      # cannot tell those apart from an actual pass, so the reason line it
+      # printed is what does: without this, an opted-in (XPLAT_E2E=1) run on a
+      # box with no npm would report "ok" here, exactly the silent-green
+      # signal the comment above promises this block never produces.
+      skip "xplat/npm-install-smoke.sh" "$(printf '%s\n' "$xplat_npm_out" | grep '^skip:' | head -1)"
+    elif [ "$xplat_npm_rc" -eq 0 ]; then
+      report "xplat/npm-install-smoke.sh" 1
+    else
+      report "xplat/npm-install-smoke.sh" 0 "$xplat_npm_out"
+    fi
+  fi
+else
+  skip "xplat/npm-install-smoke.sh" "cross-platform e2e disabled by default (set OPENCODE_E2E=1 or XPLAT_E2E=1 to enable; needs npm registry access)"
+fi
+
+if [ -n "${XPLAT_E2E:-}" ] || [ -n "${AGY_E2E:-}" ]; then
+  # Even opted in, this run must not perform a live `agy` invocation itself — that proof
+  # is operator-run only (docs/plans/cross-platform-compat.md item 13: "proof plugin
+  # installs and invokes on both platforms" is [OPERATOR-RUN — not dispatchable]).
+  skip "xplat/agy-live-invocation" "AGY_E2E/XPLAT_E2E enabled, but live agy install+invoke proof is operator-run only — see docs/plans/cross-platform-compat.md item 13"
+else
+  skip "xplat/agy-live-invocation" "cross-platform e2e disabled by default (set AGY_E2E=1 or XPLAT_E2E=1 to enable; needs a live agy binary)"
 fi
 
 echo "---"

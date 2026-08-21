@@ -111,6 +111,7 @@ test('discovery dedupes candidates by fullName across axes before ranking', asyn
 test('a failed clone batch is retried once and results are merged correctly', async () => {
   const logs = []
   const analyzeLabels = []
+  const analyzePrompts = []
   let cloneCallCount = 0
 
   async function agent(prompt, opts) {
@@ -129,6 +130,7 @@ test('a failed clone batch is retried once and results are merged correctly', as
     }
     if (opts.label.startsWith('analyze:')) {
       analyzeLabels.push(opts.label)
+      analyzePrompts.push(prompt)
       return {}
     }
     if (opts.label === 'synthesize') {
@@ -153,6 +155,10 @@ test('a failed clone batch is retried once and results are merged correctly', as
     analyzeLabels.sort(),
     ['analyze:org__alpha', 'analyze:org__beta'],
     'only the merged cloned set (org/alpha from attempt 1, org/beta from the retry) should reach Analysis — org/gamma failed both attempts'
+  )
+  assert.ok(
+    analyzePrompts.every((prompt) => prompt.includes('rev-parse HEAD') && prompt.includes('blob permalink')),
+    'every analysis prompt must require evidence pinned to the cloned commit instead of a moving branch'
   )
 })
 

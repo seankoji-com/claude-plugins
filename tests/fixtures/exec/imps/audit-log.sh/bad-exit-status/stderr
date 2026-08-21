@@ -1,1 +1,1 @@
-audit-log: --exit-status must be one of completed|partial|failed|cancelled, got 'bogus'
+audit-log: --exit-status must be one of completed|partial|blocked|failed|cancelled, got 'bogus'

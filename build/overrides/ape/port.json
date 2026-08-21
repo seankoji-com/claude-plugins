@@ -1,0 +1,4 @@
+{
+  "asset_dirs": [],
+  "reason": "ape ships no assets to either platform. scripts/ape-forage.workflow.js is Claude Workflow orchestration with no runner on either target, and scripts/init-workspace.sh resolves the workspace by interpolating the home environment variable — which dist/ may not carry (build/README.md, 'dist/ invariants') and which build/platform-table.json has no pre_replacements entry for. The remaining gh helpers are directory-siblings of those two and asset selection is per-directory, so the whole directory is dropped and the porting prose in opencode/commands/forage.md and agy/skills/forage.md carries the method inline instead."
+}

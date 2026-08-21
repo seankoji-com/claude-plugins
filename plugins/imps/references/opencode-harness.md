@@ -8,12 +8,17 @@ v1 is **harness + measurement only**. Nothing here changes `/imps`. These are
 hand-invocable scripts; whether `/imps:go` ever gets built is decided by the
 numbers from the measurement protocol at the bottom of this file.
 
-> **Scope: maintainers working inside the `claude-plugins` checkout.** Every
+> **Path prefixes are what's checkout-scoped here — not the audience.** Every
 > command and permission rule below is written repo-relative
-> (`plugins/imps/scripts/…`) and only resolves from the repo root. From an
-> *installed* plugin the same files live under `${CLAUDE_PLUGIN_ROOT}` — substitute
-> that prefix in both the commands and the `permissions.allow` entries, or they
-> will not resolve and the rules will never match.
+> (`plugins/imps/scripts/…`) and only resolves from the root of a `claude-plugins`
+> checkout. From an *installed* plugin the same files live under
+> `${CLAUDE_PLUGIN_ROOT}` — substitute that prefix in both the commands and the
+> `permissions.allow` entries, or they will not resolve and the rules will never
+> match. The generated OpenCode build of `/imps` is a third reader: its dispatch
+> step points here by name and keeps the repo-relative form, because these scripts
+> are deliberately not bundled into `dist/` (they resolve `agent-safehouse` through
+> Homebrew prefixes and canonicalise `$HOME`, which generated artifacts may not
+> carry). That build needs a checkout of this repo to dispatch at all.
 
 The load-bearing idea is the **oracle**: a cheap model is good at grinding
 iterations against a hard pass/fail signal and bad at knowing when to stop. Every

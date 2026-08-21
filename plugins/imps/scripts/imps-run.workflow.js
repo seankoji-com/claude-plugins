@@ -1,5 +1,14 @@
 // imps-run.workflow.js — the free-text run's dispatch/merge/gate/review/finalize pipeline.
 //
+// PLATFORM ASSUMPTION — Claude Code only. This file assumes the `Workflow` tool, the
+// `agent()` dispatch primitive with `isolation: 'worktree'`, model pins by Claude tier
+// name, and ~/.claude/workflows/ as a load path. None of that exists on OpenCode or Agy
+// (docs/platform-matrix.md), so build/generate.py excludes this script from dist/ — see
+// build/overrides/imps/port.json's asset_exclude entry for it. The generated builds run
+// the same pipeline as a foreground prose loop from build/overrides/imps/. Keep that in
+// mind when changing the pipeline: the prose loop is a separate surface and does not
+// track edits here automatically.
+//
 // Canonical copy at ${CLAUDE_PLUGIN_ROOT}/scripts/imps-run.workflow.js. commands/imps.md
 // syncs it into ~/.claude/workflows/imps-run.js on every invocation (plugins can't ship a
 // runnable Workflow directly) and calls Workflow({scriptPath, args}) FRESH every time —
@@ -806,9 +815,10 @@ Report "merged": [{id, label, files changed}] for each that merged cleanly (map 
 
 function headImpReview(defaultBranch) {
   return agent(
-    `You are the Head Imp — a single adversarial reviewer combining two personas (read ${args.pluginRoot}/agents/head-imp.md for your full brief and follow it exactly). Your plugin root is ${args.pluginRoot} — wherever that brief (or anything it points you to) writes a literal \`\${CLAUDE_PLUGIN_ROOT}\` token, substitute this value yourself; it is never auto-expanded for a file you Read this way. Review this diff by running it yourself, never accept it pasted: \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\`. If it produces no output, say so and stop rather than inventing a diff range.
+    `You are the Head Imp — a single adversarial reviewer combining three independent axes (read ${args.pluginRoot}/agents/head-imp.md for your full brief and follow it exactly). Your plugin root is ${args.pluginRoot} — wherever that brief (or anything it points you to) writes a literal \`\${CLAUDE_PLUGIN_ROOT}\` token, substitute this value yourself; it is never auto-expanded for a file you Read this way. Review this diff by running it yourself, never accept it pasted: \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\`. If it produces no output, say so and stop rather than inventing a diff range.
+Intent source: read the Definition of Done and Global Constraints in ${args.goalFilePath}; assess the diff against them independently from architecture and line correctness.
 ${constraintsPointerForReviewer()}
-Argue against the diff per your brief (Technical Architect + Chissy Engineer personas). Apply the amendments your blocker/major findings demand yourself where the fix is small and disjoint; note larger fixes as findings without applying them.
+Argue against the diff per your brief (Technical Architect + Chissy Engineer + Contract axes). Apply the amendments your blocker/major findings demand yourself where the fix is small and disjoint; note larger fixes as findings without applying them.
 Return via the required schema: "verdict" (APPROVE|CHANGES_REQUESTED), "findings" (list of one-line finding summaries), "amendments_applied" (count of fixes you made directly, 0 if none).`,
     { label: 'head-imp-diff', phase: 'Integrate', model: 'opus', schema: HEAD_IMP_SCHEMA }
   )
@@ -1059,7 +1069,7 @@ function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria
     .replace(/[`"$\\]/g, '')
   return agent(
     `Finalize this /imps run. State file: ${args.stateFilePath}. GOAL.md: ${args.goalFilePath}.
-1. You MUST run this now, before any other step below (the script itself is fail-soft about a missing \`jq\` or unwritable log dir — but \`--duration-ms\` itself is a required, strictly-validated argument: passing anything non-numeric, including omitting the flag, makes the script exit 1 and drop this mandatory line entirely): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status completed --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms; if dispatched_at is not a real timestamp — see step 6 — pass 0 here instead of omitting the flag> --scope <project-or-user> --notes "<one-line summary>"\`. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, backtick, dollar sign, or backslash, since any of those would break out of or reinterpret this command's own double-quoted argument.
+1. You MUST run this now, before any other step below (the script itself is fail-soft about a missing \`jq\` or unwritable log dir — but \`--duration-ms\` itself is a required, strictly-validated argument: passing anything non-numeric, including omitting the flag, makes the script exit 1 and drop this mandatory line entirely): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status <choose completed, partial, blocked, failed, or cancelled from the run outcome> --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms; if dispatched_at is not a real timestamp — see step 6 — pass 0 here instead of omitting the flag> --scope <project-or-user> --notes "<one-line summary>"\`. Choose \`blocked\` for a tool or permission refusal, \`partial\` when some work landed but a required phase failed, \`failed\` when no usable result was produced, and \`cancelled\` when the operator stopped the run. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, backtick, dollar sign, or backslash, since any of those would break out of or reinterpret this command's own double-quoted argument.
 2. If a PR exists (${prInfo ? `#${prInfo.number}` : 'none'}), flip it to ready: \`gh pr ready ${prInfo ? prInfo.number : ''}\`. Skip if no PR.
 3. Collect artifact links from the state file's "artifacts" field into the result.
 4. If the state file's "source_discussion" is non-null AND "discussion_comment_url" is still null, post a short outcome comment (≤150 words: what shipped, PR/artifact URLs, unresolved findings — persona verdicts/findings for reference: ${JSON.stringify(verdicts)}; DoD acceptance-criteria coverage for reference, mention any unsatisfied ones: ${JSON.stringify(dodCoverageCriteria || [])}${dodCoverageError ? `, noting the coverage check itself did not complete: ${dodCoverageError}` : ''}) via \`gh api graphql\` addDiscussionComment using source_discussion.id verbatim. Write the returned comment URL into the state file's discussion_comment_url field immediately (patch the state file yourself) — a non-null URL means never post again on a future invocation.

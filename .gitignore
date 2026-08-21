@@ -24,3 +24,12 @@ __pycache__/
 
 # Session scratch spine (written by plan mode / CLAUDE.md workflow, not a repo artifact)
 GOAL.md
+
+# OpenCode auto-provisions this (including a real `npm`/`bun install` of
+# @opencode-ai/plugin, tens of MB) the moment it sees a .opencode/ config dir in a
+# project — confirmed via `strings` on the opencode binary during the xplat spike
+# (docs/platform-matrix.md, Item 12). Its own bundled .gitignore hides the contents
+# from `git status`, but not from a `git add -A` on the directory itself before that
+# .gitignore exists on disk — exclude it at the repo level so a future `opencode run`
+# from this repo's root can never end up one `git add -A` away from committing it.
+.opencode/

@@ -16,7 +16,7 @@ jobs:
     # head to be a same-repo branch (not a fork) before granting the contents:write push.
     if: github.actor != 'github-actions[bot]' && github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Fetch full history so we can diff against the base branch
           fetch-depth: 0
@@ -43,7 +43,11 @@ jobs:
               base_version=$(git show "$BASE:$manifest" 2>/dev/null | jq -r '.version // "0.0.0"')
               current_version=$(jq -r '.version' "$manifest")
 
-              # Only bump if developer hasn't already bumped
+              # Only bump the manifest if the developer hasn't already bumped it
+              # themselves -- but keep SERVER_VERSION in sync either way (below):
+              # this branch used to skip that sync entirely whenever a developer had
+              # already touched the manifest, which is exactly how SERVER_VERSION
+              # drifted from plugin.json in #107.
               if [ "$current_version" = "$base_version" ]; then
                 # Increment patch: split on dot, bump third segment
                 IFS='.' read -r major minor patch <<< "$current_version"
@@ -63,25 +67,28 @@ jobs:
                   .claude-plugin/marketplace.json > "$tmp"
                 mv "$tmp" .claude-plugin/marketplace.json
 
-                sync_version="$new_version"
                 changed=1
               else
-                echo "$plugin_name already bumped ($base_version -> $current_version), skipping"
-                sync_version="$current_version"
+                new_version="$current_version"
+                echo "$plugin_name already bumped ($base_version -> $current_version), skipping manifest bump"
               fi
 
               # Keep any hand-maintained SERVER_VERSION constant(s) under this plugin in
-              # sync — version-bump.yml is otherwise the only writer of plugin.json/
-              # marketplace.json, so nothing else keeps SERVER_VERSION from drifting.
-              # Matched by content rather than an assumed filename, so this covers any
-              # script under the plugin dir that declares the constant.
-              # Runs unconditionally for every changed plugin: auto-bumped plugins sync
-              # to $new_version; hand-bumped plugins sync to their already-updated
-              # $current_version so they don't drift from the manifest.
+              # sync with $new_version -- runs unconditionally, whether this job just
+              # bumped the manifest above or a developer already had. version-bump.yml
+              # is otherwise the only writer of plugin.json/marketplace.json, so nothing
+              # else keeps SERVER_VERSION from drifting. Matched by content rather than
+              # an assumed filename, so this covers any script under the plugin dir that
+              # declares the constant.
               while IFS= read -r script; do
-                sed -i "s/^SERVER_VERSION = \"[^\"]*\"/SERVER_VERSION = \"$sync_version\"/" "$script"
-                grep -q "^SERVER_VERSION = \"$sync_version\"" "$script" \
-                  || { echo "::error file=$script::SERVER_VERSION not updated to $sync_version"; exit 1; }
+                current_server_version=$(sed -n 's/^SERVER_VERSION = "\(.*\)"/\1/p' "$script")
+                if [ "$current_server_version" != "$new_version" ]; then
+                  echo "Syncing SERVER_VERSION in $script: $current_server_version -> $new_version"
+                  sed -i "s/^SERVER_VERSION = \"[^\"]*\"/SERVER_VERSION = \"$new_version\"/" "$script"
+                  grep -q "^SERVER_VERSION = \"$new_version\"" "$script" \
+                    || { echo "::error file=$script::SERVER_VERSION not updated to $new_version"; exit 1; }
+                  changed=1
+                fi
               done < <(grep -rl --include='*.py' '^SERVER_VERSION = "' "$plugin_dir" || true)
             fi
           done
