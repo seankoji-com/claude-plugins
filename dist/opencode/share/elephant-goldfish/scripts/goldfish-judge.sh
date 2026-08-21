@@ -46,17 +46,17 @@ JUDGE_TIMEOUT="${JUDGE_TIMEOUT:-180}"       # seconds; guards gemini/ollama agai
                                              # (auth prompt, network stall, model load)
 
 # Portable timeout wrapper: prefers GNU coreutils `timeout`, falls back to `gtimeout`
-# (Homebrew coreutils on macOS). If neither is on PATH, judge calls run unguarded — a warning
-# is printed rather than refusing to run, since the fail-closed VERDICT-line check below still
-# catches a hang's empty/partial output as ERROR once the process is eventually killed some
-# other way; this only loses the bounded-wait guarantee, not the fail-closed correctness.
+# (Homebrew coreutils on macOS). Timeout availability is mandatory: JUDGE_TIMEOUT
+# guards against unbounded Gemini/Ollama runs (auth prompt, network stall, model load).
+# Fail closed if neither command is on PATH rather than risking unguarded execution.
 TIMEOUT_CMD=()
 if command -v timeout >/dev/null 2>&1; then
   TIMEOUT_CMD=(timeout "$JUDGE_TIMEOUT")
 elif command -v gtimeout >/dev/null 2>&1; then
   TIMEOUT_CMD=(gtimeout "$JUDGE_TIMEOUT")
 else
-  echo "goldfish-judge: no 'timeout'/'gtimeout' on PATH — judge calls are NOT time-bounded." >&2
+  echo "goldfish-judge: no 'timeout'/'gtimeout' on PATH — cannot enforce timeout guardrails" >&2
+  exit 2
 fi
 
 # Classify a report. Echoes one of: READY | NOT_READY | ERROR
