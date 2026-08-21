@@ -258,18 +258,19 @@ landed but another change or phase failed, `blocked` when a tool or permission r
 the requested work, `failed` when no usable change was applied, and `cancelled` when the operator
 stopped the run. Preserve the exact refusal or command error in the report. Never work around a
 blocked settings write with a wrapper, alternate path, or broader permission rule.
-The human-facing `blocked` state maps to `failed` in the current audit schema, with the exact
-refusal preserved in `--notes`.
+The audit schema records `blocked` directly, with the exact refusal preserved in `--notes`.
 
 **Before printing the summary below, you MUST run this** (the script itself is
 fail-soft — a missing `jq` or unwritable log dir just warns and exits 0 — but this
 step is not optional; the run isn't done until it executes):
 
-Set `AUDIT_STATUS` to the matching audit value before running the command below. For a
-human-facing `blocked` result, use `failed`.
+Set `AUDIT_STATUS` to `completed`, `partial`, `blocked`, `failed`, or `cancelled` before running
+the command below. The default keeps the example runnable; replace it when the run did not
+complete successfully.
 
 ```bash
 elapsed_ms=$(( ($(date +%s) - <captured start time>) * 1000 ))
+AUDIT_STATUS="${AUDIT_STATUS:-completed}"
 "${CLAUDE_PLUGIN_ROOT}/scripts/audit-log.sh" \
   --plugin claude-tuneup \
   --command /claude-tuneup \

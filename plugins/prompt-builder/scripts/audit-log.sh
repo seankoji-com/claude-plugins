@@ -17,7 +17,7 @@
 #     --duration-ms <int> [--notes <text>] [--cost-usd <number>] [--scope <user|project>] \
 #     [--tier <text>] [--attempts <int>]
 #
-#   status: completed | partial | failed | cancelled
+#   status: completed | partial | blocked | failed | cancelled
 #   scope, if omitted, is auto-detected: "project" inside a git repo, else "user"
 #   tier, attempts: optional; null when omitted (e.g. tier="opencode" for offloaded work)
 #
@@ -69,8 +69,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$exit_status" in
-  completed|partial|failed|cancelled) ;;
-  *) echo "audit-log: --exit-status must be one of completed|partial|failed|cancelled, got '$exit_status'" >&2; exit 1 ;;
+  completed|partial|blocked|failed|cancelled) ;;
+  *) echo "audit-log: --exit-status must be one of completed|partial|blocked|failed|cancelled, got '$exit_status'" >&2; exit 1 ;;
 esac
 
 case "$duration_ms" in

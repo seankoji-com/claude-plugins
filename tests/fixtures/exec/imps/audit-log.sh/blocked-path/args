@@ -1,0 +1,12 @@
+--plugin
+imps
+--command
+/imps:imps
+--exit-status
+blocked
+--duration-ms
+5
+--scope
+user
+--notes
+permission refusal
