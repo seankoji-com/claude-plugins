@@ -1,6 +1,6 @@
 {
   "name": "ape",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "description": "Forages broadly across open-source repositories or studies one named GitHub source in depth, separating transferable patterns into adopt, adapt, and reject decisions.",
   "author": {
     "name": "seankoji",

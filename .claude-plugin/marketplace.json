@@ -7,31 +7,31 @@
   "plugins": [
     {
       "name": "elephant-goldfish",
-      "version": "0.2.5",
+      "version": "0.2.6",
       "source": "./plugins/elephant-goldfish",
       "description": "Design-doc command with a different-lineage Gemini judge, plus /elephant-goldfish:thinking — steps 1 and 2 of Rensin's process: interrogate the problem, build the rubric, emit the plan."
     },
     {
       "name": "claude-tuneup",
-      "version": "0.1.15",
+      "version": "0.1.16",
       "source": "./plugins/claude-tuneup",
       "description": "Permission audit and settings tuneup — scans transcripts, classifies by scope, deduplicates global vs project settings."
     },
     {
       "name": "prompt-builder",
-      "version": "0.1.18",
+      "version": "0.1.19",
       "source": "./plugins/prompt-builder",
       "description": "Iterative prompt engineering assistant — structures with Anthropic's evidence-based prompting techniques, drafts, critiques, and delivers a finished artefact with test cases."
     },
     {
       "name": "imps",
-      "version": "0.3.44",
+      "version": "0.3.45",
       "source": "./plugins/imps",
       "description": "Swarm orchestration with model-routed execution, deterministic gates, whole-repo audits, PR monitoring, and proof-led blast-radius analysis."
     },
     {
       "name": "ape",
-      "version": "0.2.14",
+      "version": "0.2.15",
       "source": "./plugins/ape",
       "description": "Forages broadly across open-source repositories or studies one named GitHub source in depth for transferable patterns."
     },
