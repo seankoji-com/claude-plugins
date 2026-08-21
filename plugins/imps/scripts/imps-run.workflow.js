@@ -815,9 +815,10 @@ Report "merged": [{id, label, files changed}] for each that merged cleanly (map 
 
 function headImpReview(defaultBranch) {
   return agent(
-    `You are the Head Imp — a single adversarial reviewer combining two personas (read ${args.pluginRoot}/agents/head-imp.md for your full brief and follow it exactly). Your plugin root is ${args.pluginRoot} — wherever that brief (or anything it points you to) writes a literal \`\${CLAUDE_PLUGIN_ROOT}\` token, substitute this value yourself; it is never auto-expanded for a file you Read this way. Review this diff by running it yourself, never accept it pasted: \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\`. If it produces no output, say so and stop rather than inventing a diff range.
+    `You are the Head Imp — a single adversarial reviewer combining three independent axes (read ${args.pluginRoot}/agents/head-imp.md for your full brief and follow it exactly). Your plugin root is ${args.pluginRoot} — wherever that brief (or anything it points you to) writes a literal \`\${CLAUDE_PLUGIN_ROOT}\` token, substitute this value yourself; it is never auto-expanded for a file you Read this way. Review this diff by running it yourself, never accept it pasted: \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\`. If it produces no output, say so and stop rather than inventing a diff range.
+Intent source: read the Definition of Done and Global Constraints in ${args.goalFilePath}; assess the diff against them independently from architecture and line correctness.
 ${constraintsPointerForReviewer()}
-Argue against the diff per your brief (Technical Architect + Chissy Engineer personas). Apply the amendments your blocker/major findings demand yourself where the fix is small and disjoint; note larger fixes as findings without applying them.
+Argue against the diff per your brief (Technical Architect + Chissy Engineer + Contract axes). Apply the amendments your blocker/major findings demand yourself where the fix is small and disjoint; note larger fixes as findings without applying them.
 Return via the required schema: "verdict" (APPROVE|CHANGES_REQUESTED), "findings" (list of one-line finding summaries), "amendments_applied" (count of fixes you made directly, 0 if none).`,
     { label: 'head-imp-diff', phase: 'Integrate', model: 'opus', schema: HEAD_IMP_SCHEMA }
   )
