@@ -89,7 +89,7 @@ jobs:
       # Packages and referencing ${NODE_AUTH_TOKEN}. Every npm command below that needs
       # auth — the preflight `npm view` as well as `npm publish` — therefore just needs
       # NODE_AUTH_TOKEN in its env; neither writes an .npmrc of its own.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '20'
           registry-url: 'https://npm.pkg.github.com'
