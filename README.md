@@ -1,5 +1,9 @@
 # claude-plugins
 
+<p align="center">
+  <img src="docs/assets/claude-plugins-hero.png" alt="claude-plugins banner" width="720">
+</p>
+
 A [Claude Code](https://code.claude.com/) plugin marketplace by [@seankoji](https://github.com/seankoji).
 
 ## Available plugins
@@ -19,7 +23,7 @@ A [Claude Code](https://code.claude.com/) plugin marketplace by [@seankoji](http
 
 ```bash
 # Add the marketplace (one-time)
-claude plugin marketplace add seankoji/claude-plugins
+claude plugin marketplace add seankoji-com/claude-plugins
 
 # Install a plugin
 claude plugin install elephant-goldfish@seankoji
@@ -92,7 +96,7 @@ worth knowing about before you do.
 `dist/agy/<plugin>/` trees:
 
 ```bash
-git clone https://github.com/seankoji/claude-plugins
+git clone https://github.com/seankoji-com/claude-plugins
 cd claude-plugins
 ./install-agy.sh              # installs at master; --ref <branch|tag|sha> to pin
 ./install-agy.sh --uninstall  # reverses exactly what was installed
