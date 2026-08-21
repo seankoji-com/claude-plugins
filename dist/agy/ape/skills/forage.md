@@ -108,7 +108,13 @@ idea transfers freely, verbatim code does not. Write each report to
 refs, the problem it solves, which fingerprint weakness it addresses and where it would
 land here, effort (S/M/L), and its main tradeoff.
 
-### 5. Synthesis — only once every analysis has returned
+### 5. Synthesis — only once every report is confirmed complete
+
+Before reading anything, confirm every cloned repo has a report: for each, check that
+`<workspace>/reports/<owner>__<repo>.md` exists and is non-empty. A missing or empty
+report — an analyst that never wrote it, or wrote nothing — must stop the expedition
+here with `missing_reports` and the list of affected repos (Phase 2); do not synthesize
+from a partial set and do not treat a missing report as "no finding."
 
 Read every `<workspace>/reports/*.md`. Cross-check each technique against the already-in-use
 list and against the other reports; dedupe convergent findings and name the conflicts. Kill
@@ -133,3 +139,6 @@ Report whichever outcome the expedition actually reached:
 - **`clone_failed`** — surface the failed list. Once the user has addressed the cause (auth,
   rate limit, disk space), re-running `/forage` costs only discovery through clone again:
   the fingerprint is reused from the workspace.
+- **`missing_reports`** — surface which repos never produced a usable report. Re-running
+  just their analysis pass (the clones are already on disk) is enough; nothing upstream of
+  Analysis needs to be redone.

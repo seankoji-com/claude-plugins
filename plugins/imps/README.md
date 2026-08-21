@@ -53,7 +53,7 @@ Optional:
 | --- | --- |
 | **`CLAUDE_CDP_URL`** env var | Browser panel via CDP (default `ws://localhost:3000`). Point at a headless-Chrome container, local or LAN. |
 | **Claude-in-Chrome MCP** | Browser panel fallback if no CDP endpoint is reachable. |
-| **`~/.claude/scripts/persona-post.sh`** + dedicated GitHub Apps (`mm-solution-architect`, `mm-grumpy-engineer`, `mm-sre`, `mm-business-analyst`, `mm-ux-designer`) installed on the target repo, with their credentials in 1Password | Independent, per-persona review identity for the persona panel (see [The persona panel](#the-persona-panel)). Absent or failing → that persona's verdict goes to `findings_inline` instead of posting — it never falls back to the orchestrator's own identity. |
+| **`~/.claude/scripts/persona-post.sh`** implementing the protocol in `${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md`, with per-persona GitHub App identities whose credentials live in your secret store | Independent, per-persona review identity for the persona panel (see [The persona panel](#the-persona-panel)). Absent or failing → that persona's verdict goes to `findings_inline` instead of posting — it never falls back to the orchestrator's own identity. |
 
 ## Install
 
@@ -192,20 +192,22 @@ VERDICT: APPROVE | CHANGES_REQUESTED @ <sha>
 ```
 `CHANGES_REQUESTED` requires at least one `[blocker]` or `[major]` finding. Minors and
 nits are recorded but never block. By default each persona posts as a **real GitHub PR
-review under its own dedicated GitHub App identity** (`mm-solution-architect`,
-`mm-grumpy-engineer`, `mm-sre`, `mm-business-analyst`, `mm-ux-designer`) via
-`~/.claude/scripts/persona-post.sh` — never the orchestrator's own `gh`/GitHub-MCP
-access, so each review is attributed to and traceable as a genuinely separate GitHub
-actor, not the session that authored the diff. This is independent *attribution*, not
-an unforgeable *gate*: the orchestrator still holds the credentials `persona-post.sh`
-uses to mint every App's token, so it isn't a control the authoring session is
+review under its own dedicated GitHub App identity** via a posting script
+(`~/.claude/scripts/persona-post.sh`) that implements the protocol in
+`${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md` — never the orchestrator's own
+`gh`/GitHub-MCP access, so each review is attributed to and traceable as a genuinely
+separate GitHub actor, not the session that authored the diff. The posting script uses
+per-persona identities drawn from your secret store; the maintainer's deployment
+(dedicated GitHub Apps + 1Password) is one example. This is independent *attribution*,
+not an unforgeable *gate*: the orchestrator still holds the credentials the posting
+script uses to mint every App's token, so it isn't a control the authoring session is
 structurally unable to satisfy — it fixes the previous self-approval-under-one's-own-
 name problem, not every trust concern a branch-protection rule might assume. If that
 script is absent, fails, or its post can't be verified on the PR for a given persona
-(Apps not installed on this repo, 1Password locked, no `op` access, etc.), that persona's
-verdict fails **closed**: it goes into `findings_inline` for the operator to read or post
-by hand, never under the orchestrator's own identity — the rest of the panel is
-unaffected.
+(GitHub Apps not installed on the target repo, secret store unavailable, etc.), that
+persona's verdict fails **closed**: it goes into `findings_inline` for the operator to
+read or post by hand, never under the orchestrator's own identity — the rest of the
+panel is unaffected.
 
 Pushing/opening the endstate PR and authorizing personas to post live GitHub reviews are
 two separate operator decisions, not one — the `Push & PR?` question (asked once the

@@ -1,6 +1,6 @@
 {
   "name": "ape",
-  "version": "0.2.14",
+  "version": "0.2.16",
   "description": "Apes open-source repos for techniques transferable to your codebase — discovery, ranking, cloning, per-repo analysis, and synthesis run as a real Workflow script, so the orchestrator only sees the fingerprint and final recommendations.",
   "author": {
     "name": "seankoji",

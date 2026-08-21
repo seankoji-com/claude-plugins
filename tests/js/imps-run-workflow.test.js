@@ -313,6 +313,37 @@ test('every code-writing and code-reviewing agent call carries the constraints p
   assert.deepEqual(withMajor.sort(), ['head-imp-diff', 'persona-sre'])
 })
 
+// --- query-task read-only guard + MUTATIONS_ALLOWED opt-out (#123) ---------------------
+
+test('a query task without MUTATIONS_ALLOWED in its spec gets the read-only suffix', async () => {
+  const { agent, calls } = captureAgent()
+  const wf = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+  const queryTask = { id: 2, label: 'look something up', type: 'query', model: 'sonnet', deps: [], spec: 'Find out X. Do not change anything.' }
+
+  await wf.dispatchImp(queryTask, { task: 'run goal' }, undefined, false)
+
+  assert.equal(calls.length, 1)
+  assert.match(calls[0].prompt, /Read-only\. No file changes\. Return structured data\./)
+})
+
+test('a query task whose spec carries the literal MUTATIONS_ALLOWED marker skips the read-only suffix', async () => {
+  const { agent, calls } = captureAgent()
+  const wf = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+  const queryTask = {
+    id: 3,
+    label: 'restart the flaky service',
+    type: 'query',
+    model: 'sonnet',
+    deps: [],
+    spec: 'MUTATIONS_ALLOWED: restart the service over SSH and confirm it comes back healthy.',
+  }
+
+  await wf.dispatchImp(queryTask, { task: 'run goal' }, undefined, false)
+
+  assert.equal(calls.length, 1)
+  assert.doesNotMatch(calls[0].prompt, /Read-only\. No file changes\. Return structured data\./)
+})
+
 // --- Fix-round schema ------------------------------------------------------------------
 
 test('fixLoopRound requires a rationale for every WONTFIX instead of discarding it silently', async () => {

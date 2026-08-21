@@ -6,63 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Plugin versions use a per-touching-PR patch counter rather than semantic-versioning
 meaning; see `CONTRIBUTING.md`.
 
-## [Unreleased] - 2026-08-02
-
-### Fixed
-
-- `plugins/offload-sidecar` (0.3.1) — `tls_ca_file` and `agy_bin` now expand a `~`
-  prefix (new `_env_path()` helper, also applied to `AGY_QUOTA_STATE`). Neither
-  Claude Code's `${user_config.*}` substitution nor this shell-less subprocess ever
-  expanded `~`, so a `~`-prefixed value previously failed closed (`tls_ca_file`) or
-  silently missed the binary (`agy_bin`).
-- `plugins/offload-sidecar` (0.3.1) — `_env()`'s unexpanded-placeholder guard was a
-  bare `"${" in val` substring check, so a value the user wrote themselves that
-  merely contained `${` (e.g. `tls_ca_file='${HOME}/certs/ca.pem'`) was mistaken for
-  an un-substituted `${user_config.*}` placeholder and silently dropped to the
-  default. For `tls_ca_file` this was worse than a no-op: it skipped the informative
-  error for a bad CA path in favor of silent fallback to default system CA
-  verification. Narrowed the guard to an exact match against Claude Code's actual
-  placeholder shapes (`${user_config.<key>}`, `${CLAUDE_PROJECT_DIR}`), so
-  user-written values now pass through untouched.
-
-## [Unreleased] - 2026-07-11
-
-### Changed
-
-- `plugins/offload-sidecar` — Renamed from `ollama-sidecar` (0.3.0): one sidecar for
-  all offloadable work, local or cloud. Added an `agy` (Google Antigravity CLI)
-  engine as two new LLM tiers — `flash` (Gemini Flash: vision, ~1M-token context,
-  bulk cloud work) and `pro` (Gemini Pro: scarce quota, explicit opt-in) — behind a
-  persistent quota gate that rejects cloud calls up front (sliding-window budgets +
-  lockout deadlines parsed from agy output) instead of failing them mid-flight.
-  New operations mined from real session history: `triage_ci_log`,
-  `summarize_test_run`, `triage_service_log`, `digest_task_output`,
-  `digest_review_comments`, `security_scan_digest`, `draft_commit_message`,
-  `draft_pr_body`, `changelog_from_commits`, `html_extract` (LLM);
-  `describe_image`, `verify_screenshot`, `pdf_to_structured` (vision, cloud tiers
-  only); `json_digest`, `xlsx_extract` (deterministic). Existing installs of
-  `ollama-sidecar` keep working but stop receiving updates — reinstall as
-  `offload-sidecar`.
-
-## [Unreleased] - 2026-07-09
-
-### Changed
-
-- `plugins/ape` — Refactored orchestration logic into a real Workflow script with
-  deterministic state management (#59).
-- `plugins/elephant-goldfish` — Reduced scope to the cold-judge kernel; removed
-  hot-judge scaffolding and teaching-mode baggage (#58).
-- `plugins/claude-tuneup` — Generalized scope rules (now applicable to any plugin
-  config, not just tuneup); fixed stale docs; removed edit-proposal flow (#57).
-- `plugins/prompt-builder` — Removed acronym frameworks in favor of Anthropic's
-  evidence-based prompt-engineering techniques (#56).
-- `plugins/ollama-sidecar` — Reframed README and tool description to clarify the
-  "when jq can't parse YAML" use case (#55).
-
-## [Unreleased] - 2026-06-25
+## [Unreleased] - 2026-08-15
 
 ### Added
 
+- Cross-platform build infrastructure for OpenCode and Agy artifacts from frozen Claude
+  sources (#163).
 - `plugins/claude-tuneup` — Permission audit and settings tuneup packaged as a plugin.
   Commands: /claude-tuneup:claude-tuneup. Bundled: scripts/scan_perms.py.
 - `plugins/prompt-builder` — Prompt engineering assistant packaged as a plugin.
@@ -78,12 +27,53 @@ meaning; see `CONTRIBUTING.md`.
 
 ### Changed
 
+- Project `.npmrc` for @seankoji scope; fixed skipped-postinstall docs (#169).
+- OpenCode package publishing to GitHub Packages (#168).
+- `plugins/offload-sidecar` — Renamed from `ollama-sidecar` (0.3.0): one sidecar for
+  all offloadable work, local or cloud. Added an `agy` (Google Antigravity CLI)
+  engine as two new LLM tiers — `flash` (Gemini Flash: vision, ~1M-token context,
+  bulk cloud work) and `pro` (Gemini Pro: scarce quota, explicit opt-in) — behind a
+  persistent quota gate that rejects cloud calls up front (sliding-window budgets +
+  lockout deadlines parsed from agy output) instead of failing them mid-flight.
+  New operations mined from real session history: `triage_ci_log`,
+  `summarize_test_run`, `triage_service_log`, `digest_task_output`,
+  `digest_review_comments`, `security_scan_digest`, `draft_commit_message`,
+  `draft_pr_body`, `changelog_from_commits`, `html_extract` (LLM);
+  `describe_image`, `verify_screenshot`, `pdf_to_structured` (vision, cloud tiers
+  only); `json_digest`, `xlsx_extract` (deterministic). Existing installs of
+  `ollama-sidecar` keep working but stop receiving updates — reinstall as
+  `offload-sidecar`.
+- `plugins/ape` — Refactored orchestration logic into a real Workflow script with
+  deterministic state management (#59).
+- `plugins/elephant-goldfish` — Reduced scope to the cold-judge kernel; removed
+  hot-judge scaffolding and teaching-mode baggage (#58).
+- `plugins/claude-tuneup` — Generalized scope rules (now applicable to any plugin
+  config, not just tuneup); fixed stale docs; removed edit-proposal flow (#57).
+- `plugins/prompt-builder` — Removed acronym frameworks in favor of Anthropic's
+  evidence-based prompt-engineering techniques (#56).
+- `plugins/ollama-sidecar` — Reframed README and tool description to clarify the
+  "when jq can't parse YAML" use case (#55).
 - `.claude-plugin/marketplace.json` name renamed from `claude-plugins` → `seankoji`
   (avoids CLI rejection of names containing "claude").
 - `AGENTS.md` "Validate" section updated to reference CI; manual check condensed to
   a quick one-liner.
 
-### Removed
+### Fixed
 
-- Top-level `commands/`, `scripts/`, `personas/` directories. All content migrated
-  into the respective plugin packages under `plugins/<name>/`.
+- Nine-issue batch remediation: TOCTOU guard, temp file leaks, doc corrections, test
+  coverage, workspace slug collision guard, quota-state persistence, maintainer-private
+  infra refs, Bash 3.2 verification, query task mutation opt-out, Bash rm scoping,
+  tuneup backup coverage, SERVER_VERSION sync, bundled-asset checks, gh exit codes,
+  analyst report validation, timeout/gtimeout guard, platform-neutral prerequisites,
+  ape License section, elephant.md for updated CLI, CHANGELOG collapse, audit-log
+  copy count, plugin.schema.json version convention, LICENSE file (#191).
+- `plugins/offload-sidecar` (0.3.3) — Narrowed `_env()`'s unexpanded-placeholder
+  guard to exact Claude Code shapes (`${user_config.<key>}`,
+  `${CLAUDE_PROJECT_DIR}`) so user-written values containing `${` pass through
+  untouched (#107).
+- `plugins/offload-sidecar` (0.3.1) — `tls_ca_file` and `agy_bin` now expand a `~`
+  prefix (new `_env_path()` helper, also applied to `AGY_QUOTA_STATE`). Neither
+  Claude Code's `${user_config.*}` substitution nor this shell-less subprocess ever
+  expanded `~`, so a `~`-prefixed value previously failed closed (`tls_ca_file`) or
+  silently missed the binary (`agy_bin`).
+- Dependencies: bump actions/checkout from 4.3.1 to 7.0.1 (#162).

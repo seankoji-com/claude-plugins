@@ -17,6 +17,15 @@ const SCRIPT_PATH = path.join(__dirname, '..', '..', 'plugins', 'ape', 'scripts'
 // out named functions, wrap the ENTIRE body in an async Function constructed with those
 // same ambient names as parameters (stubbed per test) and let it run end-to-end,
 // returning whatever the script's own top-level `return` produces.
+//
+// The script also does `const fs = require('node:fs')` at module scope to check
+// analyst report completeness before Synthesis. `require` is a binding local to this
+// test module's CommonJS wrapper, not a global — the AsyncFunction constructor evals
+// its body against the global scope, so the workflow's own `require('node:fs')` call
+// would throw ReferenceError unless `require` is threaded in as a named parameter too,
+// same as agent/parallel/phase/args/log. We inject a stub that intercepts 'fs' and
+// 'node:fs' to hand back a fake filesystem (see fakeFs below) instead of touching the
+// real one, and falls back to the real `require` for anything else.
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
 
 function baseArgs(overrides = {}) {
@@ -29,11 +38,29 @@ function baseArgs(overrides = {}) {
   }
 }
 
-function runWorkflow({ agent, parallel, phase, args, log }) {
+// A minimal fs stand-in keyed by absolute path -> byte size. A path with size 0 mimics
+// a report file that was created but never written to; a path absent from the map
+// mimics one that was never created at all (statSync throws ENOENT for both real
+// reasons in production).
+function fakeFs(sizesByPath = {}) {
+  return {
+    statSync(p) {
+      if (!Object.prototype.hasOwnProperty.call(sizesByPath, p)) {
+        const err = new Error(`ENOENT: no such file or directory, stat '${p}'`)
+        err.code = 'ENOENT'
+        throw err
+      }
+      return { size: sizesByPath[p] }
+    },
+  }
+}
+
+function runWorkflow({ agent, parallel, phase, args, log, fsStub }) {
   const source = fs.readFileSync(SCRIPT_PATH, 'utf8')
   const body = source.replace('export const meta', 'const meta')
-  const factory = new AsyncFunction('agent', 'parallel', 'phase', 'args', 'log', body)
-  return factory(agent, parallel, phase || (() => {}), args || baseArgs(), log || (() => {}))
+  const factory = new AsyncFunction('agent', 'parallel', 'phase', 'args', 'log', 'require', body)
+  const requireStub = (name) => (name === 'fs' || name === 'node:fs' ? fsStub || fakeFs() : require(name))
+  return factory(agent, parallel, phase || (() => {}), args || baseArgs(), log || (() => {}), requireStub)
 }
 
 // Mirrors the real Workflow tool's parallel(): each thunk runs independently; one
@@ -128,7 +155,11 @@ test('a failed clone batch is retried once and results are merged correctly', as
     throw new Error(`unexpected agent call: ${opts.label}`)
   }
 
-  const outcome = await runWorkflow({ agent, parallel, log: (m) => logs.push(m) })
+  const fsStub = fakeFs({
+    '/workspace/reports/org__alpha.md': 120,
+    '/workspace/reports/org__beta.md': 84,
+  })
+  const outcome = await runWorkflow({ agent, parallel, log: (m) => logs.push(m), fsStub })
 
   assert.equal(cloneCallCount, 2, 'expected exactly one retry attempt (first + retry), not more')
   assert.equal(outcome.status, 'final')
@@ -145,6 +176,67 @@ test('a failed clone batch is retried once and results are merged correctly', as
     ['analyze:org__alpha', 'analyze:org__beta'],
     'only the merged cloned set (org/alpha from attempt 1, org/beta from the retry) should reach Analysis — org/gamma failed both attempts'
   )
+})
+
+test('blocks with reason "missing_reports" and never reaches synthesis when a report file was never written', async () => {
+  const logs = []
+  let synthesisCalled = false
+
+  async function agent(prompt, opts) {
+    if (opts.label === 'discover:A') return { candidates: [candidate('org/alpha'), candidate('org/beta')], tooFew: false }
+    if (opts.label === 'discover:B') return { candidates: [], tooFew: true }
+    if (opts.label === 'discover:C') return { candidates: [], tooFew: true }
+    if (opts.label === 'rank') return { selected: [candidate('org/alpha'), candidate('org/beta')], rejected: [] }
+    if (opts.label === 'clone') return { cloned: ['org/alpha', 'org/beta'], failed: [] }
+    if (opts.label.startsWith('analyze:')) return {}
+    if (opts.label === 'synthesize') {
+      synthesisCalled = true
+      return { recommendations: 'x', nearMisses: '', stats: { reposAnalyzed: 2, techniquesSurfaced: 1 } }
+    }
+    throw new Error(`unexpected agent call: ${opts.label}`)
+  }
+
+  // org/alpha's report exists; org/beta's was never created (absent from the map ->
+  // fakeFs throws ENOENT, mirroring an analyst that returned without ever writing it).
+  const fsStub = fakeFs({ '/workspace/reports/org__alpha.md': 120 })
+  const outcome = await runWorkflow({ agent, parallel, log: (m) => logs.push(m), fsStub })
+
+  assert.equal(synthesisCalled, false, 'synthesis must not run when a report is missing')
+  assert.deepEqual(outcome, {
+    status: 'blocked',
+    reason: 'missing_reports',
+    missing: ['org/beta'],
+    notes: '1 of 2 analyst report(s) are missing or empty: org/beta. Synthesis requires a complete report set.',
+  })
+})
+
+test('blocks with reason "missing_reports" when a report file exists but is empty', async () => {
+  let synthesisCalled = false
+
+  async function agent(prompt, opts) {
+    if (opts.label === 'discover:A') return { candidates: [candidate('org/alpha'), candidate('org/beta')], tooFew: false }
+    if (opts.label === 'discover:B') return { candidates: [], tooFew: true }
+    if (opts.label === 'discover:C') return { candidates: [], tooFew: true }
+    if (opts.label === 'rank') return { selected: [candidate('org/alpha'), candidate('org/beta')], rejected: [] }
+    if (opts.label === 'clone') return { cloned: ['org/alpha', 'org/beta'], failed: [] }
+    if (opts.label.startsWith('analyze:')) return {}
+    if (opts.label === 'synthesize') {
+      synthesisCalled = true
+      return { recommendations: 'x', nearMisses: '', stats: { reposAnalyzed: 2, techniquesSurfaced: 1 } }
+    }
+    throw new Error(`unexpected agent call: ${opts.label}`)
+  }
+
+  const fsStub = fakeFs({
+    '/workspace/reports/org__alpha.md': 120,
+    '/workspace/reports/org__beta.md': 0,
+  })
+  const outcome = await runWorkflow({ agent, parallel, fsStub })
+
+  assert.equal(synthesisCalled, false, 'synthesis must not run when a report is empty')
+  assert.equal(outcome.status, 'blocked')
+  assert.equal(outcome.reason, 'missing_reports')
+  assert.deepEqual(outcome.missing, ['org/beta'])
 })
 
 test('blocks with reason "no_candidates" when discovery+dedupe yields fewer than 2 candidates', async () => {
