@@ -90,23 +90,24 @@ failed list.
 
 ### 4. Analysis — one pass per cloned repo
 
-Extract 1–3 techniques per repo, each grounded in `file:line` evidence from that repo.
+Extract 1–3 techniques per repo, each grounded in a GitHub blob permalink pinned to the
+cloned repo's exact commit SHA and line range.
 "They use CI / linting / tests" is not a finding; an abstraction, a testing strategy, a
 build or orchestration trick, an architectural seam is. Read in this order and stop as soon
 as you have enough: README, then `docs/`, `ARCHITECTURE*` and any ADR directory; then a
 depth-2 tree ignoring `node_modules|dist|build|vendor|.git`; then targeted dives only where
 a transferable technique looks plausible. Never read vendored code, lockfiles, generated
-files, snapshots/fixtures or minified assets. Shell stays read-only (tree/ls/wc): no git
-operations, no network, no writes outside the report path, and pass the repo path as an
-argument rather than `cd`-ing into it.
+files, snapshots/fixtures or minified assets. Shell stays read-only (`git -C <repo> rev-parse
+HEAD`, tree/ls/wc): no network, no writes outside the report path, and pass the repo path as
+an argument rather than `cd`-ing into it.
 
 Judge applicability against the fingerprint **including its already-in-use list** —
 recommending something the host already has is a failure. "Impressive, but doesn't transfer
 because X" is a valid and useful verdict; say it. Flag copyleft licences (GPL/AGPL): the
 idea transfers freely, verbatim code does not. Write each report to
-`<workspace>/reports/<owner>__<repo>.md` (≤400 words) — per technique: name, `file:line`
-refs, the problem it solves, which fingerprint weakness it addresses and where it would
-land here, effort (S/M/L), and its main tradeoff.
+`<workspace>/reports/<owner>__<repo>.md` (≤400 words) — per technique: name, immutable
+permalink, the problem it solves, which fingerprint weakness it addresses and where it would
+land here, effort (S/M/L), its main tradeoff, and the strongest evidence against transfer.
 
 ### 5. Synthesis — only once every analysis has returned
 
@@ -116,8 +117,9 @@ anything already in use, anything incompatible with an existing pattern, and any
 analyst honestly flagged as not transferring — that rejection is signal, not noise to
 override. Rank the survivors by expected value against the fingerprint's weaknesses, not by
 how confidently they were written up. Write `<workspace>/RECOMMENDATIONS.md`: per technique,
-ranked — what it is, source repo plus `file:line`, the specific modules **here** it would
-land in, effort (S/M/L), and tradeoffs and risks (mandatory, not just upside).
+ranked — what it is, immutable source permalink, the specific modules **here** it would
+land in, effort (S/M/L), tradeoffs and risks (mandatory, not just upside), and the strongest
+evidence against adopting it.
 
 ## Phase 2 — Report the outcome
 

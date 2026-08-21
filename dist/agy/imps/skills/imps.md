@@ -112,7 +112,9 @@ code block). It is purely cosmetic — skip silently if absent.
 
 The Head Imp is a one-shot adversarial reviewer dispatched at the **deepest reasoning
 tier available** (see [Model selection reference](#model-selection-reference)). It reviews
-plans and diffs by arguing against them.
+three axes independently: architecture, line correctness, and contract fit. For a diff it
+reads applicable repository standards plus GOAL.md's Definition of Done and Global
+Constraints; clean code cannot mask the wrong behavior or unauthorized scope.
 
 Dispatch it exactly like any other task — one `agy -p` invocation, model passed at
 invocation:
@@ -271,6 +273,10 @@ when the plan must quote or reason about its contents. Then:
     spec or open it with an explicit pointer ("Read <GOAL_PATH>, section T<N>, before
     acting"). Label-only tasks improvise, and improvised work is how runs produce
     unauthorized artifacts.
+    For a bug, regression, flake, performance problem, or unexplained failing gate, the
+    spec must point to `__PLUGIN_ROOT__/references/diagnosis-loop.md` and include the known
+    failing command. If none exists, constructing and running a red-capable command is the
+    task's first deliverable.
   - **Tier** — assign by reasoning complexity (see
     [Model selection reference](#model-selection-reference)). The tier is resolved to a
     concrete model id and passed with `--model` at dispatch (matrix Item 8 records that
@@ -508,8 +514,9 @@ conflicting paths — do not resolve silently. After merging, do not trust the r
 worktree path alone: check `git status --short` and `git log --oneline -3` in the real
 checkout before assuming the tree is clean.
 
-**Step 6 — Head Imp diff review**, then the gates from discovery (build · lint · test ·
-type). A red gate stops the loop and goes to Phase 4 for a decision.
+**Step 6 — Head Imp diff review** across architecture, line correctness, and contract fit
+against GOAL.md, then the gates from discovery (build · lint · test · type). A red gate
+stops the loop and goes to Phase 4 for a decision.
 
 ## Phase 4 — Decision points
 
