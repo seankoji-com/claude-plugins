@@ -159,7 +159,8 @@ when the plan must quote or reason about its contents. Then:
     concrete model id and passed with `--model` at dispatch (matrix Item 8 records that
     `agy -p` accepts `--model`). No per-skill model field is emitted anywhere in this
     plugin's Agy artifacts — none is established for this platform.
-  - **Type** — `code` (file changes, worktree-isolated) · `query` (read-only) · `publish`
+  - **Type** — `code` (file changes, worktree-isolated) · `query` (read-only by default;
+    add `MUTATIONS_ALLOWED` to the task spec to authorize live mutations) · `publish`
     (GitHub artifacts; use `gh api graphql` for Discussions, not REST)
   - **Oracle** *(optional, `code` tasks only)* — a machine-checkable acceptance command
     that **fails today**. Verify it is red before dispatch and green after: an oracle
