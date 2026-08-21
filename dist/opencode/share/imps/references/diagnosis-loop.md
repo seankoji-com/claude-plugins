@@ -14,6 +14,10 @@ gate failures. The loop exists to prevent a plausible theory from replacing evid
 4. Rank 3–5 falsifiable hypotheses. For each, state the observation that would distinguish
    it, then test one variable at a time. Prefer debugger inspection or targeted, uniquely
    tagged logs over broad logging.
+   If none is confirmed, first verify that the minimized symptom still reproduces. If it
+   does, gather one new discriminator and rank a fresh set. After two unproductive rounds,
+   stop and report the evidence or access still missing. If the symptom no longer reproduces,
+   report the result as inconclusive. Never promote the least-wrong hypothesis to a cause.
 5. Turn the minimized reproducer into a failing regression test at the public seam that
    exhibits the real bug. Apply the smallest fix, watch the test pass, then rerun the
    original command.

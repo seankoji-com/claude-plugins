@@ -16,7 +16,8 @@ manufacturing a merge conflict.
   (routing, hashing, session storage, tests) that belong in separate tasks.
 
 **Wide mechanical refactors are the exception.** When one rename or shared-type change has a
-blast radius too wide for any slice to stay green, use expand–migrate–contract: add the new
+blast radius too wide for any slice to stay green, use expand–migrate–contract, also called
+parallel change: add the new
 form beside the old; migrate disjoint caller batches that depend on the expansion; remove the
 old form only after every batch completes. Never split a behavior horizontally merely to
 create more parallel rows.
