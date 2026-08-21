@@ -149,9 +149,10 @@ when the plan must quote or reason about its contents. Then:
     acting"). Label-only tasks improvise, and improvised work is how runs produce
     unauthorized artifacts.
     For a bug, regression, flake, performance problem, or unexplained failing gate, the
-    spec must point to `__PLUGIN_ROOT__/references/diagnosis-loop.md` and include the known
-    failing command. If none exists, constructing and running a red-capable command is the
-    task's first deliverable.
+    spec must point to the installed absolute
+    `__PLUGIN_ROOT__/references/diagnosis-loop.md` path and include the known failing command.
+    If none exists, constructing and running a red-capable command is the task's first
+    deliverable.
   - **Tier** — assign by reasoning complexity (see
     [Model selection reference](#model-selection-reference)). The tier is resolved to a
     concrete model id and passed with `--model` at dispatch (matrix Item 8 records that
