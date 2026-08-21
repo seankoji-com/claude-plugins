@@ -211,6 +211,20 @@ fi
 # Check ALL commands, not just thinking.md — the regression class the original
 # elephant-goldfish-only check was written to catch is equally relevant to every
 # other command.
+bundled_asset_ref_is_safe() {
+  case "/$1/" in
+  *"/../"*) return 1 ;;
+  *) return 0 ;;
+  esac
+}
+
+if bundled_asset_ref_is_safe "scripts/tool.sh" &&
+  ! bundled_asset_ref_is_safe "scripts/../../outside.sh"; then
+  report "consistency/bundled-assets-path-safety" 1
+else
+  report "consistency/bundled-assets-path-safety" 0 "path traversal guard failed"
+fi
+
 bundled_assets_check() {
   local ok=1 detail=""
   shopt -s nullglob
@@ -250,6 +264,13 @@ bundled_assets_check() {
         continue
         ;;
       esac
+
+      if ! bundled_asset_ref_is_safe "$ref"; then
+        cs_ok=0
+        cs_detail="$cs_detail
+${rel} references unsafe \${CLAUDE_PLUGIN_ROOT}/$ref (parent traversal is not allowed)"
+        continue
+      fi
 
       # Use -e (not -f): references may name directories (e.g. scripts/, personas/)
       # as well as regular files.

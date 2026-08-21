@@ -1759,6 +1759,18 @@ class QuotaStatePathTest(unittest.TestCase):
             path = sidecar.quota_state_path()
         self.assertEqual(path, os.path.expanduser("~/state/quota.json"))
 
+    def test_save_accepts_relative_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old_cwd = os.getcwd()
+            try:
+                os.chdir(tmp)
+                with mock.patch.dict(os.environ, {"AGY_QUOTA_STATE": "quota.json"}):
+                    sidecar.save_quota_state({"calls": {}, "lockouts": {}})
+                with open("quota.json", encoding="utf-8") as f:
+                    self.assertEqual(json.load(f), {"calls": {}, "lockouts": {}})
+            finally:
+                os.chdir(old_cwd)
+
 
 class CallAgyTest(unittest.TestCase):
     def setUp(self):
@@ -1946,6 +1958,24 @@ class CloudHandlerTest(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertIn("budget exhausted", result["reason"])
         self.assertIn("quota_usage", result)
+
+    def test_quota_persistence_error_is_returned_as_payload(self):
+        self._write("ci.log", "build failed")
+        with mock.patch.object(
+            sidecar,
+            "call_agy",
+            side_effect=sidecar.SidecarError("Cannot persist quota state"),
+        ):
+            result = sidecar.handle_process_local_file(
+                {
+                    "operation": "triage_ci_log",
+                    "input_path": "ci.log",
+                    "output_path": "out.json",
+                    "tier": "flash",
+                }
+            )
+        self.assertEqual(result["status"], "error")
+        self.assertIn("Cannot persist quota state", result["reason"])
 
     def test_flash_success_payload_reports_engine_and_quota(self):
         self._write("ci.log", "Step build: error TS2304 blah\nexit 1")

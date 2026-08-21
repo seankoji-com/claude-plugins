@@ -505,7 +505,9 @@ def save_quota_state(state):
     across processes, which is a worse failure mode than one lost response."""
     path = quota_state_path()
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(state, f)
@@ -3329,7 +3331,7 @@ def handle_process_local_file(args):
                     output_text = call_agy(cfg, system_prompt, input_path=input_real)
                 else:
                     output_text = call_agy(cfg, system_prompt, input_text=input_text)
-            except AgyError as e:
+            except (AgyError, SidecarError) as e:
                 # No automatic cloud->local failover: a text op CAN be
                 # retried on 'deep'/'fast' (the error says so), but silently
                 # substituting a much smaller local model for the one
