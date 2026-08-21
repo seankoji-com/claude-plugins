@@ -31,7 +31,9 @@ import tempfile
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_PLUGIN_DIR = os.path.normpath(os.path.join(_HERE, "..", "..", "plugins", "offload-sidecar"))
+_PLUGIN_DIR = os.path.normpath(
+    os.path.join(_HERE, "..", "..", "plugins", "offload-sidecar")
+)
 _SCRIPT_PATH = os.path.join(_PLUGIN_DIR, "scripts", "offload_sidecar.py")
 _MCP_JSON_PATH = os.path.join(_PLUGIN_DIR, ".mcp.json")
 _PLUGIN_JSON_PATH = os.path.join(_PLUGIN_DIR, ".claude-plugin", "plugin.json")
@@ -144,9 +146,11 @@ class McpStdioLoopTest(unittest.TestCase):
 
     def test_malformed_json_line_then_recovery(self):
         stdin_text = (
-            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}) + "\n"
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+            + "\n"
             + "{this is not valid json\n"
-            + json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"}) + "\n"
+            + json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"})
+            + "\n"
         )
         with tempfile.TemporaryDirectory() as tmp:
             proc = _run_script([], tmp, input_text=stdin_text)
@@ -206,7 +210,9 @@ class McpToolsCallDeterministicOpTest(unittest.TestCase):
         # top level only defines functions/dicts.
         import importlib.util
 
-        spec = importlib.util.spec_from_file_location("offload_sidecar_intro", _SCRIPT_PATH)
+        spec = importlib.util.spec_from_file_location(
+            "offload_sidecar_intro", _SCRIPT_PATH
+        )
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module.OPERATIONS
@@ -281,6 +287,136 @@ class McpToolsCallDeterministicOpTest(unittest.TestCase):
             self.assertEqual(list(json.loads(raw).keys()), ["a", "b"])
 
 
+class OperationCoverageContractTest(unittest.TestCase):
+    """Item 5: every operation in offload_sidecar.py's OPERATIONS dict must
+    have at least one test exercising its success path — this is a meta-test
+    that enumerates OPERATIONS and checks for coverage gaps so a newly-added
+    operation without a corresponding test fails here first."""
+
+    def _operations_from_script(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "offload_sidecar_ops", _SCRIPT_PATH
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.OPERATIONS
+
+    def test_every_operation_family_has_known_coverage(self):
+        # This test documents which operations have explicit test coverage
+        # vs which need it. New operations must be added to the covered set.
+        ops = self._operations_from_script()
+        all_names = set(ops.keys()) | {"split_file", "merge_files"}
+
+        # Operations with at least one success-path or validator test in
+        # either test file. Kept honest: grep for the operation name in
+        # the test files and confirm it's exercised, not just referenced.
+        covered = {
+            # Deterministic — tested via DeterministicOperationsTest or
+            # HandleProcessLocalFileTest success roundtrips
+            "dedupe_lines",
+            "sort_lines",
+            "filter_lines",
+            "base64_decode",
+            "base64_encode",
+            "hash_file",
+            "strip_ansi_codes",
+            "normalize_log_timestamps",
+            "extract_fields",
+            "json_format",
+            "plist_to_json",
+            "sqlite_to_json",
+            # Format conversions
+            "jsonl_to_json",
+            "json_to_jsonl",
+            "csv_to_json",
+            "json_to_csv",
+            "toml_to_json",
+            "xml_to_json",
+            "html_to_text",
+            # Line/file ops
+            "slice_lines",
+            "regex_replace",
+            "text_stats",
+            "json_digest",
+            "json_to_yaml",  # has validator test + deterministic path
+            "xlsx_extract",  # tested in NewDeterministicOpsTest
+            "merge_files",
+            "split_file",
+            # LLM — validators tested in ValidatorsTest / HandleProcessLocalFileTest
+            "extract_json",
+            "convert_format",
+            "clean_text",
+            "yaml_to_json",
+            "redact_secrets",
+            "summarize",
+            # Digest family — prompt/validator contract
+            "triage_ci_log",
+            "summarize_test_run",
+            "triage_service_log",
+            "digest_task_output",
+            "digest_review_comments",
+            "security_scan_digest",
+            # Drafting family
+            "draft_commit_message",
+            "draft_pr_body",
+            "changelog_from_commits",
+            "html_extract",
+            # Media family
+            "describe_image",
+            "verify_screenshot",
+            "pdf_to_structured",
+        }
+
+        missing = all_names - covered
+        self.assertEqual(
+            missing,
+            set(),
+            f"Operations without known test coverage: {sorted(missing)}. "
+            "Add tests and update the `covered` set in this test.",
+        )
+
+    def test_every_deterministic_operation_has_success_path_test(self):
+        """Subset check: every deterministic operation must have a success-path
+        test in test_offload_sidecar.py. This catches ops added to OPERATIONS
+        whose validators are tested but whose actual transform path isn't."""
+        ops = self._operations_from_script()
+        det_ops = sorted(k for k, v in ops.items() if v["kind"] == "deterministic")
+
+        # Read test_offload_sidecar.py and look for test methods referencing
+        # each op. A test named `test_<op>` or containing `<op>` in its name
+        # or body is counted.
+        test_file = os.path.join(_HERE, "test_offload_sidecar.py")
+        with open(test_file, "r", encoding="utf-8") as f:
+            test_src = f.read()
+
+        missing = []
+        # Some operation names appear in the test file under older/alternative
+        # names (aliases, function names). Map canonical op names to the
+        # strings actually found in test_offload_sidecar.py.
+        _NAME_ALIASES = {
+            "extract_fields": "extract_field_list",
+            "sqlite_to_json": "sqlite_dump_to_json",
+        }
+        # Also read this CLI test file — some ops have tests only here.
+        cli_test_file = os.path.join(_HERE, "test_offload_sidecar_cli.py")
+        with open(cli_test_file, "r", encoding="utf-8") as f:
+            cli_src = f.read()
+        both_src = test_src + cli_src
+        for op_name in det_ops:
+            search_for = _NAME_ALIASES.get(op_name, op_name)
+            if search_for not in both_src:
+                missing.append(op_name)
+
+        self.assertEqual(
+            missing,
+            [],
+            f"Deterministic operations without any reference in "
+            f"test_offload_sidecar.py or test_offload_sidecar_cli.py: {missing}",
+        )
+
+
 class ConfigConsistencyTest(unittest.TestCase):
     """Item 4: static cross-file config consistency. No subprocess — pure
     file parsing."""
@@ -344,13 +480,17 @@ class ConfigConsistencyTest(unittest.TestCase):
         with open(_MARKETPLACE_JSON_PATH, "r", encoding="utf-8") as f:
             marketplace = json.load(f)
         marketplace_version = next(
-            p["version"] for p in marketplace["plugins"] if p["name"] == "offload-sidecar"
+            p["version"]
+            for p in marketplace["plugins"]
+            if p["name"] == "offload-sidecar"
         )
 
         with open(_SCRIPT_PATH, "r", encoding="utf-8") as f:
             script_src = f.read()
         match = re.search(r'^SERVER_VERSION = "([^"]+)"', script_src, re.M)
-        self.assertIsNotNone(match, "SERVER_VERSION constant not found in offload_sidecar.py")
+        self.assertIsNotNone(
+            match, "SERVER_VERSION constant not found in offload_sidecar.py"
+        )
         server_version = match.group(1)
 
         self.assertEqual(

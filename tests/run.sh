@@ -43,7 +43,10 @@ set -uo pipefail
 # The plugin scripts themselves are deliberately 3.2-clean: they have to run
 # on the system bash of the macOS hosts this harness's Seatbelt tests target.
 case "${BASH_VERSINFO[0]:-0}" in
-  0|1|2|3) echo "tests/run.sh needs bash 4+ (found ${BASH_VERSION:-unknown}); on macOS: brew install bash" >&2; exit 2 ;;
+0 | 1 | 2 | 3)
+  echo "tests/run.sh needs bash 4+ (found ${BASH_VERSION:-unknown}); on macOS: brew install bash" >&2
+  exit 2
+  ;;
 esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -95,29 +98,43 @@ run_exec_case() {
   # maintainer's own shell config (real elephant-goldfish usage often exports these)
   # can't leak into the fixture and make goldfish-judge.sh call a real ollama/gemini
   # with a non-stub model name.
-  ( cd "$test_home" && unset OLLAMA_MODEL GEMINI_MODEL
-    HOME="$test_home" PATH="$STUBS:$PATH" bash "$target" "${args[@]+"${args[@]}"}" >"$out" 2>"$err" )
+  (
+    cd "$test_home" && unset OLLAMA_MODEL GEMINI_MODEL
+    HOME="$test_home" PATH="$STUBS:$PATH" bash "$target" "${args[@]+"${args[@]}"}" >"$out" 2>"$err"
+  )
   exit_code=$?
 
   local want_exit=0
   [ -f "$case_dir/exit_code" ] && want_exit="$(cat "$case_dir/exit_code")"
-  [ "$exit_code" = "$want_exit" ] || { ok=0; detail="$detail
-exit code: want $want_exit, got $exit_code"; }
+  [ "$exit_code" = "$want_exit" ] || {
+    ok=0
+    detail="$detail
+exit code: want $want_exit, got $exit_code"
+  }
 
   if [ -f "$case_dir/stdout" ]; then
-    diff -u "$case_dir/stdout" "$out" >"$diff_file" 2>&1 || { ok=0; detail="$detail
-$(cat "$diff_file")"; }
+    diff -u "$case_dir/stdout" "$out" >"$diff_file" 2>&1 || {
+      ok=0
+      detail="$detail
+$(cat "$diff_file")"
+    }
   elif [ -f "$case_dir/stdout.contains" ]; then
     while IFS= read -r pattern; do
       [ -z "$pattern" ] && continue
-      grep -qE "$pattern" "$out" || { ok=0; detail="$detail
-missing pattern in stdout: $pattern"; }
+      grep -qE "$pattern" "$out" || {
+        ok=0
+        detail="$detail
+missing pattern in stdout: $pattern"
+      }
     done <"$case_dir/stdout.contains"
   fi
 
   if [ -f "$case_dir/stderr" ]; then
-    diff -u "$case_dir/stderr" "$err" >"$diff_file" 2>&1 || { ok=0; detail="$detail
-$(cat "$diff_file")"; }
+    diff -u "$case_dir/stderr" "$err" >"$diff_file" 2>&1 || {
+      ok=0
+      detail="$detail
+$(cat "$diff_file")"
+    }
   fi
 
   report "$name" "$ok" "$detail"
@@ -133,17 +150,28 @@ run_unit_case() {
 
   local actual expected ok=1 detail=""
   if [ -f "$case_dir/arg" ]; then
-    actual="$( (__SOURCED__=1; source "$target"; "$func" "$(cat "$case_dir/arg")") 2>&1 )"
+    actual="$( (
+      __SOURCED__=1
+      source "$target"
+      "$func" "$(cat "$case_dir/arg")"
+    ) 2>&1)"
   elif [ -f "$case_dir/stdin" ]; then
-    actual="$( (__SOURCED__=1; source "$target"; "$func") <"$case_dir/stdin" 2>&1 )"
+    actual="$( (
+      __SOURCED__=1
+      source "$target"
+      "$func"
+    ) <"$case_dir/stdin" 2>&1)"
   else
     report "$name" 0 "no arg or stdin fixture"
     return
   fi
 
   expected="$(cat "$case_dir/expected" 2>/dev/null || true)"
-  [ "$actual" = "$expected" ] || { ok=0; detail="want: $expected
-got:  $actual"; }
+  [ "$actual" = "$expected" ] || {
+    ok=0
+    detail="want: $expected
+got:  $actual"
+  }
   report "$name" "$ok" "$detail"
 }
 
@@ -177,48 +205,104 @@ ${other#"$ROOT"/} differs from ${first#"$ROOT"/}"
   report "consistency/audit-log.sh" "$consistent" "$detail"
 fi
 
-# Thinking bundled-asset consistency: /elephant-goldfish:thinking drives its whole pipeline
-# through ${CLAUDE_PLUGIN_ROOT}/... paths — three scripts and six templates. A renamed or
-# deleted asset leaves the command syntactically fine and semantically broken: the Bash call
-# fails at runtime, mid-interrogation, after the user has already spent 20 minutes. Assert
-# every path the command names actually ships. (Replaces the former recon/thinking-literals
-# check, whose literals all belonged to the removed verify phase.)
-thinking_assets_check() {
-  local eg="$ROOT/plugins/elephant-goldfish"
-  local command="$eg/commands/thinking.md"
-  local ok=1 detail="" found=0
+# Bundled-asset consistency: every plugin command that references
+# ${CLAUDE_PLUGIN_ROOT}/... must ship every path it names. A renamed or deleted
+# asset leaves the command syntactically fine and semantically broken at runtime.
+# Check ALL commands, not just thinking.md — the regression class the original
+# elephant-goldfish-only check was written to catch is equally relevant to every
+# other command.
+bundled_asset_ref_is_safe() {
+  case "/$1/" in
+  *"/../"*) return 1 ;;
+  *) return 0 ;;
+  esac
+}
 
-  if [ ! -f "$command" ]; then
-    report "consistency/thinking-assets" 0 "missing $command"
+if bundled_asset_ref_is_safe "scripts/tool.sh" &&
+  ! bundled_asset_ref_is_safe "scripts/../../outside.sh"; then
+  report "consistency/bundled-assets-path-safety" 1
+else
+  report "consistency/bundled-assets-path-safety" 0 "path traversal guard failed"
+fi
+
+bundled_assets_check() {
+  local ok=1 detail=""
+  shopt -s nullglob
+  local commands=("$ROOT"/plugins/*/commands/*.md)
+  shopt -u nullglob
+
+  if [ "${#commands[@]}" -eq 0 ]; then
+    report "consistency/bundled-assets" 0 "no command files found"
     return
   fi
 
-  # Every ${CLAUDE_PLUGIN_ROOT}/<subdir>/<file> reference, deduplicated.
-  while IFS= read -r ref; do
-    [ -n "$ref" ] || continue
-    found=$((found + 1))
-    if [ ! -f "$eg/$ref" ]; then
-      ok=0
-      detail="$detail
-commands/thinking.md references \${CLAUDE_PLUGIN_ROOT}/$ref, which does not exist"
+  for command_file in "${commands[@]}"; do
+    # Derive plugin dir: "plugins/<plugin>/commands/<name>.md" -> plugin dir is
+    # "plugins/<plugin>".
+    local rel="${command_file#"$ROOT"/}"
+    local plugin_dir="${rel%%/commands/*}"
+
+    # Pre-filter: only files with ${CLAUDE_PLUGIN_ROOT}/<path> (path-based refs
+    # with a trailing / and at least one alphanum). Excludes bare ${CLAUDE_PLUGIN_ROOT}
+    # without a path — those are just informational, not bundled-asset references.
+    if ! grep -qE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9]' "$command_file"; then
+      continue
     fi
-  done <<EOF
-$(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9_./-]+' "$command" \
-    | sed 's|\${CLAUDE_PLUGIN_ROOT}/||' | sort -u)
+
+    local cs_ok=1 cs_detail="" cs_found=0 cs_skipped=0
+
+    # Extract every ${CLAUDE_PLUGIN_ROOT}/<subpath> reference, deduplicated.
+    while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      cs_found=$((cs_found + 1))
+
+      # Skip template patterns like <script>.py*, <slug>.md, scripts/* —
+      # these describe a convention, not a specific bundled asset.
+      case "$ref" in
+      *[\<\>\*\?]*)
+        cs_skipped=$((cs_skipped + 1))
+        continue
+        ;;
+      esac
+
+      if ! bundled_asset_ref_is_safe "$ref"; then
+        cs_ok=0
+        cs_detail="$cs_detail
+${rel} references unsafe \${CLAUDE_PLUGIN_ROOT}/$ref (parent traversal is not allowed)"
+        continue
+      fi
+
+      # Use -e (not -f): references may name directories (e.g. scripts/, personas/)
+      # as well as regular files.
+      if [ ! -e "$ROOT/$plugin_dir/$ref" ]; then
+        cs_ok=0
+        cs_detail="$cs_detail
+${rel} references \${CLAUDE_PLUGIN_ROOT}/$ref, which does not exist"
+      fi
+    done <<EOF
+$(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9_./-]+' "$command_file" |
+      sed 's|\${CLAUDE_PLUGIN_ROOT}/||' | sort -u)
 EOF
 
-  # A command that suddenly references nothing means the extraction broke, not that the
-  # command got simpler — fail rather than reporting a vacuous pass.
-  if [ "$found" -lt 3 ]; then
-    ok=0
-    detail="$detail
-found only $found bundled-asset references in commands/thinking.md (expected at least 3)"
-  fi
+    # Vacuous-pass guard: the file matched the pre-filter (it has path-based
+    # ${CLAUDE_PLUGIN_ROOT} references), so if extraction yields zero total
+    # matches the regex is broken — fail rather than reporting a vacuous pass.
+    if [ "$cs_found" -lt 1 ]; then
+      cs_ok=0
+      cs_detail="$cs_detail
+${rel} contains \${CLAUDE_PLUGIN_ROOT}/ references but none were extracted (extraction failure)"
+    fi
 
-  report "consistency/thinking-assets" "$ok" "$detail"
+    if [ "$cs_ok" -eq 0 ]; then
+      ok=0
+      detail="$detail$cs_detail"
+    fi
+  done
+
+  report "consistency/bundled-assets" "$ok" "$detail"
 }
 
-thinking_assets_check
+bundled_assets_check
 
 # Seatbelt is last-match-wins, so deny-credentials.sbpl.in's worktrees/modules
 # chain is ordered, not just present: deny the subtrees, re-allow only this
@@ -249,21 +333,34 @@ sbpl_order_check() {
   local want
   for want in l_hooks l_modules l_worktrees l_allow l_redeny; do
     if [ -z "${!want}" ]; then
-      ok=0; detail="$detail
+      ok=0
+      detail="$detail
 missing expected rule for $want"
     fi
   done
   if [ "$ok" = 1 ]; then
     # Every broad deny must precede the reallow; the reallow must precede its
     # own re-denies. Anything else and last-match-wins silently inverts.
-    [ "$l_hooks"     -lt "$l_allow" ] || { ok=0; detail="$detail
-@GITMETA@/hooks deny (line $l_hooks) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"; }
-    [ "$l_modules"   -lt "$l_allow" ] || { ok=0; detail="$detail
-@GITMETA@/modules deny (line $l_modules) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"; }
-    [ "$l_worktrees" -lt "$l_allow" ] || { ok=0; detail="$detail
-@GITMETA@/worktrees deny (line $l_worktrees) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"; }
-    [ "$l_allow"     -lt "$l_redeny" ] || { ok=0; detail="$detail
-the @REAL_GITDIR@ reallow (line $l_allow) must come BEFORE its own re-denies (line $l_redeny)"; }
+    [ "$l_hooks" -lt "$l_allow" ] || {
+      ok=0
+      detail="$detail
+@GITMETA@/hooks deny (line $l_hooks) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"
+    }
+    [ "$l_modules" -lt "$l_allow" ] || {
+      ok=0
+      detail="$detail
+@GITMETA@/modules deny (line $l_modules) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"
+    }
+    [ "$l_worktrees" -lt "$l_allow" ] || {
+      ok=0
+      detail="$detail
+@GITMETA@/worktrees deny (line $l_worktrees) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"
+    }
+    [ "$l_allow" -lt "$l_redeny" ] || {
+      ok=0
+      detail="$detail
+the @REAL_GITDIR@ reallow (line $l_allow) must come BEFORE its own re-denies (line $l_redeny)"
+    }
   fi
   report "imps/sbpl-rule-order" "$ok" "$detail"
 }
@@ -293,11 +390,11 @@ else
   smoke_out="$(bash "$sandbox_smoke" 2>&1)"
   smoke_rc=$?
   case "$smoke_rc" in
-    0)  report "imps/sandbox-smoke.sh" 1 ;;
-    # 77 == "cannot run here": Seatbelt does not nest, so running this from
-    # inside Claude Code's own Bash sandbox proves nothing either way.
-    77) skip "imps/sandbox-smoke.sh" "sandbox cannot be applied here (nested sandbox); run it unsandboxed" ;;
-    *)  report "imps/sandbox-smoke.sh" 0 "$smoke_out" ;;
+  0) report "imps/sandbox-smoke.sh" 1 ;;
+  # 77 == "cannot run here": Seatbelt does not nest, so running this from
+  # inside Claude Code's own Bash sandbox proves nothing either way.
+  77) skip "imps/sandbox-smoke.sh" "sandbox cannot be applied here (nested sandbox); run it unsandboxed" ;;
+  *) report "imps/sandbox-smoke.sh" 0 "$smoke_out" ;;
   esac
 fi
 
@@ -306,10 +403,10 @@ if [ -x "$imps_e2e" ]; then
   e2e_out="$(bash "$imps_e2e" 2>&1)"
   e2e_rc=$?
   case "$e2e_rc" in
-    # 77 == the script's own "gate not met" status; it prints the reason itself.
-    77) skip "imps/tests/e2e.sh" "$(printf '%s\n' "$e2e_out" | tail -n 1 | sed 's/^skip e2e: //')" ;;
-    0)  report "imps/tests/e2e.sh" 1 ;;
-    *)  report "imps/tests/e2e.sh" 0 "$e2e_out" ;;
+  # 77 == the script's own "gate not met" status; it prints the reason itself.
+  77) skip "imps/tests/e2e.sh" "$(printf '%s\n' "$e2e_out" | tail -n 1 | sed 's/^skip e2e: //')" ;;
+  0) report "imps/tests/e2e.sh" 1 ;;
+  *) report "imps/tests/e2e.sh" 0 "$e2e_out" ;;
   esac
 else
   # Same visibility invariant as sandbox-smoke.sh above: missing/non-executable

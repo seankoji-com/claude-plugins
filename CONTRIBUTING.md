@@ -4,13 +4,26 @@ Contributions welcome — new plugins, improvements to existing ones, docs fixes
 
 ## Prerequisites
 
+### Plugin runtime
+
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- `jq` (for local validation and CI parity)
-- `shellcheck` (shell script linter)
-- `node` (for `node --check` validation of Workflow scripts)
-- `pipx` (for `check-jsonschema` and other Python tools)
-- Python 3 with `PyYAML` (for frontmatter schema validation)
 - Plugin-specific prerequisites vary — see the relevant `plugins/<name>/README.md`
+
+### Maintainer validation tools (needed for CI parity)
+
+These are required to run the full validation suite locally (`bash tests/run.sh` and the
+CI checks in `.github/workflows/validate.yml`).
+
+| Tool | macOS (`brew`) | Ubuntu (`apt`) | Generic |
+|------|----------------|----------------|---------|
+| `jq` | `brew install jq` | `sudo apt install jq` | — |
+| `shellcheck` | `brew install shellcheck` | `sudo apt install shellcheck` | — |
+| `node` | `brew install node` | `sudo apt install nodejs` | — |
+| `pipx` | `brew install pipx` | `sudo apt install pipx` | `python3 -m pip install --user pipx` |
+| `python3` + `PyYAML` | `brew install python3 && pip3 install pyyaml` | `sudo apt install python3 python3-yaml` | `pip install pyyaml` |
+
+`check-jsonschema` is invoked via `pipx run check-jsonschema` and does not need a
+separate installation step.
 
 ## Repo layout
 

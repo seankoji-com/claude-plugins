@@ -1,6 +1,6 @@
 # claude-plugins — Elephant (design of record)
 <!-- Authoritative design doc. "Design is the new code." A zero-context session re-bootstraps
-     from this file alone. Last reconciled: 2026-07-10 against 4753ad9 (issue #61 item 6). -->
+     from this file alone. Last reconciled: 2026-08-08 against ce248dd (issue #131). -->
 
 ## The Problem
 
@@ -47,7 +47,7 @@ AGENTS.md                            # maintainer guide (in-repo agents only)
    CI rejects any manifest that has one (`.github/workflows/validate.yml:23-24`). Every plugin manifest
    here omits it (e.g. `plugins/imps/.claude-plugin/plugin.json`).
 2. **Invocation is always `/<plugin>:<command>`** — the plugin name namespaces every command. A file
-   `plugins/imps/commands/status.md` is invoked `/imps:status`; `plugins/elephant-goldfish/commands/elephant.md`
+   `plugins/imps/commands/issue-mode.md` is invoked `/imps:issue-mode`; `plugins/elephant-goldfish/commands/elephant.md`
    is `/elephant-goldfish:elephant`. The command *file stem* is the command name; a nested file (e.g.
    `plugins/imps/commands/issue-mode.md`) becomes `/imps:issue-mode`.
 3. **Marketplace `name` vs git `source` are different identifiers.** You **ADD** the marketplace by its
@@ -90,7 +90,7 @@ Mnemonic: **read from `${CLAUDE_PLUGIN_ROOT}`, write to `~/.claude/`.**
 
 ## Alternatives
 
-- **One plugin per tool vs one bundled mega-plugin.** Chosen: one plugin per tool (4 separate packages
+- **One plugin per tool vs one bundled mega-plugin.** Chosen: one plugin per tool (6 separate packages
   under `plugins/`). This lets users install only what they want (`claude plugin install prompt-builder@seankoji`
   without dragging in `imps`), and keeps each plugin's manifest, README, and CI surface independent. A single
   bundled plugin would force all-or-nothing installs and couple unrelated release cadences. *(Inferred
@@ -172,8 +172,7 @@ Mnemonic: **read from `${CLAUDE_PLUGIN_ROOT}`, write to `~/.claude/`.**
     argument: free-text task, issue-driven (`/imps 42 43 51`), checklist-file (`README.md:23-49`).
   - `/imps:issue-mode` (`commands/issue-mode.md`) — issue-driven mode (scout issues → rolling dispatch in
     isolated worktrees → holding branch → gates → persona panel → operator handoff).
-  - `/imps:status` (`commands/status.md`) — self-rescheduling heartbeat for active runs; stops when the
-    state dir is empty.
+  - `/imps:imp-agency` (`commands/imp-agency.md`) — whole-repo audit (purpose-first, then technical health) producing an `/imps:imps`-ready remediation plan; one wrangler subagent fans out per-dimension finders, adversarially refutes every P0/P1, runs a completeness critic, and synthesizes a checklist (`README.md:111-125`).
   - `/imps:prs` (`commands/prs.md`) — proactive PR monitor; addresses review comments, CI failures, merge
     conflicts; stops when the PR is merged/closed/48h old (`README.md:51-56`).
 - Bundled assets (`README.md:96-104`): 5 persona briefs at `${CLAUDE_PLUGIN_ROOT}/personas/<slug>.md`
@@ -241,16 +240,33 @@ Five things must change **together** — missing one breaks the marketplace:
 
 ### CI checks (cite `.github/workflows/validate.yml`)
 
-Runs on every push and PR (`validate.yml:3`). Five steps:
-1. **Marketplace manifest** — `marketplace.json` is valid JSON (`:11-14`).
+Runs on every push and PR (`validate.yml:3`). Two jobs — `validate` (15 checks across the marketplace + all 6
+plugins) and `behavioral-tests` (3 test-runner steps):
+1. **Marketplace manifest** — `marketplace.json` is valid JSON (`:16-19`).
 2. **All plugin manifests** — each `plugins/*/.claude-plugin/plugin.json` is valid JSON, has a non-empty
-   `name`, and has **no** `commands` field (`:16-26`).
-3. **Name↔source consistency** — for each marketplace entry, the `source` dir exists and its manifest's
-   `name` matches the marketplace `name` (`:28-36`).
-4. **Shell scripts executable** — every git-tracked `plugins/**/*.sh` has mode `100755` (`:38-46`).
-5. **Bundled-asset path hygiene** — no hardcoded bundled `~/.claude/` paths
-   (`~/.claude/scripts/scan_perms`, `~/.claude/imps/imps-intro`, `~/.claude/imps/personas/`) in any
-   `plugins/*/commands/*.md` — use `CLAUDE_PLUGIN_ROOT` instead (`:48-58`).
+   `name`, has **no** `commands` field, and has a `version` (`:21-33`).
+3. **JSON Schema contracts** — marketplace and every plugin manifest validated against their draft-07
+   schemas (`:35-41`).
+4. **Command/agent frontmatter** — every `commands/*.md` and `agents/*.md` frontmatter block is extracted
+   and validated against `schemas/command-frontmatter.schema.json` or `schemas/agent-frontmatter.schema.json`
+   (`:43-76`).
+5. **README presence** — every plugin has a `README.md` and is listed in the root `README.md` (`:78-87`).
+6. **Name↔source consistency** — for each marketplace entry, the `source` dir exists and its manifest
+   `name` matches the marketplace `name` (`:89-97`).
+7. **Registration completeness** — the set of manifest names matches the set of marketplace entry names
+   exactly; no extras, no omissions (`:99-103`).
+8. **Version consistency** — `marketplace.json` version matches each `plugin.json` version; on PRs,
+   changed plugin files require a version bump (`:105-142`).
+9. **Scripts executable** — every git-tracked `plugins/**/*.sh` and `plugins/**/*.py` has mode `100755`
+   (`:144-152`).
+10. **Shellcheck** — all `.sh` scripts pass shellcheck at severity ≥ warning (`:154-156`).
+11. **Node/Python syntax** — all `.js` Workflow scripts pass `node --check`, all `.py` scripts pass
+    `python3 -m py_compile` (`:158-173`).
+12. **Contract-name agreement** (imps only) — ruling vocabulary and section names are consistent across
+    `imps-run.workflow.js`, `imps.md`, and `imp-agency.md` (`:175-219`).
+13. **Bundled-asset path hygiene** — no hardcoded `~/.claude/` paths referencing bundled assets in any
+    `plugins/*/commands/*.md` — use `CLAUDE_PLUGIN_ROOT` instead (`:221-256`).
+14. **Behavioral tests** — `tests/run.sh`, `tests/run-python.sh`, `tests/run-js.sh` (`:258-270`).
 
 Local pre-commit check (`AGENTS.md:48-52`):
 ```bash
@@ -263,7 +279,7 @@ grep -rn --include="*.md" 'CLAUDE_PLUGIN_ROOT' plugins/*/commands/ | head
 - `schemas/marketplace.schema.json` — draft-07; requires `name`, `owner` (`{name, url}`), and `plugins[]`
   (each requires `name`, `source`, `description`).
 - `schemas/plugin.schema.json` — draft-07; requires `name`, `version`, `description`, `author` (`{name,
-  url}`), `homepage`, `repository`, `license`, `keywords` (≥1) (`plugin.schema.json:7`). All four manifests
+  url}`), `homepage`, `repository`, `license`, `keywords` (≥1) (`plugin.schema.json:7`). All six manifests
   satisfy this.
 
 ### Install / usage (cite `README.md:16-30`)
@@ -274,7 +290,7 @@ claude plugin install elephant-goldfish@seankoji               # install a plugi
 claude plugin install elephant-goldfish@seankoji --scope project   # project-scoped (shared via .claude/)
 claude plugin marketplace update                               # keep up to date
 ```
-Then invoke any command as `/<plugin>:<command>`, e.g. `/imps:status` or `/prompt-builder:prompt-builder`.
+Then invoke any command as `/<plugin>:<command>`, e.g. `/imps:prs` or `/prompt-builder:prompt-builder`.
 
 ## Open questions / unverified
 

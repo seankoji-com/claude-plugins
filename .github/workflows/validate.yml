@@ -13,6 +13,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check no Python cache artifacts are tracked
+        run: |
+          if git ls-files | grep -qE '(__pycache__/|\.pyc$|\.ruff_cache/)'; then
+            echo "ERROR: Python cache artifacts found in tracked files"
+            git ls-files | grep -E '(__pycache__/|\.pyc$|\.ruff_cache/)'
+            exit 1
+          fi
+          echo "No Python cache artifacts tracked"
+
       - name: Validate marketplace manifest
         run: |
           jq empty .claude-plugin/marketplace.json
@@ -271,6 +280,28 @@ jobs:
 
       - name: Run tests/run-js.sh
         run: bash tests/run-js.sh
+  macos-syntax:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Confirm Bash version
+        run: bash --version
+
+      - name: Bash syntax check all shipped scripts (Bash 3.2 target)
+        # These scripts target macOS system Bash 3.2; `bash -n` is a syntax-only
+        # parse (no execution) and catches Bash 4+ constructs that would break on
+        # the oldest supported interpreter.  The full behavioral test harness
+        # (tests/run.sh) requires Bash 4+ and runs in the `behavioral-tests` job
+        # on ubuntu-latest — this job only verifies that shipped scripts parse
+        # under the oldest supported Bash.
+        run: |
+          set -e
+          for f in plugins/*/scripts/*.sh; do
+            echo "  bash -n $f"
+            bash -n "$f"
+          done
+          echo "All shipped scripts parse under $(bash --version | head -1)"
 
   # Regenerates dist/opencode and dist/agy from the committed sources on a clean
   # ubuntu-latest checkout and fails if the result differs from what's committed. This
