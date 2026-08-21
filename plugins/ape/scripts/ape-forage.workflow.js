@@ -212,7 +212,7 @@ Honesty requirements:
 - "Impressive, but doesn't transfer because X" is a valid and useful verdict. Say it.
 - Flag copyleft licenses (GPL/AGPL): the idea transfers freely, verbatim code does not.
 
-Write the report to ${reportPath} (<=400 words). Per technique: name — immutable source permalink — problem it solves — which fingerprint weakness it addresses and where it would land in the host project — effort (S/M/L) — main tradeoff and strongest evidence against transfer.
+Write the report to ${reportPath} (<=600 words). Per technique: name — immutable source permalink — problem it solves — which fingerprint weakness it addresses and where it would land in the host project — effort (S/M/L) — main tradeoff and strongest evidence against transfer.
 
 Then return ONLY: the repo name plus one line per technique (name + applicability verdict). Three lines maximum.`
 }

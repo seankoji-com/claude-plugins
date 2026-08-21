@@ -149,7 +149,7 @@ test('a failed clone batch is retried once and results are merged correctly', as
   )
   assert.ok(
     analyzePrompts.every((prompt) => prompt.includes('rev-parse HEAD') && prompt.includes('blob permalink')),
-    'every analysis must pin evidence to the cloned commit instead of a moving branch'
+    'every analysis prompt must require evidence pinned to the cloned commit instead of a moving branch'
   )
 })
 

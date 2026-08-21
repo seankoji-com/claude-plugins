@@ -97,7 +97,7 @@ Judge applicability against the fingerprint **including its already-in-use list*
 recommending something the host already has is a failure. "Impressive, but doesn't transfer
 because X" is a valid and useful verdict; say it. Flag copyleft licences (GPL/AGPL): the
 idea transfers freely, verbatim code does not. Write each report to
-`<workspace>/reports/<owner>__<repo>.md` (≤400 words) — per technique: name, immutable
+`<workspace>/reports/<owner>__<repo>.md` (≤600 words) — per technique: name, immutable
 permalink, the problem it solves, which fingerprint weakness it addresses and where it would
 land here, effort (S/M/L), its main tradeoff, and the strongest evidence against transfer.
 

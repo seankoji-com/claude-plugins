@@ -177,9 +177,11 @@ Branch: <branch>. Repo: <repo>.
 Failure logs:
 <logs — truncated to 150 lines>
 
-First read `${CLAUDE_PLUGIN_ROOT}/references/diagnosis-loop.md` and follow it. The failing CI
-check is the initial feedback loop; tighten it to the smallest command that still detects the
-same symptom before editing code.
+First read `${CLAUDE_PLUGIN_ROOT}/references/diagnosis-loop.md`. Treat the captured failing CI
+result as step 1's red evidence; do not rerun the whole workflow merely to prove it fails.
+Reproduce the same symptom with the smallest local command you can, then continue at step 2.
+If the failure is CI-only and cannot be reproduced locally, return the missing evidence instead
+of guessing.
 
 Steps:
 1. git fetch origin <branch>
