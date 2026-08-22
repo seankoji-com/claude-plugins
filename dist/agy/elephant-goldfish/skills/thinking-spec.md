@@ -1,7 +1,7 @@
 ---
 name: thinking-spec
 description: >
-  This skill should be used after discovery.md exists for a topic and the user wants to define
+  Use when discovery.md exists for a topic and the user wants to define
   how the eventual output will be judged. Trigger phrases include "let's build the rubric",
   "define the acceptance criteria for X", "how will we know the output on X is good", "thinking
   spec". Do NOT use this skill if discovery.md is missing for the topic — direct the user to

@@ -1,5 +1,8 @@
 ---
-description: Tune up Claude Code permissions — scan recent transcripts for common read-only Bash/MCP patterns (classified by scope) and add them, then audit ~/.claude/settings.json vs project .claude/settings.json to strip duplicates and move misplaced entries
+description: >
+  Use when Claude Code permission prompts are repetitive or settings scopes may be untidy.
+  Scans transcripts, proposes safe read-only rules, and audits global versus project scope;
+  do not use for changing tool behavior or granting write permissions.
 argument-hint: '[--scan-only | --audit-only | --dry-run | --no-reflect]'
 ---
 

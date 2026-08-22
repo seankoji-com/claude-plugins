@@ -479,7 +479,13 @@ prominent callout above the list if any criterion is unsatisfied, and a separate
 line if any is unverifiable — they are different claims. Both go **before** the Push & PR
 question, never after.
 
-**Finalize.** Print the results block:
+**Finalize.** Before printing results, assemble the run's nontrivial decision points:
+Head Imp amendments, conflicts resolved, skipped gates or tasks, and advisory-check
+failures. Replace the bounded body of GOAL.md's existing `## Decision trail` section with
+one plain, checkbox-free bullet per pivot, or `_None._` when there were none. Never append
+or emit a second heading; routine actions and achieved outcomes do not belong there.
+
+Then print the results block:
 
 ```
   merged:    #6 <label>    (3 files)

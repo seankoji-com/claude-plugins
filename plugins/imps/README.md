@@ -126,6 +126,10 @@ issue numbers (`/imps:issue-mode 42 43 51`) or a structured JSON input:
 Self-rescheduling via `ScheduleWakeup` — do NOT wrap it with `/loop`.
 
 - **`/imps:prs`** — proactive PR monitor. After `/imps:imps` pushes and creates the endstate PR, activate this to automatically address review comments, fix CI failures, and resolve merge conflicts. Stops when the PR is merged, closed, or 48 h old.
+- **`/imps:blast-radius`** — read-only, proof-led analysis of a PR, diff, commit range,
+  or file change. Traces consumers outside the edited lines and reports which risks reached
+  executable proof, which were cleared, and which remain unproven. It never fixes or
+  publishes findings.
 
 ## `/imps:imp-agency` — audit → imps-ready plan
 
@@ -138,7 +142,7 @@ it to the user as a gate — then hands the whole audit to a single **imp-agency
 (unlike the free-text run, this path is unchanged: a single-segment subagent, not a
 Workflow script — see [What it does](#what-it-does)). Inside it, one finder per applicable
 dimension (`purpose`, `docs`, `ci`, `tests`, `security`, `performance`, `ux`, `stack`,
-`ops`, `dx`) fans out as nested background `imp` agents (the Workflow tool is not
+`ops`, `dx`, `verification`) fans out as nested background `imp` agents (the Workflow tool is not
 available to subagents), every P0/P1 finding is adversarially refuted, a completeness
 critic catches the suspiciously-clean dimension, and the survivors are synthesized into
 the checklist plan.
@@ -157,8 +161,10 @@ sonnet; the parts with real analysis are upgraded: the deep-judgment finders (`p
 synthesis is an **opus** sub-call (it writes the most-read output), and the
 cross-dimension completeness critic runs on **fable** — the widest-decision-space call —
 falling back to opus where Fable isn't available. The evidence-gathering finders (`docs`,
-`ci`, `ux`, `ops`, `dx`) stay on sonnet: a stronger model doesn't find more stale docs or
-missing lint gates.
+`ci`, `ux`, `ops`, `dx`, `verification`) stay on sonnet: a stronger model doesn't find
+more stale docs or missing lint gates. The `verification` finder inventories and drives
+existing project-local launch, doctor, scenario, evidence, and cleanup paths, then
+distinguishes harness gaps from product defects.
 
 ```
 /imps:imp-agency [--focus docs,tests,security] [--out /abs/path/plan.md]
@@ -269,7 +275,7 @@ Written to `~/.claude/imps/` on first run — not bundled:
 | Path | Purpose |
 | --- | --- |
 | `~/.claude/imps/runs/<slug>.json` | Per-project run state — resume spine, owned by the Workflow script after handover; it heartbeats `last_heartbeat` + `tasks_done` while imps run, so `cat` this file for live progress. Every invocation of the script is fresh (never `resumeFromRunId`) — this file, plus git ground truth, is the entire resume mechanism |
-| `~/.claude/imps/runs/<slug>.md` | Per-run `GOAL.md` spine (`/compact`-durable) — lives here, not in the repo, so writing it never needs project-directory permission |
+| `~/.claude/imps/runs/<slug>.md` | Per-run `GOAL.md` spine (`/compact`-durable), including the final nontrivial decision trail — lives here, not in the repo, so writing it never needs project-directory permission |
 | `~/.claude/imps/runs/<slug>.prs.json` | Per-PR monitor state for `/imps:prs` |
 | `~/.claude/imps/learnings.md` | Self-tuning `## Active rules` (≤10 bullets) + per-run notes |
 | `~/.claude/audit.jsonl` | One structured JSON line per completed run — shared across plugins in this marketplace (schema in the root `AGENTS.md`) |

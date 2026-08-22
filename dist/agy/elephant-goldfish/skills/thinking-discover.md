@@ -1,7 +1,7 @@
 ---
 name: thinking-discover
 description: >
-  This skill should be used when the user wants to think through a decision, research
+  Use when the user wants to think through a decision, research
   question, purchase, report, or code change before any real work starts on it. Trigger
   phrases include "help me think through X", "interrogate me about X", "let's scope out X",
   "start thinking on X", or "poke holes in my thinking on X". Do NOT use this skill when a

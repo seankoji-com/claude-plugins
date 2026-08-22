@@ -1,9 +1,9 @@
 ---
 name: imps:prs
 description: >
-  Proactive PR monitor for /imps:imps runs. Polls the main-branch PR for review comments,
-  CI failures, and merge conflicts, then spawns agents to fix them automatically.
-  Self-reschedules via ScheduleWakeup; stops when the PR is merged, closed, or 48 h old.
+  Use when an existing /imps:imps pull request should be monitored and repaired for review
+  comments, CI failures, or merge conflicts. Do not use to create a PR or audit an
+  unrelated pull request.
 disable-model-invocation: true
 ---
 

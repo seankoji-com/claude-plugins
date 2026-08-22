@@ -1,6 +1,9 @@
 ---
 name: forage
-description: Forage through OSS repos for techniques transferable to this codebase
+description: >
+  Use when the current project needs broad discovery across multiple OSS repositories
+  for transferable techniques. Do not use when the user already named one GitHub source;
+  use /study for that depth-first comparison.
 ---
 
 Forage open-source repositories for techniques transferable to this project.

@@ -1,11 +1,9 @@
 ---
 name: imp-agency
 description: >
-  Whole-repo audit — fitness for purpose first, then technical health — that produces an
-  /imps:imps-ready remediation plan. A wrangler subagent fans out finders across the
-  applicable dimensions (a purpose finder may verdict delete; operator-gated), refutes
-  every P0/P1 adversarially, runs a completeness critic, and synthesizes a checklist-file
-  GOAL plan.
+  Use when an entire repository needs a read-only fitness and technical-health audit that
+  produces an /imps:imps-ready remediation plan. Do not use for one change's downstream
+  effects; use /imps:blast-radius for that narrower question.
 argument-hint: '[--focus dim1,dim2] [--out path]'
 ---
 
@@ -18,7 +16,7 @@ Arguments: `$ARGUMENTS`
 > 🔍 **imp-agency** — whole-repo audit → imps-ready plan
 >
 > A wrangler subagent runs the audit end to end — one finder per dimension (purpose,
-> docs, CI, tests, security, performance, UX, stack, ops, DX), every serious finding
+> docs, CI, tests, security, performance, UX, stack, ops, DX, verification), every serious finding
 > adversarially refuted, a completeness critic, then synthesis into an `/imps:imps`
 > checklist plan. Effectiveness before craftsmanship: the purpose finder asks whether
 > each component earns its existence and may verdict **delete** — those land in an
@@ -40,7 +38,7 @@ subagent.
 
 - `--focus <dims>` (optional) — comma-separated subset of the dimension keys
   (`purpose`, `docs`, `ci`, `tests`, `security`, `performance`, `ux`, `stack`, `ops`,
-  `dx`); default is all applicable. A user unwilling to accept "delete this component"
+  `dx`, `verification`); default is all applicable. A user unwilling to accept "delete this component"
   as a finding should focus away from `purpose` — arguing with the output wastes the run.
 - `--out <path>` (optional) — where to write the plan. Default:
   `$HOME/.claude/audits/<repo-name>-<YYYY-MM-DD>.md`. Must resolve to an **absolute,
@@ -63,6 +61,9 @@ Do this inline, or delegate the mechanical lookups to haiku scouts and assemble 
   `CONTRIBUTING.md`).
 - **CI inventory** — workflow files, triggers, runner types.
 - **UI surface?** — is anything browser-renderable, and what serves it locally.
+- **Primary user surface and verification harness** — name the main UI, CLI, API, or
+  automation path; inventory any project-local launcher, doctor, driver, feature map,
+  evidence capture, and cleanup tooling that can exercise it repeatably.
 - **Browser-rig availability** — probe cheaply (`CLAUDE_CDP_URL`, else the
   `mcp__claude-in-chrome__*` tools). Unreachable → the `ux` finder works code-grounded;
   record the downgrade so the wrangler notes it in Coverage.

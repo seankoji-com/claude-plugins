@@ -1,14 +1,76 @@
 #!/usr/bin/env bash
-# Deterministic stand-in for `git`, used only for clone-candidates.sh testing.
-# Real clone output (progress percentages, transfer stats) is inherently
-# non-deterministic, so this only fakes the destination-directory side effect
-# and prints one stable line in the same place `git clone` would.
+# Deterministic stand-in for `git`, used by ape clone and study resolver fixtures.
 set -euo pipefail
 
+stub_dir="$PWD/.git-stub"
+
 if [ "$1" = "clone" ]; then
+  if [ "$#" -eq 6 ]; then
+    url="$5"
+  elif [ "$#" -eq 7 ] && [ "$5" = "--sparse" ]; then
+    url="$6"
+  else
+    url=""
+  fi
+  [ "$2" = "--depth" ] && [ "$3" = 1 ] && [ "$4" = "--filter=blob:none" ] &&
+    [[ "$url" == https://github.com/* ]] || {
+      echo "stub git: malformed clone invocation" >&2
+      exit 1
+    }
+  [ ! -e "$stub_dir/fail-clone" ] || exit 1
   dest="${!#}"
-  mkdir -p "$dest"
+  mkdir -p "$dest/.git"
   echo "Cloning into '$dest'..."
+  exit 0
+fi
+
+if [ "$1" = "-C" ]; then
+  [ "$#" -ge 4 ] || { echo "stub git: incomplete -C invocation" >&2; exit 1; }
+  case "${3:-}" in
+    config)
+      [ "$4" = "--get" ] && [ "${5:-}" = "remote.origin.url" ] || {
+        echo "stub git: malformed config invocation" >&2
+        exit 1
+      }
+      if [ -f "$stub_dir/remote" ]; then cat "$stub_dir/remote"; else echo 'https://github.com/acme/example'; fi
+      ;;
+    fetch)
+      [ "$#" -eq 8 ] && [ "$4" = "--depth" ] && [ "$5" = 1 ] &&
+        [ "$6" = "--" ] && [ "$7" = "origin" ] || {
+          echo "stub git: unsafe fetch invocation" >&2
+          exit 1
+        }
+      if [ -f "$stub_dir/fetch-refs" ] && ! grep -Fxq "$8" "$stub_dir/fetch-refs"; then
+        exit 1
+      fi
+      ;;
+    checkout)
+      [ "$#" -eq 5 ] && [ "$4" = "--detach" ] && [ "$5" = "FETCH_HEAD" ] || {
+        echo "stub git: malformed checkout invocation" >&2
+        exit 1
+      }
+      [ ! -e "$stub_dir/fail-checkout" ] || exit 1
+      if [ -f "$stub_dir/symlink-target" ]; then
+        link_name="$(cat "$stub_dir/symlink-target")"
+        mkdir -p "$PWD/outside"
+        ln -s "$PWD/outside" "$2/$link_name"
+      fi
+      ;;
+    rev-parse)
+      case "$4" in
+        --show-toplevel)
+          if [ -f "$stub_dir/existing-clone" ]; then
+            existing="$(cat "$stub_dir/existing-clone")"
+            mkdir -p "$HOME/tmp/repo-research/project/studies/$existing/repos/$existing/.git"
+          fi
+          printf '%s/project\n' "$PWD"
+          ;;
+        HEAD) echo '0123456789abcdef0123456789abcdef01234567' ;;
+        *) echo "stub git: malformed rev-parse invocation" >&2; exit 1 ;;
+      esac
+      ;;
+    *) echo "stub git: unhandled -C subcommand: ${3:-}" >&2; exit 1 ;;
+  esac
   exit 0
 fi
 

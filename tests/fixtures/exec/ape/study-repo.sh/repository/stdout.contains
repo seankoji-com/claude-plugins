@@ -1,0 +1,4 @@
+full_name=acme/example
+target_path=.*/studies/acme__example/repos/acme__example
+revision=0123456789abcdef0123456789abcdef01234567
+fingerprint_fresh=false

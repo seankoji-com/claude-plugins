@@ -1,5 +1,8 @@
 ---
-description: Forage through OSS repos for techniques transferable to this codebase
+description: >
+  Use when the current project needs broad discovery across multiple OSS repositories
+  for transferable techniques. Do not use when the user already named one GitHub source;
+  use /ape:study for that depth-first comparison.
 argument-hint: [focus area, e.g. testing | architecture | dx — optional]
 allowed-tools: Task, Workflow, Read, Write, Glob, Grep, Bash(gh:*), Bash(mkdir:*), Bash(cp:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/init-workspace.sh:*), Bash(tree:*), Bash(ls:*), Bash(cat:*), Bash(du:*)
 disable-model-invocation: true

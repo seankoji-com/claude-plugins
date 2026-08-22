@@ -1,9 +1,9 @@
 ---
 name: imps
 description: >
-  Decompose a vague task into dependency-mapped imps, dispatch with model routing,
-  monitor progress, and merge code changes back to a dedicated run branch cut off
-  the default branch.
+  Use when a substantial task should be decomposed, dependency-mapped, dispatched to
+  model-routed imps, verified, and integrated on a dedicated run branch. Do not use for
+  read-only audits or a single diff's impact analysis.
 argument-hint: '<task description>'
 ---
 
@@ -485,14 +485,17 @@ with synthetic tasks to make the table look bigger)
 ## Status
 Planned — handing to the Workflow script.
 
+## Decision trail
+_None._
+
 ## Parked findings
 _None._
 ```
 
-**`- [ ]` checkboxes appear ONLY under `## Definition of Done`.** Both new sections are
-checkbox-free — a stray checkbox anywhere else in GOAL.md is read as a phantom task. Both
-render the literal `_None._` when they have no content, so an empty section is
-distinguishable from a section that was never written.
+**`- [ ]` checkboxes appear ONLY under `## Definition of Done`.** Global Constraints,
+Decision trail, and Parked findings are checkbox-free — a stray checkbox anywhere else
+in GOAL.md is read as a phantom task. Each renders the literal `_None._` when it has no
+content, so an empty section is distinguishable from a section that was never written.
 
 **Authoring `## Global Constraints`** — this is where discovery Q5 ("any constraints?")
 lands durably. It exists because independent worktree-isolated imps cannot see each
@@ -514,9 +517,15 @@ pasted text, so it must be readable standalone.
   is verified by whoever reviews any task's diff. If you catch yourself writing a
   checkbox, it was a DoD line.
 
+**`## Decision trail`** is a durable summary owned by the Workflow finalizer. Leave its
+body as `_None._` during planning. At the end of a run, the finalizer replaces it with
+plain bullets for nontrivial pivots only: Head Imp amendments, conflicts resolved,
+skipped gates or tasks, and advisory-check failures. It is not a chronological activity
+log and must not duplicate routine task completions or the audit JSONL event.
+
 **`## Parked findings`** is a placeholder you write as `_None._` and then leave alone —
 after handover it belongs to the script, which replaces its body with the adjudicator's
-rulings (see Phase 4's `unresolved_findings`). Place it last, after `## Status`.
+rulings (see Phase 4's `unresolved_findings`). Place it last, after Decision trail.
 
 Discussion-seed mode: add `- [ ] Outcome comment posted to the source Discussion` to
 the Definition of Done — the script fulfills this at finalize; it is not a dispatched
