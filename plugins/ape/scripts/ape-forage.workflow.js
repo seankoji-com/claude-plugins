@@ -22,6 +22,11 @@
 // trusted to be followed correctly every run.
 //
 // args shape (all required): { pluginRoot, fingerprint, focusArea, workspaceDir }
+//
+// workspaceDir is expected to be a disambiguated path from init-workspace.sh
+// (remote-origin + basename) — repo subdirectories under repos/ are further
+// disambiguated via fullName.replace('/', '__') (owner__repo) and are
+// therefore safe against identically-named repo collisions.
 
 export const meta = {
   name: 'ape-forage',
@@ -34,6 +39,8 @@ export const meta = {
     { title: 'Synthesis', detail: 'read every report, rank, write recommendations' },
   ],
 }
+
+const fs = require('fs')
 
 // owner/repo segments as GitHub allows them; url is restricted to a plain
 // https://github.com/<owner>/<repo>[.git] form. These are model-filled from
@@ -339,6 +346,29 @@ const analysisResults = await parallel(
   })
 )
 log(`Analysis: ${analysisResults.filter(Boolean).length}/${clonedSelection.length} analysts returned`)
+
+// Validate every expected report exists and is non-empty before synthesis
+const missingReports = []
+for (const c of clonedSelection) {
+  const dirName = c.fullName.replace('/', '__')
+  const reportPath = `${args.workspaceDir}/reports/${dirName}.md`
+  try {
+    // eslint-disable-next-line no-sync
+    if (!fs.existsSync(reportPath) || fs.statSync(reportPath).size === 0) {
+      missingReports.push(c.fullName)
+    }
+  } catch (_err) {
+    missingReports.push(c.fullName)
+  }
+}
+if (missingReports.length > 0) {
+  return {
+    status: 'blocked',
+    reason: 'missing_reports',
+    missing: missingReports,
+    notes: `Analysis completed but reports are missing/empty for: ${missingReports.join(', ')}`,
+  }
+}
 
 phase('Synthesis')
 const synthesis = await agent(synthesisPrompt(args.workspaceDir, args.focusArea, args.fingerprint, ranking.rejected), {

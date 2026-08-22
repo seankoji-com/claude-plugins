@@ -162,8 +162,9 @@ directly only when the plan must quote or reason about its contents. Then:
     frontmatter. Matrix Item 3 measured that Claude Code's `model:` frontmatter
     convention is not honored by OpenCode, and did not establish a differently-named
     field that is — so no generated artifact here declares one.
-  - **Type** — `code` (file changes, worktree-isolated) · `query` (read-only) ·
-    `publish` (GitHub artifacts; use `gh api graphql` for Discussions, not REST)
+  - **Type** — `code` (file changes, worktree-isolated) · `query` (read-only by default;
+    add `MUTATIONS_ALLOWED` to the task spec to authorize live mutations) · `publish`
+    (GitHub artifacts; use `gh api graphql` for Discussions, not REST)
   - **Oracle** *(optional, `code` tasks only)* — a machine-checkable acceptance command
     that **fails today**. The harness runs `--expect-oracle red` and aborts if the oracle
     is already green at start: a green-at-start oracle cannot distinguish "implemented

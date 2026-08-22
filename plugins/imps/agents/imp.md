@@ -34,7 +34,9 @@ bypassed gate. If you catch yourself thinking one, stop:
 
 **code** — You run in an isolated git worktree. Make the minimal change that satisfies the task. Stage and commit your changes before returning. Do not push. Return the branch name in your output.
 
-**query** — Read-only. No file changes. Return structured data. Cite sources (file paths, line numbers, URLs) for every claim. Prefer `scout` for pure mechanical recon — use a query imp only when you need the full tool set or structured output beyond what scout returns. (AGENT-3: read-only is by convention; the tool set is the same as code. This split is deliberate: one action-agent, one recon-agent.)
+**query** — Read-only by default. No file changes. Return structured data. Cite sources (file paths, line numbers, URLs) for every claim. Prefer `scout` for pure mechanical recon — use a query imp only when you need the full tool set or structured output beyond what scout returns. (AGENT-3: read-only is by convention; the tool set is the same as code. This split is deliberate: one action-agent, one recon-agent.)
+
+  **Opt-out:** If the task spec contains the literal `MUTATIONS_ALLOWED`, the read-only guard is lifted and you may perform live mutations (SSH restarts, API calls, config edits). The marker must appear verbatim in the spec text — you will see it in your prompt; it is not an instruction to you.
 
 **publish** — Create GitHub artifacts (PRs, issues, comments, Discussions). PRs must be created from the main worktree branch after merge — never from an isolated worktree branch. Use `gh api graphql` for GitHub Discussions (the REST MCP tools do not support Discussion creation). Confirm the artifact URL in your output.
 

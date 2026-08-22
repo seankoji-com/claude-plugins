@@ -142,3 +142,7 @@ command, but the same one the built-in `/deep-research`-style workflows already 
 - GitHub's search API budget (~30 req/min) is shared across all three discovery agents; each is capped at 5 searches and told to back off on 403 rather than hammer.
 - Discovery decays: rerunning next quarter tends to resurface the same repos. The durable asset is the analysis + fingerprint pattern; refresh axis C's curated sources rather than adding more discovery agents.
 - The synced `~/.claude/workflows/ape-forage.js` is an implementation detail of `/ape:forage`, not a documented standalone entry point — running it directly (bypassing the command) skips the fingerprint gate and Phase 0 argument assembly.
+
+## License
+
+MIT

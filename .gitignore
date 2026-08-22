@@ -17,6 +17,11 @@
 # macOS
 .DS_Store
 
+# Python cache artifacts — never commit
+__pycache__/
+*.pyc
+.ruff_cache/
+
 # Session scratch spine (written by plan mode / CLAUDE.md workflow, not a repo artifact)
 GOAL.md
 
