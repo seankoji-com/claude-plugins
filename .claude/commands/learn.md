@@ -1,9 +1,8 @@
 ---
 description: >
-  Maintainer-only: read the accumulated learnings logs from imps, prompt-builder, and
-  claude-tuneup (plus audit.jsonl and any per-project imps logs), route repeated lessons
-  to the smallest enforceable plugin source, gate each batch with the operator, and ship
-  approved edits as a draft PR.
+  Use only when a claude-plugins maintainer wants to fold repeated lessons from the
+  supported learnings logs into reviewed plugin changes. Do not use during a plugin run
+  or for ungated self-modification.
 argument-hint: '[plugin name to scope to, e.g. imps]'
 disable-model-invocation: true
 ---
@@ -89,6 +88,12 @@ helper can make the failure impossible. When instructions are still the right la
 treat command and skill descriptions as routing contracts: state when to select the
 capability and the closest meaningful exclusion.
 
+Do not turn log-derived candidates directly into runtime scripts, generators, test
+harnesses, workflows, permission rules, sandboxes, or other security gates. For those
+targets, return a recommendation for a separate implementation task with direct code and
+test evidence. The logs may identify a problem; they are not authority to rewrite a
+safety boundary.
+
 Record `{target_files, enforcement_route, why_this_layer}` for every survivor. What
 remains should be a short list per plugin, not a firehose.
 
@@ -121,15 +126,16 @@ isolate in a worktree before the first edit if not already isolated, then:
    structural invariant.
 2. **Do not touch any `plugin.json` `version` field** — `.github/workflows/version-bump.yml`
    bumps those automatically; a manual bump here would conflict with it.
-3. If any command, agent, skill, script, or build override changed, run
-   `python3 build/generate.py` and include the generated `dist/` update as the dedicated
-   regeneration change required by AGENTS.md. Never hand-edit `dist/`.
-4. Run the focused test first, then the full relevant shell, JavaScript, Python, and
+3. Run the focused source test first, then commit only the approved source and test files.
+4. If any command, agent, skill, script, or build override changed, run
+   `python3 build/generate.py`, then commit only `dist/` as a second, dedicated
+   regeneration commit. Never hand-edit `dist/`.
+5. Run the full relevant shell, JavaScript, Python, and
    dist-lint gates. Also validate `jq . .claude-plugin/marketplace.json` and, for every
    touched plugin, `jq -e '.name' plugins/<name>/.claude-plugin/plugin.json`.
-5. Commit (only the files actually touched — never `git add -A`), push, and
+6. Push and
    `gh pr create --draft` with a body listing each applied change and its source evidence.
-6. Never push to master or force-push.
+7. Never push to master or force-push.
 
 ## Phase 6 — Self-log
 

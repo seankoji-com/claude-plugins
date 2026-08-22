@@ -1,4 +1,3 @@
 full_name=acme/example
 clone_url=https://github.com/acme/example
-ref=main
-subdir=plugins/widget
+tree_spec=main/plugins/widget

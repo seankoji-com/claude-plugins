@@ -3,7 +3,7 @@ description: >
   Use when a specific GitHub repository or subdirectory should be compared deeply with
   the current project for transferable patterns. Do not use for broad source discovery;
   use /ape:forage instead.
-argument-hint: '<https://github.com/owner/repo[/tree/ref/path]> [focus]'
+argument-hint: '<https://github.com/owner/repo[/tree/ref[/path]]> [focus]'
 allowed-tools: Task, Read, Write, Glob, Grep, Bash(gh:*), Bash(git:*), Bash(${CLAUDE_PLUGIN_ROOT}/scripts/study-repo.sh:*), Bash(tree:*), Bash(ls:*), Bash(wc:*)
 disable-model-invocation: true
 ---
