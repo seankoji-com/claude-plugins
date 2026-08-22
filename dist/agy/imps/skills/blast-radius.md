@@ -63,9 +63,11 @@ Assign every material claim the strongest level actually reached:
 4. **Executable proof**: an existing focused test, check, or safe reproduction confirms
    or clears the risk.
 
-Run the smallest existing, deterministic, read-only verification that can reach level 4.
-Never write a new test during this command. If executable proof is unavailable or blocked,
-label the claim **unproven** and say exactly what command or harness would settle it.
+Run the smallest existing, deterministic verification allowed by this command. Do not run
+project scripts, tests, builds, package managers, or any command whose implementation may
+write caches, generated files, databases, or remote state. Never write a new test during
+this command. If the allowlist cannot reach executable proof, label the claim **unproven**
+and say exactly what command or harness would settle it.
 
 ## 5. Report
 
