@@ -58,7 +58,13 @@ if [ "$1" = "-C" ]; then
       ;;
     rev-parse)
       case "$4" in
-        --show-toplevel) printf '%s/project\n' "$PWD" ;;
+        --show-toplevel)
+          if [ -f "$stub_dir/existing-clone" ]; then
+            existing="$(cat "$stub_dir/existing-clone")"
+            mkdir -p "$HOME/tmp/repo-research/project/studies/$existing/repos/$existing/.git"
+          fi
+          printf '%s/project\n' "$PWD"
+          ;;
         HEAD) echo '0123456789abcdef0123456789abcdef01234567' ;;
         *) echo "stub git: malformed rev-parse invocation" >&2; exit 1 ;;
       esac
