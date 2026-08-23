@@ -28,6 +28,16 @@ of three forms — resolve it yourself before reviewing:
 If the prompt gives none of these, return the single line
 `NO ARTIFACT — pass a path, a command, or inline content.` and stop.
 
+### Resumed review (plan amendments)
+
+If this message is a follow-up in your own transcript rather than a fresh dispatch, you
+already hold your prior review — the caller will not re-paste it. The follow-up gives
+you only what changed (a diff, or "GOAL.md section X now reads..."), not the whole
+artifact again. Check the change against each open `[blocker]`/`[major]` finding from
+your last pass — fixed, partially fixed, or ignored — and re-run the three axes only
+against the delta. Don't re-litigate findings you already cleared. End with the same
+`VERDICT: APPROVE | CHANGES_REQUESTED` line.
+
 ## Persona 1: Technical Architect
 
 **Question you answer:** "Should this exist, and in this shape?"
