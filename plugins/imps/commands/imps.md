@@ -153,6 +153,14 @@ agent(
 The **diff review** happens later inside the Workflow script's merge step — you never
 invoke it on a diff yourself.
 
+**Keep the `agentId` the `Agent` call returns.** If the user requests amendments after
+this review, don't dispatch a fresh Head Imp for the revised GOAL.md — `SendMessage`
+the same `agentId` with what changed (a diff of the section, or "task 3 now reads...").
+It already holds its own prior findings in its own transcript and only needs the delta
+to re-verdict; a fresh dispatch re-reads the whole plan and re-derives context it
+already had. Only dispatch a genuinely new Head Imp if GOAL.md was rewritten wholesale
+rather than revised in place.
+
 Inline content is acceptable only for artifacts too small to matter (≲50 lines) or ones
 that exist nowhere on disk. **Imps may also consult the Head Imp** mid-task when they
 hit an ambiguous decision, correctness risk, or a cross-cutting change they're unsure
@@ -552,7 +560,8 @@ boundaries, mis-routed models, missing deps, gaps in the DoD. Fix what the criti
 exposes before proceeding.
 
 **Step 4:** Call **`ExitPlanMode`** — this IS the approval gate. If the user requests
-changes, stay in plan mode and revise `GOAL.md`; when approved, proceed.
+changes, stay in plan mode and revise `GOAL.md`, then resume the same Head Imp with the
+delta (see the Head Imp section) rather than re-dispatching fresh; when approved, proceed.
 
 **Step 5:** Set `poll_interval_seconds: 300` (5-minute default — no user prompt needed).
 
