@@ -1,0 +1,17 @@
+# Dependabot Auto-Merge — synced from seankoji-com/.github (panel/call-reusable-dependabot-automerge.yml)
+# Enables auto-merge for dependabot PRs after CI + reviews pass.
+# Major version bumps are excluded (require human approval).
+# Uses the org-wide SEANKOJI_CI_APP_ID / SEANKOJI_CI_PRIVATE_KEY App identity
+# (Contents:Write and PullRequests:Write) — no per-repo secrets required.
+name: Dependabot Auto-Merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  auto-merge:
+    uses: seankoji-com/.github/.github/workflows/reusable-dependabot-automerge.yml@main
