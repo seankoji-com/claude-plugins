@@ -30,8 +30,9 @@ jobs:
   parallel-review:
     uses: seankoji-com/.github/.github/workflows/reusable-parallel-review.yml@main
     secrets:
-      # OpenCode Go gateway token for the review LLM calls (org secret).
-      OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+      # OpenRouter API key for the review LLM calls (org secret). The personas
+      # run on `openrouter/free`, OpenRouter's Free Models Router.
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       # mm-solution-architect: used for .github private repo checkout (read-only)
       MM_SOLUTION_ARCHITECT_APP_ID: ${{ secrets.MM_SOLUTION_ARCHITECT_APP_ID }}
       MM_SOLUTION_ARCHITECT_PRIVATE_KEY: ${{ secrets.MM_SOLUTION_ARCHITECT_PRIVATE_KEY }}
