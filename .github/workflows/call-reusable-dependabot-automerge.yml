@@ -12,6 +12,14 @@ on:
 permissions:
   contents: read
 
+# A rebase or retry push to an open Dependabot PR fires another `synchronize`
+# run before the prior one finishes. Without this, both runs evaluate
+# auto-merge eligibility independently and the stale one can still act on an
+# outdated diff after the newer push landed.
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   auto-merge:
     uses: seankoji-com/.github/.github/workflows/reusable-dependabot-automerge.yml@main
