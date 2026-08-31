@@ -1,0 +1,7 @@
+interface:
+  display_name: "Imps"
+  short_description: "Plan, delegate, integrate, and review code"
+  default_prompt: "Use $imps to plan and execute this task with isolated Codex subagents."
+
+policy:
+  allow_implicit_invocation: false
