@@ -241,3 +241,31 @@ test('blocks with reason "missing_reports" when the report-check agent flags a m
     notes: 'Analysis completed but reports are missing/empty for: org/q',
   })
 })
+
+test('logs an explicit warning and proceeds unverified when the verify-reports agent dies', async () => {
+  const logs = []
+  async function agent(prompt, opts) {
+    if (opts.label === 'discover:A') return { candidates: [candidate('org/p'), candidate('org/q')], tooFew: false }
+    if (opts.label === 'discover:B') return { candidates: [], tooFew: true }
+    if (opts.label === 'discover:C') return { candidates: [], tooFew: true }
+    if (opts.label === 'rank') {
+      return { selected: [candidate('org/p'), candidate('org/q')], rejected: [] }
+    }
+    if (opts.label === 'clone') return { cloned: ['org/p', 'org/q'], failed: [] }
+    if (opts.label.startsWith('analyze:')) return {}
+    // Mirrors parallel()'s own contract: a dead agent call resolves to null, not a throw.
+    if (opts.label === 'verify-reports') return null
+    if (opts.label === 'synthesize') {
+      return { recommendations: 'do the thing', nearMisses: '', stats: { reposAnalyzed: 2, techniquesSurfaced: 1 } }
+    }
+    throw new Error(`unexpected agent call: ${opts.label}`)
+  }
+
+  const outcome = await runWorkflow({ agent, parallel, log: (m) => logs.push(m) })
+
+  assert.ok(
+    logs.some((m) => m.includes('verify-reports agent returned no usable result')),
+    `expected an explicit fail-open warning distinguishing "checker died" from "verified clean", got: ${JSON.stringify(logs)}`
+  )
+  assert.equal(outcome.status, 'final', 'a dead verifier must not block the run — it proceeds unverified')
+})

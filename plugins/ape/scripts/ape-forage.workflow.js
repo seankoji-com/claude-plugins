@@ -360,8 +360,10 @@ log(`Analysis: ${analysisResults.filter(Boolean).length}/${clonedSelection.lengt
 
 // Validate every expected report exists and is non-empty before synthesis.
 // No fs here — the script sandbox has no Node APIs — so one cheap agent stats
-// the files. If that agent itself dies, proceed rather than block falsely:
-// synthesis reads the reports directly and will surface any real gap.
+// the files. If that agent itself dies, proceed rather than block falsely — but
+// log it explicitly (below): synthesis only globs reports/*.md and is never told
+// which repos were expected, so it has no independent way to notice one missing.
+// The log line is the only operator-visible signal that the gate went unverified.
 const expectedReports = clonedSelection.map((c) => ({
   fullName: c.fullName,
   path: `${args.workspaceDir}/reports/${c.fullName.replace('/', '__')}.md`,
@@ -373,6 +375,9 @@ const reportCheck = await agent(
     `Read nothing else and create, modify or delete no file.`,
   { label: 'verify-reports', phase: 'Analysis', model: 'haiku', schema: REPORT_CHECK_SCHEMA },
 )
+if (!reportCheck || !Array.isArray(reportCheck.missing)) {
+  log('Report check: verify-reports agent returned no usable result — proceeding unverified, not blocked')
+}
 const missingPaths = reportCheck?.missing ?? []
 const missingReports = expectedReports
   .filter((r) => missingPaths.includes(r.path))
