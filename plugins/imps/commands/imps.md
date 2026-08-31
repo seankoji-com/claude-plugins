@@ -72,11 +72,8 @@ runs — the remaining text is what mode detection and every phase below operate
 flag anywhere in the argument string counts; order does not matter.
 
 - **`--personas`** — opt into the in-run five-persona review panel. **Default: OFF.**
-  Without this flag, no persona panel runs on either the free-text or issue-driven path;
-  the **Head Imp** adversarial review (plan review in Phase 2, diff review inside the
-  Workflow script's merge step) is the sole review gate, which is sufficient for
-  repositories whose PRs already receive persona reviews from a GitHub-side automation.
-  With this flag, the full panel + fix-loop + adjudication runs exactly as before.
+  Without it, the Head Imp reviews the plan and read-only OpenCode reviews the merged diff.
+  With it, the full panel + fix-loop + adjudication runs exactly as before.
 
 Derive a single boolean `PERSONA_PANEL` (`true` only if `--personas` was present) and
 carry it through: free-text mode passes it into the Workflow call as `personaPanel`
@@ -156,10 +153,11 @@ code block). It is purely cosmetic — skip silently if absent.
 
 ## The Head Imp — opus adversarial reviewer
 
-The Head Imp is a reusable one-shot `model: opus` agent that reviews plans and diffs
-adversarially. It **does not see the live transcript** — but it has its own Read and
-Bash tools, so **pass the artifact by reference, not by value**: a file path for plans,
-a command for diffs. The artifact's content never enters your context.
+The Head Imp is a reusable one-shot `model: opus` agent that reviews plans adversarially.
+OpenCode reviews the merged diff in a read-only snapshot after gates pass. ChatGPT OAuth
+is preferred (`opencode auth login`); OpenRouter is opt-in with
+`IMPS_OPENCODE_REVIEW_MODEL=openrouter/openai/gpt-5.4`. A missing setup, timeout,
+malformed output, or unresolved major finding blocks rather than falling back to Claude.
 
 Invoke it like this (swap in the actual reference and role):
 
@@ -184,8 +182,8 @@ agent(
 ```
 
 **Phase 2 (plan review):** pass the absolute path of GOAL.md — the Head Imp Reads it.
-The **diff review** happens later inside the Workflow script's merge step — you never
-invoke it on a diff yourself.
+The **diff review** happens later through `scripts/opencode-review.sh` — you never invoke
+the Head Imp on a diff yourself. See `references/opencode-review.md`.
 
 **Keep the `agentId` the `Agent` call returns.** If the user requests amendments after
 this review, don't dispatch a fresh Head Imp for the revised GOAL.md — `SendMessage`
@@ -416,8 +414,8 @@ quote or reason about its contents. Then:
   single file/command/config change, or a task whose plan is already fully specified with
   nothing left to split — do not invent a multi-task table just to populate rows. Write a
   **single-row task table** and skip straight to Step 2. This is not a lighter path around
-  the process, it's the same process with a smaller DAG: Head Imp still reviews the plan
-  (Step 3) and, later, the diff; the one task still dispatches through the Workflow script
+  the process, it's the same process with a smaller DAG: Head Imp reviews the plan
+  (Step 3) and OpenCode later reviews the merged diff; the one task still dispatches through the Workflow script
   exactly like any other stage, which is what offloads the actual work into an isolated
   worktree agent, out of this session's context; gates, the persona panel (when
   `--personas` is set), and the endstate PR all still run unchanged. The only thing skipped is manufacturing parallel work units
@@ -509,7 +507,7 @@ one-liner) — shell state doesn't carry across tool calls. Write with this stru
 - [ ] <acceptance criterion 1>
 - [ ] <acceptance criterion 2 — one line each from discovery>
 - [ ] Gates green (build · lint · test · type — per GATE_CMDS)
-- [ ] Head Imp adversarially reviewed the plan and the diff; all blocker/major findings addressed
+- [ ] Head Imp reviewed the plan; OpenCode reviewed the merged diff; all blocker/major findings addressed
 - [ ] No merge conflicts with the default branch
 
 ## Global Constraints
@@ -762,7 +760,7 @@ inherits this planning window regardless.
 
 Everything from here to run completion is real control flow inside one Workflow script
 (`scripts/imps-run.workflow.js`): git preflight, dispatching the task DAG as staged
-`agent()` calls, merging, the Head Imp diff review, gates, the endstate PR, the persona
+`agent()` calls, merging, gates, read-only OpenCode diff review, the endstate PR, the persona
 panel, and finalize. **This command has a hard dependency on the `Workflow` tool — there
 is no prose fallback.** If `Workflow` is unavailable in this session, tell the user
 plainly (`/imps:imps` requires it) and stop; do not attempt to execute the old
@@ -826,7 +824,7 @@ hardcoded slug check to the Workflow script.
 
 **`personaPanel` gates whether the panel runs at all.** It is `false` by default (no
 `--personas` flag): the script skips the entire panel + fix-loop + adjudication block and
-finalizes on the Head Imp's plan and diff reviews alone, which is the intended default for
+finalizes on the Head Imp plan review and OpenCode diff review, which is the intended default for
 repos whose PRs already draw persona reviews from a GitHub-side automation. Pass the
 `PERSONA_PANEL` boolean derived in **Runtime flags**. `personaBriefPaths` is always
 supplied regardless — the script only reads it when `personaPanel` is `true`, so there is

@@ -25,7 +25,7 @@ function loadWorkflowFunctions({ agent, parallel, phase, args, log }) {
     'phase',
     'args',
     'log',
-    `${body}\nreturn { runDispatch, stageTasks, dispatchImp, parseTaskDecision, parseGateDecision, validateStateRead, nowIso, fixLoopRound, adjudicateFindings, writeParkedFindings, constraintsPointer, constraintsPointerForReviewer, headImpReview, personaReview, fixGate, finalizeRun }`
+    `${body}\nreturn { runDispatch, stageTasks, dispatchImp, parseTaskDecision, parseGateDecision, validateStateRead, nowIso, fixLoopRound, adjudicateFindings, writeParkedFindings, constraintsPointer, constraintsPointerForReviewer, openCodeReview, openCodePreflight, fixCodeReview, personaReview, fixGate, finalizeRun }`
   )
   return factory(agent, parallel, phase || (() => {}), args || {}, log || (() => {}))
 }
@@ -305,7 +305,7 @@ test('finalizeRun persists a bounded checkbox-free decision trail in GOAL.md', a
   assert.match(prompt, /Record only pivots, not routine actions/)
 })
 
-test('every code-writing and code-reviewing agent call carries the constraints pointer', async () => {
+test('OpenCode review is a mechanical wrapper and code fixes carry constraints', async () => {
   const { agent, calls } = captureAgent()
   const wf = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
   const task = { id: 1, label: 'do a thing', type: 'code', model: 'sonnet', deps: [], spec: 'the spec' }
@@ -314,24 +314,26 @@ test('every code-writing and code-reviewing agent call carries the constraints p
   await wf.dispatchImp(task, { task: 'run goal' }, undefined, false)
   await wf.fixGate({ name: 'lint', cmd: 'npm run lint' }, 'tail', undefined)
   await wf.fixLoopRound(['a finding'])
-  await wf.headImpReview('master')
+  await wf.openCodeReview('master')
+  await wf.fixCodeReview([{ severity: 'major', path: 'x.js', line: 1, message: 'breaks zero input' }])
   await wf.personaReview('sre', brief, 7, 'seankoji/claude-plugins', 'master', 'live')
 
-  assert.equal(calls.length, 5)
-  for (const call of calls) {
+  assert.equal(calls.length, 6)
+  for (const call of calls.filter((c) => c.opts.label !== 'opencode-review')) {
     assert.ok(
       call.prompt.includes('MANDATORY FIRST ACTION') && call.prompt.includes(GOAL_ARGS.goalFilePath),
       `${call.opts.label} lost the Global Constraints pointer`
     )
   }
-  // The two reviewer calls, and only those, escalate a violation to a finding.
+  // Only the persona reviewer gets the review-specific major-finding escalation. The
+  // OpenCode wrapper receives neither code nor a diff; the helper snapshots it itself.
   const withMajor = calls.filter((c) => /MAJOR finding/.test(c.prompt)).map((c) => c.opts.label)
-  assert.deepEqual(withMajor.sort(), ['head-imp-diff', 'persona-sre'])
+  assert.deepEqual(withMajor.sort(), ['persona-sre'])
 
-  const headImp = calls.find((c) => c.opts.label === 'head-imp-diff')
-  assert.ok(headImp.prompt.includes('three independent axes'), 'Head Imp lost the separated review axes')
-  assert.ok(headImp.prompt.includes('Definition of Done'), 'Head Imp lost the run intent source')
-  assert.ok(headImp.prompt.includes(GOAL_ARGS.goalFilePath), 'Head Imp intent source lost the GOAL.md path')
+  const wrapper = calls.find((c) => c.opts.label === 'opencode-review')
+  assert.ok(wrapper.prompt.includes('Do not read, summarize, review, edit'), 'wrapper must not receive review work')
+  assert.ok(wrapper.prompt.includes('opencode-review.sh'), 'wrapper must invoke the dedicated harness')
+  assert.ok(wrapper.prompt.includes(GOAL_ARGS.goalFilePath), 'wrapper must pass GOAL.md by path')
 })
 
 // --- Fix-round schema ------------------------------------------------------------------

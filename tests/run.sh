@@ -513,6 +513,19 @@ else
   skip "imps/tests/state-schema.sh" "missing or not executable: $imps_state_schema"
 fi
 
+imps_opencode_review="$ROOT/plugins/imps/tests/opencode-review.sh"
+if [ -x "$imps_opencode_review" ]; then
+  opencode_review_out="$(bash "$imps_opencode_review" 2>&1)"
+  opencode_review_rc=$?
+  if [ "$opencode_review_rc" -eq 0 ]; then
+    report "imps/tests/opencode-review.sh" 1
+  else
+    report "imps/tests/opencode-review.sh" 0 "$opencode_review_out"
+  fi
+else
+  skip "imps/tests/opencode-review.sh" "missing or not executable: $imps_opencode_review"
+fi
+
 # Cross-platform e2e (OpenCode npm channel, Agy plugin channel). These exercise real
 # package-manager/registry machinery (tests/npm-install-smoke.sh talks to the npm
 # registry even for a local tarball path) or a live `agy` binary — neither of which a
