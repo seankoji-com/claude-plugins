@@ -17,7 +17,7 @@
   "imps": {
     "agy": "full",
     "opencode": "full",
-    "reason": "The orchestration prose ports, but the Claude Workflow script that drives it does not run on either target; per-platform dispatch backends and their prose come from build/overrides/imps/."
+    "reason": "The orchestration prose ports, but the Claude Workflow script that drives it does not run on either target; per-platform dispatch backends and their prose come from build/overrides/imps/. NOTE: the OpenCode override of /imps:imps specifically is marked unsupported in-file (build/overrides/imps/opencode/commands/imps.md) — its dispatch harness (opencode-dispatch.sh) was removed from the Claude Code source and has no replacement. /imps:prs, /imps:issue-mode, and /imps:imp-agency are unaffected (plain `opencode run -m`, no harness dependency), so plugin-level status stays full rather than excluded."
   },
   "offload-sidecar": {
     "agy": "note-only",

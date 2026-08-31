@@ -9,6 +9,16 @@
 <!-- REPLACE-SECTION: # /imps:imps — summon the swarm -->
 # /imps — summon the swarm
 
+> ⚠️ **UNSUPPORTED on OpenCode.** Everything below assumed a dispatch harness
+> (`opencode-dispatch.sh`, the `agent-safehouse`/Seatbelt oracle-loop wrapper this command
+> was built to walk its task DAG through) that has been **removed from the Claude Code
+> source repo** and has no replacement here. Do not attempt to run this command on
+> OpenCode — `$IMPS_HARNESS` names a script that no longer exists anywhere in this
+> checkout. The rest of this file is retained as a historical record of the prior design,
+> not as working instructions, until a replacement execution mechanism is built and
+> ported. `/imps:prs`, `/imps:issue-mode`, and `/imps:imp-agency` are unaffected — they
+> dispatch via plain `opencode run -m`, not this harness.
+
 Decompose a vague task into dependency-mapped imps, dispatch them, and merge the result
 back to a dedicated run branch cut off the default branch.
 

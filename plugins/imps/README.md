@@ -6,15 +6,19 @@
 
 | Claude Code | OpenCode | Agy |
 | --- | --- | --- |
-| native (this README) — full swarm, `Workflow`-driven | full — generated | full — generated |
+| native (this README) — full swarm, `Workflow`-driven | full — generated, except `/imps:imps` (see below) | full — generated |
 
 The orchestration prose ports, but the Claude `Workflow` script that drives it does
-not run on either target: OpenCode dispatch goes through the
-`opencode execute-tier dispatcher` referenced in the table below (model tiers passed
-at invocation via `opencode run -m`, never as frontmatter); Agy dispatch is serial
-`agy -p`, inspecting response content rather than exit status (see
-`docs/platform-matrix.md` Item 8). Per-platform dispatch prose comes from
-`build/overrides/imps/`; generated output lives under `dist/opencode/` and
+not run on either target. `/imps:prs`, `/imps:issue-mode`, and `/imps:imp-agency`
+dispatch fine on both: model tiers are passed at invocation via `opencode run -m`
+(OpenCode, never as frontmatter) or serial `agy -p`, inspecting response content
+rather than exit status (Agy — see `docs/platform-matrix.md` Item 8). **`/imps:imps`
+on OpenCode is unsupported**, though: its dispatch mechanism was the
+`opencode-dispatch.sh` execute-tier harness, which has been removed from the Claude
+Code source with no replacement — see the notice at the top of
+`build/overrides/imps/opencode/commands/imps.md`. `/imps:imps` on Agy is unaffected
+(same serial `agy -p` dispatch as the other commands). Per-platform dispatch prose
+comes from `build/overrides/imps/`; generated output lives under `dist/opencode/` and
 `dist/agy/imps/`. See
 [`docs/plans/cross-platform-compat.md`](../../docs/plans/cross-platform-compat.md) and
 [`docs/platform-matrix.md`](../../docs/platform-matrix.md) for how and why.
@@ -274,10 +278,6 @@ a durable, readable record even after the state file is deleted at finalize.
 | Dispatch banner (cosmetic) | `${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-banner.py` |
 | Final banner (cosmetic) | `${CLAUDE_PLUGIN_ROOT}/scripts/final-banner.py` |
 | Structured audit-log appender | `${CLAUDE_PLUGIN_ROOT}/scripts/audit-log.sh` |
-| opencode execute-tier dispatcher | `${CLAUDE_PLUGIN_ROOT}/scripts/opencode-dispatch.sh` — hand-invocable; see `${CLAUDE_PLUGIN_ROOT}/references/opencode-harness.md` |
-| OS sandbox wrapper (macOS) | `${CLAUDE_PLUGIN_ROOT}/scripts/sandbox-wrap.sh` |
-| Sandbox containment assertions | `${CLAUDE_PLUGIN_ROOT}/scripts/sandbox-smoke.sh` |
-| `--worktree` linked-worktree-shape assertions | `${CLAUDE_PLUGIN_ROOT}/tests/worktree-shape.sh` |
 
 No manual setup needed for any of these — the plugin installs them at
 `${CLAUDE_PLUGIN_ROOT}` and the commands resolve them at runtime. The bundled

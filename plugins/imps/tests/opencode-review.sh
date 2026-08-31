@@ -36,7 +36,7 @@ case "${1:-}" in
     esac
     ;;
   models)
-    case "${STUB_CASE:-approve}" in missing_model) printf '%s\n' '[{"id":"openai/other"}]' ;; *) printf '%s\n' '[{"id":"openai/gpt-5.4"},{"id":"openrouter/openai/gpt-5.4"}]' ;; esac
+    case "${STUB_CASE:-approve}" in missing_model) printf '%s\n' '[{"id":"openai/other"}]' ;; *) printf '%s\n' '[{"id":"openai/gpt-5.4"},{"id":"openai/gpt-5.6-terra"},{"id":"openrouter/openai/gpt-5.4"},{"id":"openrouter/deepseek/deepseek-v4-flash"}]' ;; esac
     ;;
   *) exit 2 ;;
 esac
@@ -75,6 +75,18 @@ if [ "$rc" = 0 ] && jq -e '.provider == "openrouter" and .model == "openrouter/o
 
 STUB_CASE=approve run_review --model anthropic/claude-sonnet >"$out" 2>"$err"; rc=$?
 if [ "$rc" != 0 ] && jq -e '.reason == "model_rejected"' "$out" >/dev/null; then ok 'rejects non-OpenAI lineage'; else bad 'rejects non-OpenAI lineage' "rc=$rc"; fi
+
+STUB_CASE=approve run_review --model openrouter/deepseek/deepseek-v4-flash >"$out" 2>"$err"; rc=$?
+if [ "$rc" = 0 ] && jq -e '.provider == "openrouter" and .model == "openrouter/deepseek/deepseek-v4-flash"' "$out" >/dev/null; then ok 'explicit deepseek-on-OpenRouter fallback'; else bad 'explicit deepseek-on-OpenRouter fallback' "rc=$rc"; fi
+
+# Scoping check: the deepseek allowlist entry must not widen into the whole openrouter/*
+# namespace — a rejected model here proves openrouter/anthropic/* (a Claude model) still
+# cannot reach this script through the fallback path.
+STUB_CASE=approve run_review --model openrouter/mistral/mistral-large >"$out" 2>"$err"; rc=$?
+if [ "$rc" != 0 ] && jq -e '.reason == "model_rejected"' "$out" >/dev/null; then ok 'rejects non-allowlisted OpenRouter lineage'; else bad 'rejects non-allowlisted OpenRouter lineage' "rc=$rc"; fi
+
+STUB_CASE=approve run_review --variant bogus >"$out" 2>"$err"; rc=$?
+if [ "$rc" != 0 ] && jq -e '.reason == "bad_arguments"' "$out" >/dev/null; then ok 'rejects unknown --variant'; else bad 'rejects unknown --variant' "rc=$rc"; fi
 
 printf '{}' > "$ROOT/home/.local/share/opencode/auth.json"
 STUB_CASE=approve run_review >"$out" 2>"$err"; rc=$?

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # state-schema.sh — guards imps-run.workflow.js's STATE_SCHEMA against the silent
-# field-drop failure mode that the opencode execute-tier fields sit directly on top of.
+# field-drop failure mode first seen as the #87 silent zero-dispatch bug.
 #
 # Why a schema test and not a behavioural one: patchState() round-trips the ENTIRE state
 # file through an LLM on every dispatch heartbeat, constrained by STATE_SCHEMA. A per-task
@@ -11,9 +11,6 @@
 #
 # Asserts:
 #   - STATE_SCHEMA.properties.tasks.items.additionalProperties === true  (the landmine)
-#   - `oracle` and `executor` exist in the task item's properties, both OPTIONAL
-#   - `escalated_tasks` is a TOP-LEVEL property (patchState merges top-level keys only,
-#     so a result fact on the task item would be written at plan time and never again)
 #   - the six schema-4 review-discipline fields are TOP-LEVEL and correctly shaped
 #   - a schema-4 state object validates, AND a hand-written schema-3 one still does
 #     (the schema-4 fields are additive; none of them joined `required`)
@@ -93,51 +90,6 @@ assert(
     ' — an unknown per-task field can be dropped by a patchState() heartbeat (#87)'
 )
 
-// --- The new fields ---------------------------------------------------------------------
-assert('task-item/oracle', Object.prototype.hasOwnProperty.call(IP, 'oracle'), 'no `oracle` in the task item')
-assert('task-item/executor', Object.prototype.hasOwnProperty.call(IP, 'executor'), 'no `executor` in the task item')
-assert(
-  'task-item/executor-enum',
-  !!IP.executor && JSON.stringify(IP.executor.enum) === JSON.stringify(['claude', 'opencode']),
-  'executor enum is ' + JSON.stringify(IP.executor && IP.executor.enum)
-)
-assert(
-  'task-item/oracle-nullable',
-  !!IP.oracle && Array.isArray(IP.oracle.type) && IP.oracle.type.indexOf('string') >= 0 && IP.oracle.type.indexOf('null') >= 0,
-  'oracle type is ' + JSON.stringify(IP.oracle && IP.oracle.type) + ' — must accept string and null'
-)
-const req = item.required || []
-assert(
-  'task-item/new-fields-optional',
-  req.indexOf('oracle') < 0 && req.indexOf('executor') < 0,
-  'oracle/executor must stay out of `required` so legacy state files still validate: ' + JSON.stringify(req)
-)
-
-// escalated_tasks is a RESULT fact and patchState() merges top-level keys only, so it has
-// to live at the top level — on the task item it would be unwritable after plan time.
-assert('top-level/escalated_tasks', Object.prototype.hasOwnProperty.call(P, 'escalated_tasks'), 'no top-level `escalated_tasks`')
-assert(
-  'top-level/escalated_tasks-shape',
-  !!P.escalated_tasks && P.escalated_tasks.type === 'array' && P.escalated_tasks.items && P.escalated_tasks.items.type === 'number',
-  'escalated_tasks must be an array of numbers, got ' + JSON.stringify(P.escalated_tasks)
-)
-assert('escalated-not-on-task-item', !Object.prototype.hasOwnProperty.call(IP, 'escalated'), '`escalated` on the task item is never writable after plan time')
-
-// escalation_reasons rides alongside escalated_tasks: a bare id list cannot separate
-// "sandbox-off Bash call denied" (an operator config fix) from "dispatch killed by the
-// tool timeout" (a harness bug) from "the open model actually failed" (the only datum
-// worth measuring). All three would otherwise read as the cheap model being incapable.
-assert('top-level/escalation_reasons', Object.prototype.hasOwnProperty.call(P, 'escalation_reasons'), 'no top-level `escalation_reasons`')
-assert(
-  'top-level/escalation_reasons-shape',
-  !!P.escalation_reasons &&
-    Array.isArray(P.escalation_reasons.type) &&
-    P.escalation_reasons.type.indexOf('object') !== -1 &&
-    P.escalation_reasons.additionalProperties &&
-    P.escalation_reasons.additionalProperties.type === 'string',
-  'escalation_reasons must be an object|null map of id -> reason string, got ' + JSON.stringify(P.escalation_reasons)
-)
-
 // --- Schema 4: the review-discipline fields ------------------------------------------
 // All six are TOP-LEVEL for the same reason escalated_tasks is: patchState() merges
 // top-level keys only, so a field on the task item is writable at plan time and never
@@ -207,13 +159,13 @@ function validate(schema, value, path, errs) {
 function sample() {
   return {
     schema: 4,
-    task: 'finish the opencode execute tier',
+    task: 'refactor the state-schema fixture',
     repo: 'seankoji/claude-plugins',
     branch: 'imps/claude-plugins-20260728-000000',
     tasks: [
       { id: 1, label: 'ordinary imp', spec: 'do the thing', model: 'sonnet', type: 'code', deps: [] },
-      { id: 2, label: 'offloaded imp', spec: 'do the mechanical thing', model: 'haiku', type: 'code', deps: [1], oracle: 'bash tests/run.sh', executor: 'opencode' },
-      { id: 3, label: 'legacy-shaped imp', spec: 'still valid', model: 'haiku', type: 'query', deps: [], oracle: null, executor: 'claude' },
+      { id: 2, label: 'second imp', spec: 'do the other thing', model: 'haiku', type: 'code', deps: [1] },
+      { id: 3, label: 'legacy-shaped imp', spec: 'still valid', model: 'haiku', type: 'query', deps: [] },
     ],
     phase: 'dispatch_pending',
     segment: null,
@@ -222,7 +174,6 @@ function sample() {
     max_dispatch_hours: 6,
     last_heartbeat: null,
     tasks_done: [1],
-    escalated_tasks: [2],
     worktrees: { 1: 'imps/task-1' },
     artifacts: [],
     pr: null,
@@ -248,33 +199,19 @@ function sample() {
 let errs = validate(S, sample())
 assert('sample-schema-4-validates', errs.length === 0, errs.join('; '))
 
-// A hand-written SCHEMA-3 state file: no oracle, no executor, no escalated_tasks, and none
-// of the six schema-4 fields. `schema` is set explicitly — it derives from sample() above,
-// which now says 4, so without this line this assertion would be checking a schema-4 object
-// and could never fail in the way it exists to catch.
+// A hand-written SCHEMA-3 state file: none of the six schema-4 fields. `schema` is set
+// explicitly — it derives from sample() above, which now says 4, so without this line
+// this assertion would be checking a schema-4 object and could never fail in the way it
+// exists to catch.
 const legacy = sample()
 legacy.schema = 3
-legacy.tasks = legacy.tasks.map((t) => { const c = { ...t }; delete c.oracle; delete c.executor; return c })
-delete legacy.escalated_tasks
 for (const k of Object.keys(SCHEMA4)) delete legacy[k]
 assert('legacy-schema-3-state-still-validates', validate(S, legacy).length === 0, validate(S, legacy).join('; '))
 
 // --- Negative controls: prove the validator is not a no-op ----------------------------
-const badEnum = sample()
-badEnum.tasks[1].executor = 'gemini'
-assert('negative/bad-executor-enum', validate(S, badEnum).length > 0, 'validator accepted executor "gemini"')
-
 const missingReq = sample()
 delete missingReq.tasks[0].id
 assert('negative/task-missing-id', validate(S, missingReq).length > 0, 'validator accepted a task item with no id')
-
-const badEscalated = sample()
-badEscalated.escalated_tasks = ['two']
-assert('negative/escalated_tasks-wrong-item-type', validate(S, badEscalated).length > 0, 'validator accepted escalated_tasks: ["two"]')
-
-const badOracle = sample()
-badOracle.tasks[1].oracle = 7
-assert('negative/oracle-wrong-type', validate(S, badOracle).length > 0, 'validator accepted a numeric oracle')
 
 const missingTop = sample()
 delete missingTop.phase
@@ -304,7 +241,7 @@ badVerdictsPending.verdicts_pending = 'not an object'
 assert('negative/verdicts_pending-wrong-type', validate(S, badVerdictsPending).length > 0, 'validator accepted verdicts_pending: "not an object"')
 
 // A truncated run must not pass silently.
-const EXPECTED_ASSERTS = 63
+const EXPECTED_ASSERTS = 50
 if (asserts !== EXPECTED_ASSERTS) {
   console.log('FAIL state-schema/assertion-count')
   console.log('     ran ' + asserts + ' assertions, expected ' + EXPECTED_ASSERTS)
