@@ -304,202 +304,19 @@ ${rel} contains \${CLAUDE_PLUGIN_ROOT}/ references but none were extracted (extr
 
 bundled_assets_check
 
-# Seatbelt is last-match-wins, so deny-credentials.sbpl.in's worktrees/modules
-# chain is ordered, not just present: deny the subtrees, re-allow only this
-# dispatch's own gitdir, then re-deny the pointer files inside that reallow.
-# Reordering any of it silently reopens an RCE — verified live that moving the
-# reallow after the re-denies makes those paths writable again. The template
-# carried a "each line must stay in exactly this sequence" comment and nothing
-# that enforced it: sandbox-smoke.sh exercises the RENDERED profile's effects,
-# so a reordered template that still happens to deny the smoke test's specific
-# probes passes it. This asserts the sequence itself, on the source template,
-# on every platform (no sandbox needed).
-sbpl_order_check() {
-  local tpl="$ROOT/plugins/imps/sandbox/deny-credentials.sbpl.in"
-  if [ ! -f "$tpl" ]; then
-    report "imps/sbpl-rule-order" 0 "missing $tpl"
-    return
-  fi
-  # Rule lines only — the file's own comments quote these same forms.
-  local rules ok=1 detail=""
-  rules="$(grep -vE '^[[:space:]]*;' "$tpl")"
-  line_of() { printf '%s\n' "$rules" | grep -nF -- "$1" | head -n 1 | cut -d: -f1; }
-  local l_hooks l_modules l_worktrees l_allow l_redeny
-  l_hooks="$(line_of '(subpath "@GITMETA@/hooks")')"
-  l_modules="$(line_of '(subpath "@GITMETA@/modules")')"
-  l_worktrees="$(line_of '(subpath "@GITMETA@/worktrees")')"
-  l_allow="$(line_of '(allow file-write* (subpath "@REAL_GITDIR@"))')"
-  l_redeny="$(line_of '(subpath "@REAL_GITDIR@/modules")')"
-  local want
-  for want in l_hooks l_modules l_worktrees l_allow l_redeny; do
-    if [ -z "${!want}" ]; then
-      ok=0
-      detail="$detail
-missing expected rule for $want"
-    fi
-  done
-  if [ "$ok" = 1 ]; then
-    # Every broad deny must precede the reallow; the reallow must precede its
-    # own re-denies. Anything else and last-match-wins silently inverts.
-    [ "$l_hooks" -lt "$l_allow" ] || {
-      ok=0
-      detail="$detail
-@GITMETA@/hooks deny (line $l_hooks) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"
-    }
-    [ "$l_modules" -lt "$l_allow" ] || {
-      ok=0
-      detail="$detail
-@GITMETA@/modules deny (line $l_modules) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"
-    }
-    [ "$l_worktrees" -lt "$l_allow" ] || {
-      ok=0
-      detail="$detail
-@GITMETA@/worktrees deny (line $l_worktrees) must come BEFORE the @REAL_GITDIR@ reallow (line $l_allow)"
-    }
-    [ "$l_allow" -lt "$l_redeny" ] || {
-      ok=0
-      detail="$detail
-the @REAL_GITDIR@ reallow (line $l_allow) must come BEFORE its own re-denies (line $l_redeny)"
-    }
-  fi
-  report "imps/sbpl-rule-order" "$ok" "$detail"
-}
-sbpl_order_check
-
-# opencode execute-tier harness (plugins/imps). Two extra checks that cannot be
-# fixture-driven: they need a real macOS sandbox, and the E2E additionally needs
-# credentials and spends real money.
-#
 # A skip must NOT print "ok" — `report` only knows ok/FAIL, so reusing it here
-# would count a never-run E2E as a pass on ubuntu-latest CI. Skips print their
+# would count a never-run check as a pass on ubuntu-latest CI. Skips print their
 # own line and stay outside the pass/fail counters.
 skip() { echo "skip $1: $2"; }
 
-sandbox_wrap="$ROOT/plugins/imps/scripts/sandbox-wrap.sh"
-sandbox_smoke="$ROOT/plugins/imps/scripts/sandbox-smoke.sh"
-if [ ! -x "$sandbox_smoke" ]; then
-  # A lost exec bit or a deleted file must not be silently invisible — that's
-  # exactly the regression class this whole skip-vs-pass distinction exists to
-  # catch, and a bare `:` here defeats it.
-  skip "imps/sandbox-smoke.sh" "missing or not executable: $sandbox_smoke"
-elif [ "$(uname -s)" != "Darwin" ]; then
-  skip "imps/sandbox-smoke.sh" "not Darwin (uname -s = $(uname -s))"
-elif ! bash "$sandbox_wrap" --check >/dev/null 2>&1; then
-  skip "imps/sandbox-smoke.sh" "sandbox backend unavailable (SANDBOX_MODE=${SANDBOX_MODE:-safehouse})"
-else
-  smoke_out="$(bash "$sandbox_smoke" 2>&1)"
-  smoke_rc=$?
-  case "$smoke_rc" in
-  0) report "imps/sandbox-smoke.sh" 1 ;;
-  # 77 == "cannot run here": Seatbelt does not nest, so running this from
-  # inside Claude Code's own Bash sandbox proves nothing either way.
-  77) skip "imps/sandbox-smoke.sh" "sandbox cannot be applied here (nested sandbox); run it unsandboxed" ;;
-  *) report "imps/sandbox-smoke.sh" 0 "$smoke_out" ;;
-  esac
-fi
-
-imps_e2e="$ROOT/plugins/imps/tests/e2e.sh"
-if [ -x "$imps_e2e" ]; then
-  e2e_out="$(bash "$imps_e2e" 2>&1)"
-  e2e_rc=$?
-  case "$e2e_rc" in
-  # 77 == the script's own "gate not met" status; it prints the reason itself.
-  77) skip "imps/tests/e2e.sh" "$(printf '%s\n' "$e2e_out" | tail -n 1 | sed 's/^skip e2e: //')" ;;
-  0) report "imps/tests/e2e.sh" 1 ;;
-  *) report "imps/tests/e2e.sh" 0 "$e2e_out" ;;
-  esac
-else
-  # Same visibility invariant as sandbox-smoke.sh above: missing/non-executable
-  # must never be silent.
-  skip "imps/tests/e2e.sh" "missing or not executable: $imps_e2e"
-fi
-
-# Unlike sandbox-smoke.sh/e2e.sh, this one needs no macOS sandbox, no
-# credentials, and spends nothing — it's pure git plumbing, so it runs
-# unconditionally (including on ubuntu-latest CI) rather than through the
-# skip-gated pattern above.
-imps_worktree_shape="$ROOT/plugins/imps/tests/worktree-shape.sh"
-if [ -x "$imps_worktree_shape" ]; then
-  worktree_shape_out="$(bash "$imps_worktree_shape" 2>&1)"
-  worktree_shape_rc=$?
-  if [ "$worktree_shape_rc" -eq 0 ]; then
-    report "imps/tests/worktree-shape.sh" 1
-  else
-    report "imps/tests/worktree-shape.sh" 0 "$worktree_shape_out"
-  fi
-else
-  skip "imps/tests/worktree-shape.sh" "missing or not executable: $imps_worktree_shape"
-fi
-
-# Same visibility invariant, and the same "no macOS sandbox needed" shape as
-# worktree-shape.sh above: this exercises sandbox-wrap.sh's own pure logic
-# (SBPL render, ENV_PASS/sh_args construction, SANDBOX_MODE/bypass dispatch,
-# metachar rejection) via stubbed uname/safehouse, never a real sandbox
-# apply — runs unconditionally, including on ubuntu-latest CI.
-imps_sandbox_wrap_shape="$ROOT/plugins/imps/tests/sandbox-wrap-shape.sh"
-if [ -x "$imps_sandbox_wrap_shape" ]; then
-  sandbox_wrap_shape_out="$(bash "$imps_sandbox_wrap_shape" 2>&1)"
-  sandbox_wrap_shape_rc=$?
-  if [ "$sandbox_wrap_shape_rc" -eq 0 ]; then
-    report "imps/tests/sandbox-wrap-shape.sh" 1
-  else
-    report "imps/tests/sandbox-wrap-shape.sh" 0 "$sandbox_wrap_shape_out"
-  fi
-else
-  skip "imps/tests/sandbox-wrap-shape.sh" "missing or not executable: $imps_sandbox_wrap_shape"
-fi
-
-# Same visibility invariant and shape as sandbox-wrap-shape.sh above, one
-# layer up the stack: this proves sandbox-smoke.sh's OWN assertion/counting/
-# exit-code logic (not real containment — only the Darwin+SANDBOX_MODE inline
-# run further down proves that) by running sandbox-smoke.sh as a real
-# subprocess against a stubbed sandbox-wrap.sh selected via CLAUDE_PLUGIN_ROOT.
-# No macOS sandbox, no credentials, no spend — runs unconditionally, including
-# on ubuntu-latest CI, which is exactly where the Darwin-gated block below
-# cannot run at all.
-imps_sandbox_smoke_shape="$ROOT/plugins/imps/tests/sandbox-smoke-shape.sh"
-if [ -x "$imps_sandbox_smoke_shape" ]; then
-  sandbox_smoke_shape_out="$(bash "$imps_sandbox_smoke_shape" 2>&1)"
-  sandbox_smoke_shape_rc=$?
-  if [ "$sandbox_smoke_shape_rc" -eq 0 ]; then
-    report "imps/tests/sandbox-smoke-shape.sh" 1
-  else
-    report "imps/tests/sandbox-smoke-shape.sh" 0 "$sandbox_smoke_shape_out"
-  fi
-else
-  skip "imps/tests/sandbox-smoke-shape.sh" "missing or not executable: $imps_sandbox_smoke_shape"
-fi
-
-# Sibling of worktree-shape.sh (which owns the --worktree shape gate); this one
-# owns opencode-dispatch.sh's other free guards: the new --expect-oracle /
-# --result-branch bad_arguments paths, create_result_ref's durability claim
-# (commit survives worktree deletion + gc), the no_model_changes pair
-# (restore_worktree_clean / stage_model_changes), and emit_contract key parity
-# between its jq branch and its hand-written no-jq fallback literal. Pure git
-# plumbing and string logic — no sandbox, no credentials, no spend — so it runs
-# unconditionally, including on ubuntu-latest CI.
-imps_dispatch_guards="$ROOT/plugins/imps/tests/dispatch-guards.sh"
-if [ -x "$imps_dispatch_guards" ]; then
-  dispatch_guards_out="$(bash "$imps_dispatch_guards" 2>&1)"
-  dispatch_guards_rc=$?
-  if [ "$dispatch_guards_rc" -eq 0 ]; then
-    report "imps/tests/dispatch-guards.sh" 1
-  else
-    report "imps/tests/dispatch-guards.sh" 0 "$dispatch_guards_out"
-  fi
-else
-  skip "imps/tests/dispatch-guards.sh" "missing or not executable: $imps_dispatch_guards"
-fi
-
-# /imps state-schema round-trip (schema 3: per-task oracle/executor plus a
-# top-level escalated_tasks, all of which must survive repeated patchState()
-# heartbeats). Same free, unconditional shape as the two above.
+# /imps state-schema round-trip (schema 4 review-discipline fields, which must
+# survive repeated patchState() heartbeats). Pure node, no sandbox, no spend —
+# runs unconditionally, including on ubuntu-latest CI.
 #
 # The wiring is deliberately here ahead of the file: whoever owns
 # state-schema.sh does not own this harness, so without a pre-placed block a
 # forgotten test is invisible. With it, a missing or non-executable file
-# surfaces as a `skip` line — the file's standing invariant (see the
-# sandbox-smoke.sh block above): never silent, and never counted as a pass.
+# surfaces as a `skip` line: never silent, and never counted as a pass.
 imps_state_schema="$ROOT/plugins/imps/tests/state-schema.sh"
 if [ -x "$imps_state_schema" ]; then
   state_schema_out="$(bash "$imps_state_schema" 2>&1)"
@@ -532,7 +349,7 @@ fi
 # sandboxed imp run may reach or invoke (see docs/plans/cross-platform-compat.md's
 # "No live opencode or agy model invocations" constraint). Off by default; a maintainer
 # opts in explicitly with XPLAT_E2E=1 (both channels) or the per-channel OPENCODE_E2E=1
-# / AGY_E2E=1. Same skip-vs-pass shape as sandbox-smoke.sh/imps-e2e.sh above: unset means
+# / AGY_E2E=1. Same skip-vs-pass shape as the state-schema.sh block above: unset means
 # skip, never a silent "ok".
 xplat_npm_smoke="$ROOT/tests/npm-install-smoke.sh"
 if [ -n "${XPLAT_E2E:-}" ] || [ -n "${OPENCODE_E2E:-}" ]; then

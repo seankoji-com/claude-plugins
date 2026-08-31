@@ -18,7 +18,8 @@ exec 1>&2
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 OPENCODE_BIN="${IMPS_OPENCODE_BIN:-opencode}"
 AUTH_PATH="${IMPS_OPENCODE_AUTH_PATH:-$HOME/.local/share/opencode/auth.json}"
-MODEL="${IMPS_OPENCODE_REVIEW_MODEL:-openai/gpt-5.4}"
+MODEL="${IMPS_OPENCODE_REVIEW_MODEL:-openai/gpt-5.6-terra}"
+VARIANT="${IMPS_OPENCODE_REVIEW_VARIANT:-high}"
 REPO=""
 BASE=""
 HEAD="HEAD"
@@ -98,6 +99,7 @@ usage() {
   cat >&2 <<'USAGE'
 Usage: opencode-review.sh --repo <path> --base <sha-or-ref> --goal <GOAL.md>
                           [--head <sha-or-ref>] [--model <provider/model>]
+                          [--variant <reasoning-effort>]
                           [--timeout <seconds>] [--check]
 USAGE
 }
@@ -109,6 +111,7 @@ while [ "$#" -gt 0 ]; do
     --head) HEAD="${2:-}"; shift 2 ;;
     --goal) GOAL="${2:-}"; shift 2 ;;
     --model) MODEL="${2:-}"; shift 2 ;;
+    --variant) VARIANT="${2:-}"; shift 2 ;;
     --timeout) TIMEOUT_SECONDS="${2:-}"; shift 2 ;;
     --check) CHECK_ONLY=1; shift ;;
     -h|--help) usage; REASON="help"; exit 0 ;;
@@ -119,7 +122,15 @@ done
 case "$MODEL" in
   openai/*) PROVIDER="openai" ;;
   openrouter/openai/*) PROVIDER="openrouter" ;;
-  *) fail model_rejected "model must be openai/* or openrouter/openai/*" ;;
+  # Deliberately scoped, not a blanket `openrouter/*`: opening the whole openrouter
+  # namespace would also admit `openrouter/anthropic/*`, routing a Claude model through
+  # here — the exact thing this guard exists to block. deepseek is allowlisted by name.
+  openrouter/deepseek/*) PROVIDER="openrouter" ;;
+  *) fail model_rejected "model must be openai/*, openrouter/openai/*, or openrouter/deepseek/*" ;;
+esac
+case "$VARIANT" in
+  ''|none|low|medium|high|xhigh|max) ;;
+  *) fail bad_arguments "--variant must be one of: none low medium high xhigh max" ;;
 esac
 case "$TIMEOUT_SECONDS" in ''|0|*[!0-9]*) fail bad_arguments "--timeout must be a positive integer" ;; esac
 
@@ -224,7 +235,11 @@ run_with_timeout() {
   return "$rc"
 }
 
-run_with_timeout "$OPENCODE_BIN" run --pure --dir "$SNAPSHOT" --model "$MODEL" --format json "$(cat "$SNAPSHOT/REVIEW_PROMPT.md")"
+if [ -n "$VARIANT" ]; then
+  run_with_timeout "$OPENCODE_BIN" run --pure --dir "$SNAPSHOT" --model "$MODEL" --variant "$VARIANT" --format json "$(cat "$SNAPSHOT/REVIEW_PROMPT.md")"
+else
+  run_with_timeout "$OPENCODE_BIN" run --pure --dir "$SNAPSHOT" --model "$MODEL" --format json "$(cat "$SNAPSHOT/REVIEW_PROMPT.md")"
+fi
 RUN_RC=$?
 # `exec` resets Perl's signal handler but keeps its alarm on macOS, so an alarm can
 # surface as SIGALRM's 142 exit status instead of Perl's requested 124.

@@ -72,9 +72,9 @@ possible at all — schema adapted from maestro's `audit.jsonl`
 `exit_status` is one of `completed | partial | blocked | failed | cancelled`. `notes` is
 free text, truncated to 200 chars by the script. `cost_estimate_usd` is reserved for
 future token-cost instrumentation — always `null` today. `tier` and `attempts` are
-optional, `null` unless the caller passes `--tier`/`--attempts` — used by the opencode
-execute-tier harness (`opencode-dispatch.sh`) to record which offload tier ran a task and
-how many oracle-loop attempts it took.
+optional, `null` unless the caller passes `--tier`/`--attempts` — reserved for a future
+offload-tier harness to record which tier ran a task and how many attempts it took; no
+current caller sets them.
 
 The appender is `scripts/audit-log.sh`, bundled **identically into every plugin that
 uses it** (each plugin under `plugins/*/scripts/audit-log.sh`) rather than pulled

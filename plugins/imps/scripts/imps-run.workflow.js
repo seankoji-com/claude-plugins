@@ -99,17 +99,7 @@ const STATE_SCHEMA = {
           model: { type: 'string' },
           type: { type: 'string', enum: ['code', 'query', 'publish'] },
           deps: { type: 'array', items: { type: 'number' } },
-          // Machine-checkable acceptance command for the opencode execute tier: a shell
-          // command run in the dispatch worktree, exit 0 == task done. Null/absent for
-          // every ordinary Claude imp. Required (non-empty) for executor "opencode".
-          oracle: { type: ['string', 'null'] },
-          // Which execution tier runs this task. Absent == "claude". Note `model` stays
-          // the CLAUDE model in both cases — for "opencode" it is the wrapper agent's
-          // model (haiku suffices), never the open model, which opencode-dispatch.sh
-          // picks itself.
-          executor: { type: 'string', enum: ['claude', 'opencode'] },
         },
-        // oracle/executor stay OUT of `required` so legacy state files still validate.
         required: ['id', 'label', 'model', 'type', 'deps'],
       },
     },
@@ -127,18 +117,6 @@ const STATE_SCHEMA = {
     heartbeat_clock_error: { type: ['string', 'null'] },
     dispatch_clock_error: { type: ['string', 'null'] },
     tasks_done: { type: 'array', items: { type: 'number' } },
-    // Task ids whose opencode execute-tier dispatch was skipped or abandoned and re-run
-    // as a normal Claude imp. A RESULT fact, so it lives here at the top level next to
-    // its peers — patchState() merges top-level keys only, and no call site patches
-    // `tasks`, so a field on the task item is writable at plan time and never again.
-    escalated_tasks: { type: 'array', items: { type: 'number' } },
-    // WHY each id in escalated_tasks escalated, keyed by task id. A bare count cannot
-    // distinguish the three causes, and they call for opposite responses: a denied
-    // sandbox-off Bash call is a thirty-second operator config fix, a killed dispatch is a
-    // harness-budget bug, and only the third — the open model genuinely failing — is the
-    // datum this tier is being measured on. Without this, all three read as "the cheap
-    // model can't do it" and the measurement is worthless.
-    escalation_reasons: { type: ['object', 'null'], additionalProperties: { type: 'string' } },
     worktrees: { type: 'object', additionalProperties: { type: 'string' } },
     artifacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
     pr: { type: ['object', 'null'], additionalProperties: true },
@@ -151,10 +129,9 @@ const STATE_SCHEMA = {
     last_result: { type: ['object', 'null'], additionalProperties: true },
     failed_tasks: { type: 'array', items: { type: 'object', additionalProperties: true } },
     // --- schema 4, all ADDITIVE and all optional (none joins `required`) --------------
-    // A schema-3 state file still validates: these are top-level optional properties,
-    // the same pattern escalated_tasks/escalation_reasons already use. The #87 silent
-    // field-drop risk is specific to `tasks.items` (see the comment at 70-73), which is
-    // why additionalProperties:true is load-bearing THERE and not here.
+    // A schema-3 state file still validates: these are top-level optional properties.
+    // The #87 silent field-drop risk is specific to `tasks.items` (see the comment at
+    // 70-73), which is why additionalProperties:true is load-bearing THERE and not here.
     //
     // These four carry free text (persona findings, ruling rationales). They are the ONE
     // established exception to "never embed long text in the state file" — a ruling's
@@ -544,81 +521,7 @@ function stageTasks(tasks, doneIds, failed) {
   return { stages, unresolved: remaining }
 }
 
-// The single predicate both dispatchImp() (route or not) and runDispatch() (escalate or
-// not) consult. Two independently-written conditions on the same fact is how they drift.
-// A green-at-start oracle cannot distinguish "implemented correctly" from "did nothing",
-// so eligibility is only half the gate — dispatchOpencodeImp passes `--expect-oracle red`
-// unconditionally and the script aborts on a green start.
-function eligibleForOpencode(task) {
-  return (
-    task.type === 'code' &&
-    task.executor === 'opencode' &&
-    typeof task.oracle === 'string' &&
-    task.oracle.trim().length > 0
-  )
-}
-
-// executor:"opencode" — offload one mechanical task to the cheap-model execute tier.
-//
-// This workflow script has no filesystem or exec primitive (only agent/parallel/phase/log),
-// so the tier is reached through a thin WRAPPER agent that shells out to
-// opencode-dispatch.sh from its own isolated worktree and reshapes the harness's contract
-// line into IMP_RESULT_SCHEMA. task.model is that wrapper's Claude model — haiku suffices,
-// it only runs one command and reads JSON. The open model is opencode-dispatch.sh's own
-// default; there is no per-task override, deliberately (a non-Claude id in `model` would
-// be handed straight to agent()).
-//
-// AUTHORIZATION: the Bash call must run sandbox-off because Seatbelt does not nest. That
-// is NOT guaranteed by a deterministic allow rule — `.claude/settings.local.json` is
-// git-ignored and absent from a worktree checkout, so in practice the grant comes from the
-// auto-mode classifier. The deterministic fix is an operator-added rule in user-level
-// ~/.claude/settings.json, which loads regardless of cwd. Until then a denial is a
-// first-class outcome: fail fast, escalate to a Claude imp (see runDispatch).
-function dispatchOpencodeImp(task, state, guidance) {
-  const spec = task.spec || `(No per-task spec recorded — legacy state file.) The run's overall goal, for context: ${state.task}`
-  return agent(
-    `You are the opencode execute-tier WRAPPER for task #${task.id}: ${task.label}
-You do NOT implement this task yourself. You run one command, read one line of JSON, and report. Follow these steps exactly and do not improvise.
-
-1. \`WT="$(git rev-parse --show-toplevel)"\` — this isolated worktree is the only code path the open model may edit.
-2. Confirm \`git -C "$WT" status --porcelain\` is EMPTY. opencode-dispatch.sh aborts \`worktree_dirty\` on a non-empty tree before spending anything. If it is not empty, stop and return status "failed" with a note saying so.
-3. Read the "Global Constraints" section of ${args.goalFilePath} yourself, NOW. **You are the only participant who can.** The open model runs under the harness's own sandbox, whose \`external_directory\` permission is \`deny\`, so a pointer to that path would be unreadable to it — every constraint must reach it as literal text you paste, or not at all. If the section is missing, empty, or reads \`_None._\`, there are no constraints and you skip the CONSTRAINTS block below entirely; if the file itself is unreadable, stop and return status "failed" saying so rather than dispatching an unconstrained task.
-4. Write the task prompt to \`"$TMPDIR/imps-oc-${task.id}.prompt"\` — **inside $TMPDIR, never inside the worktree**, or step 2's invariant is broken by your own file. Its contents are, in order: (a) unless step 3 said to skip it, one line reading \`Global constraints — invariants every change in this task must satisfy:\` followed by that section's literal text and a blank line; then (b) everything between the two markers below, verbatim, markers themselves excluded. The markers are the ONLY delimiters — the text between them may itself contain \`---\`, code fences, or anything else, and none of that ends the block:
-<<<IMPS_OC_PROMPT_BEGIN>>>
-${spec}${guidance ? `\n\nOperator guidance from a prior attempt — this is part of the task, follow it:\n${guidance}` : ''}
-<<<IMPS_OC_PROMPT_END>>>
-5. Pick a fresh result branch name: \`BR="imps/opencode-${task.id}-$(date -u +%Y%m%d-%H%M%S)"\`. It must not already exist (\`git rev-parse --verify --quiet "refs/heads/$BR"\` must be empty); the harness creates it with a compare-and-swap and fails if it does.
-6. The oracle is everything between these two markers, verbatim (same rule as step 4 — the markers are the only delimiters):
-<<<IMPS_OC_ORACLE_BEGIN>>>
-${task.oracle}
-<<<IMPS_OC_ORACLE_END>>>
-   Pass it to \`--oracle\` as ONE shell argument. Shell-quote it yourself — it is an arbitrary command line and may contain quotes, \`$\`, or spaces; a mis-quoted oracle silently measures the wrong thing.
-7. Run this ONCE, with Bash \`dangerouslyDisableSandbox: true\` (required — the harness applies its own Seatbelt sandbox and Seatbelt does not nest) AND \`timeout: 600000\` (the Bash tool's maximum; its 120s DEFAULT would kill the dispatch mid-attempt), substituting the quoted oracle for <ORACLE>:
-   \`bash ${args.pluginRoot}/scripts/opencode-dispatch.sh --worktree "$WT" --prompt-file "$TMPDIR/imps-oc-${task.id}.prompt" --oracle <ORACLE> --expect-oracle red --result-branch "$BR" --max-attempts 2 --attempt-timeout 180 --oracle-timeout 60 2>"$TMPDIR/imps-oc-${task.id}.err" | tail -n 1\`
-   The budget flags are NOT optional and must not be raised without also raising \`timeout\`. The script's own defaults (3 attempts x 300s + 4 oracle runs x 120s) worst-case at ~1380s — more than double the Bash ceiling — so with defaults the tool kills the call mid-attempt, no contract line is ever read, and the wrapper reports "no output". That failure is indistinguishable from the open model failing, which would silently record this tier as 0% capable when nothing was ever measured. These values (60 + 2x180 + 2x60 = 540s) fit inside the ceiling with headroom.
-   Keep stderr in the file and read only the LAST line of stdout — that line is the contract JSON. Do not merge stderr into stdout; interleaving can displace it.
-   Do NOT pass \`--model\`: the script's own default open model applies, and routing an Anthropic model through opencode is forbidden.
-   Do NOT run gates, linters, formatters, or \`git add\`/\`git commit\` yourself at any point. The harness owns the commit; anything you write into the worktree breaks step 2's invariant.
-8. **Hard rule — a denied, prompted, or timed-out sandbox-off Bash call is an ABORT, not a retry.** Do not retry it, do not re-run it sandboxed, do not look for another way to invoke the script. This is a headless run: there is no operator to answer a prompt and stalling burns the run's dispatch budget. Return status "failed" immediately with a note naming the denial. A normal Claude imp will be dispatched to do the work instead — that fallback is the designed behaviour, not a loss.
-9. Report:
-   - contract \`"status":"pass"\` → return status "done", \`branch\` = "$BR", and put attempts / cost_usd / commit_sha / oracle_start_state in "notes".
-   - ANY other outcome (\`"status":"fail"\`, unparseable output, no output, non-zero exit with no contract line, or the abort in step 8) → status "failed", \`branch\`: **null**, and put \`abort_reason\` plus the last few lines of the stderr file in "notes". This includes \`result_ref_failed\`, which carries a real commit_sha — do not try to recover that commit or invent a branch for it.
-
-Any operator retry guidance is already inside the prompt block at step 4 — it is the open
-model's to act on, not yours. You still run one command and report.
-Return via the required schema.`,
-    {
-      label: `imp-${task.id}-opencode`,
-      phase: 'Dispatch',
-      model: task.model,
-      schema: IMP_RESULT_SCHEMA,
-      isolation: 'worktree',
-    }
-  )
-}
-
-function dispatchImp(task, state, guidance, escalated) {
-  if (!escalated && eligibleForOpencode(task)) return dispatchOpencodeImp(task, state, guidance)
+function dispatchImp(task, state, guidance) {
   const isCode = task.type === 'code'
   // Specs must travel with tasks: the label is a one-line title, not instructions.
   // An imp dispatched with only the label improvises — observed failures include
@@ -640,7 +543,7 @@ ${task.type === 'publish' ? 'Create GitHub artifacts (PRs, issues, comments, Dis
 Do exactly this task. Nothing more — note anything else you notice but do not fix it.
 Return via the required schema: status "done" or "failed" (with a ≤50-word reason in notes if failed).`,
     {
-      label: `imp-${task.id}${escalated ? '-escalated' : guidance ? '-retry' : ''}`,
+      label: `imp-${task.id}${guidance ? '-retry' : ''}`,
       phase: 'Dispatch',
       model: task.model,
       schema: IMP_RESULT_SCHEMA,
@@ -667,8 +570,6 @@ function parseTaskDecision(decision) {
 
 async function runDispatch(state) {
   const doneIds = new Set(state.tasks_done || [])
-  const escalatedIds = new Set(state.escalated_tasks || [])
-  const escalationReasons = { ...(state.escalation_reasons || {}) }
   const failed = new Map((state.failed_tasks || []).map((f) => [f.id, f]))
   let worktrees = { ...(state.worktrees || {}) }
   let artifacts = [...(state.artifacts || [])]
@@ -704,55 +605,8 @@ async function runDispatch(state) {
     if (!runnable.length) continue
 
     const results = await parallel(
-      // escalatedIds is passed, not just loaded: a task escalated on a PRIOR invocation
-      // is still `executor:"opencode"` in the state file, so without this an operator
-      // `retry #N` re-routes it straight back to the tier that already failed it and pays
-      // for a second dispatch before escalating again.
-      runnable.map((t) => () => dispatchImp(t, state, retryGuidance.get(t.id), escalatedIds.has(t.id)).then((r) => ({ task: t, result: r })))
+      runnable.map((t) => () => dispatchImp(t, state, retryGuidance.get(t.id)).then((r) => ({ task: t, result: r })))
     )
-
-    // Escalation. An opencode-executor task that exhausted its attempts, aborted, or hit
-    // a denied sandbox-off Bash call falls back to a normal Claude imp rather than failing
-    // the run. So does one the planner marked `executor:"opencode"` without a usable
-    // oracle — that never reached the tier at all (dispatchImp routed it to Claude
-    // directly, costing nothing), but it is still a plan error that has to show up in the
-    // measurement rather than looking like a task that never touched opencode.
-    //
-    // This runs BEFORE the bookkeeping forEach below on purpose: the fallback's branch has
-    // to reach `worktrees` in the same heartbeat patch. runDispatch keeps only
-    // id/branch/artifacts on success and discards notes, so `escalated_tasks` is the only
-    // durable record that a merged branch came from a second attempt.
-    const escalations = []
-    for (let i = 0; i < runnable.length; i += 1) {
-      const t = runnable[i]
-      if (t.executor !== 'opencode') continue
-      if (!eligibleForOpencode(t)) {
-        escalatedIds.add(t.id) // ineligible: no oracle, already ran as a Claude imp
-        escalationReasons[String(t.id)] =
-          'ineligible for the tier (executor "opencode" with no usable oracle) — never dispatched, cost nothing; this is a plan error, not a model failure'
-        continue
-      }
-      const r = results[i] ? results[i].result : null
-      if (!r || r.status === 'failed') escalations.push({ index: i, task: t })
-    }
-    if (escalations.length) {
-      const fallbacks = await parallel(
-        escalations.map((e) => () =>
-          dispatchImp(e.task, state, retryGuidance.get(e.task.id), true).then((r) => ({ task: e.task, result: r }))
-        )
-      )
-      escalations.forEach((e, k) => {
-        escalatedIds.add(e.task.id)
-        // Capture the opencode attempt's own notes BEFORE overwriting the slot. Step 8 of
-        // the wrapper prompt puts abort_reason plus the stderr tail there, and it is the
-        // only record of why the tier was abandoned; the fallback's result replaces it
-        // entirely, so reading it afterwards gets the Claude imp's notes or nothing.
-        const ocResult = results[e.index] ? results[e.index].result : null
-        escalationReasons[String(e.task.id)] =
-          (ocResult && ocResult.notes) || 'opencode dispatch returned no result'
-        results[e.index] = fallbacks[k] || null
-      })
-    }
 
     results.forEach((entry, i) => {
       // parallel() resolves a thunk that threw (e.g. worktree-creation contention) to
@@ -797,8 +651,6 @@ async function runDispatch(state) {
         // persistently wedged once the clock recovers.
         heartbeat_clock_error: heartbeatClockError,
         tasks_done: [...doneIds],
-        escalated_tasks: [...escalatedIds],
-        escalation_reasons: escalationReasons,
         worktrees,
         artifacts,
         failed_tasks: [...failed.values()],
@@ -810,7 +662,7 @@ async function runDispatch(state) {
     if (failed.size && doneIds.size + failed.size >= state.tasks.length) break
   }
 
-  return { blocked: false, doneIds, escalatedIds, escalationReasons, failed: [...failed.values()], worktrees, artifacts }
+  return { blocked: false, doneIds, failed: [...failed.values()], worktrees, artifacts }
 }
 
 // ---------------------------------------------------------------------------
@@ -2130,7 +1982,7 @@ if (codeReview.status !== 'ok') {
   await saveResult(result)
   return result
 }
-while (codeReview.verdict === 'CHANGES_REQUESTED' && codeReviewRounds < 2) {
+while (codeReview.verdict === 'CHANGES_REQUESTED' && codeReviewRounds < 3) {
   codeReviewRounds += 1
   await fixCodeReview(codeReview.findings)
   const repairedGates = await runGatesWithRetry(gateCommands, null)
@@ -2234,12 +2086,6 @@ const result = {
     model_counts: modelCounts,
     tokens_spent: null,
     artifacts: dispatchOutcome.artifacts,
-    // Surfaced at the operator gate, not just written to the state file. The
-    // escalation rate is the cheapest read on whether the opencode tier earns its
-    // keep, and the reasons separate "the operator is missing a permission grant"
-    // from "the model actually failed" — left unreported it is a number nobody sees.
-    escalated_tasks: [...(dispatchOutcome.escalatedIds || [])],
-    escalation_reasons: dispatchOutcome.escalationReasons || {},
   },
 }
 await patchState({ segment: 'publish_finalize' }, 'enter-publish')
