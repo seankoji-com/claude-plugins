@@ -11,6 +11,7 @@
     "scripts/final-banner.py": "The end-of-run companion to dispatch-banner.py, excluded for the same reason: it colours by `opus`/`sonnet`/`haiku` and synthesizes a roster from a `model_counts` map that a tier-routed run never writes. Excluded with its caller, the Workflow `run_complete` checkpoint.",
     "scripts/imps-run.workflow.js": "The Claude Code Workflow runtime for the whole run — agent() dispatch, isolation: 'worktree', the Workflow resume model. Neither platform has a Workflow tool, so shipping it would present Claude mechanics as if they run there (contract item 16). The per-platform dispatch loop is prose, from this directory's overrides.",
     "scripts/opencode-dispatch.sh": "The Claude-host oracle-loop harness. Copies the operator's own OpenCode auth from a $HOME-relative path and drives sandbox-wrap.sh, so it is unusable without it and cannot satisfy dist/'s no-machine-paths invariant as written. Frozen Claude sources forbid rewriting it here.",
+    "scripts/opencode-review.sh": "The Claude-host read-only OpenCode review harness. It copies a provider credential into a temporary XDG tree and uses Claude Workflow wrapper mechanics, neither of which belongs in generated runtimes that already review inside their own runtime.",
     "scripts/sandbox-smoke.sh": "Seatbelt grant-boundary smoke test for sandbox-wrap.sh. Asserts against $HOME-relative paths throughout; excluded with the wrapper it tests.",
     "scripts/sandbox-wrap.sh": "Darwin-only Seatbelt wrapper (agent-safehouse). Resolves the safehouse binary through /opt/homebrew and /usr/local/opt and canonicalises $HOME — absolute machine paths dist/ must never carry, and unfixable here because Claude sources are frozen."
   },
@@ -54,6 +55,6 @@
     "description": "Swarm orchestration with serial tier-routed execution, deterministic gates, whole-repo audits, PR monitoring, and proof-led blast-radius analysis. (The Claude Code build drives the main run from a background Workflow script; here the skill drives it directly.)"
   },
   "source_hash_pins": {
-    "scripts/imps-run.workflow.js": "b9e4b2f2dab32e57202ba8c887acb0d1375ac1f5f4b9cd6baa8abad9d54690d6"
+    "scripts/imps-run.workflow.js": "8f78916c2152aedd6bf87b57c6366dbdbe72e4867c01e1c3da63aa7a3aa631e0"
   }
 }

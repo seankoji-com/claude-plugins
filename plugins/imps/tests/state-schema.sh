@@ -158,6 +158,12 @@ const SCHEMA4 = {
     Array.isArray(s.type) && s.type.indexOf('number') !== -1 && s.type.indexOf('null') !== -1,
   posting_mode: (s) =>
     Array.isArray(s.type) && s.type.indexOf('string') !== -1 && s.type.indexOf('null') !== -1,
+  review_engine: (s) => Array.isArray(s.type) && s.type.indexOf('string') !== -1 && s.type.indexOf('null') !== -1,
+  review_model: (s) => Array.isArray(s.type) && s.type.indexOf('string') !== -1 && s.type.indexOf('null') !== -1,
+  code_review_rounds: (s) => Array.isArray(s.type) && s.type.indexOf('number') !== -1 && s.type.indexOf('null') !== -1,
+  code_review_findings: (s) => Array.isArray(s.type) && s.type.indexOf('array') !== -1 && s.type.indexOf('null') !== -1,
+  code_review_sessions: (s) => Array.isArray(s.type) && s.type.indexOf('array') !== -1 && s.type.indexOf('null') !== -1,
+  code_review_override: (s) => Array.isArray(s.type) && s.type.indexOf('string') !== -1 && s.type.indexOf('null') !== -1,
 }
 const topRequired = S.required || []
 for (const k of Object.keys(SCHEMA4)) {
@@ -234,6 +240,8 @@ function sample() {
     fix_rounds_done: 3,
     fix_cycles: 1,
     posting_mode: 'live',
+    review_engine: 'opencode', review_model: 'openai/gpt-5.4', code_review_rounds: 1,
+    code_review_findings: [], code_review_sessions: ['ses_test'], code_review_override: null,
   }
 }
 
@@ -296,7 +304,7 @@ badVerdictsPending.verdicts_pending = 'not an object'
 assert('negative/verdicts_pending-wrong-type', validate(S, badVerdictsPending).length > 0, 'validator accepted verdicts_pending: "not an object"')
 
 // A truncated run must not pass silently.
-const EXPECTED_ASSERTS = 51
+const EXPECTED_ASSERTS = 63
 if (asserts !== EXPECTED_ASSERTS) {
   console.log('FAIL state-schema/assertion-count')
   console.log('     ran ' + asserts + ' assertions, expected ' + EXPECTED_ASSERTS)
