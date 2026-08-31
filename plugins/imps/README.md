@@ -73,6 +73,20 @@ claude plugin marketplace add seankoji/claude-plugins
 claude plugin install imps@seankoji
 ```
 
+### Personal Codex command
+
+From a checkout of this repository, install the maintained Codex translation as a
+personal skill:
+
+```sh
+repo_root="$(git rev-parse --show-toplevel)"
+mkdir -p "$HOME/.agents/skills"
+ln -s "$repo_root/plugins/imps/codex-skills/imps" "$HOME/.agents/skills/imps"
+```
+
+Invoke it explicitly with `$imps <task>`. This adapter uses native Codex subagents and
+worktrees in the active task; it does not run Claude's background `Workflow` script.
+
 ## Usage
 
 Four entry modes, auto-detected from the argument:
