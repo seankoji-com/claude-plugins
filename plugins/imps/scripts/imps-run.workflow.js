@@ -34,8 +34,8 @@
 //   personaPanel: boolean  // OPTIONAL, default false. The in-run five-persona panel is
 //                          // OPT-IN — only runs when this is exactly `true` (set by the
 //                          // `--personas` flag in commands/imps.md). Absent/false: the
-//                          // panel and its fix loop are skipped and the Head Imp diff
-//                          // review is the gate. personaBriefPaths is still passed either
+//                          // panel and its fix loop are skipped; OpenCode diff review is
+//                          // the gate. personaBriefPaths is still passed either
 //                          // way — it is only read when the panel actually runs.
 // }
 // Each entry carries its own dispatch model and capability tags — a persona's model
@@ -182,6 +182,13 @@ const STATE_SCHEMA = {
     // Persisted so a findings resume — whose decision no longer starts with "PR:" —
     // does not silently degrade to posting_mode "none".
     posting_mode: { type: ['string', 'null'] },
+    // Schema 5: OpenCode review is additive so legacy state files remain valid.
+    review_engine: { type: ['string', 'null'] },
+    review_model: { type: ['string', 'null'] },
+    code_review_rounds: { type: ['number', 'null'] },
+    code_review_findings: { type: ['array', 'null'], items: { type: 'object', additionalProperties: true } },
+    code_review_sessions: { type: ['array', 'null'], items: { type: 'string' } },
+    code_review_override: { type: ['string', 'null'] },
   },
   required: ['schema', 'task', 'branch', 'tasks', 'phase'],
 }
@@ -222,14 +229,17 @@ const MERGE_SCHEMA = {
   required: ['merged', 'conflict', 'default_branch_violation'],
 }
 
-const HEAD_IMP_SCHEMA = {
+const CODE_REVIEW_SCHEMA = {
   type: 'object',
   properties: {
-    verdict: { type: 'string', enum: ['APPROVE', 'CHANGES_REQUESTED'] },
-    findings: { type: 'array', items: { type: 'string' } },
-    amendments_applied: { type: 'number' },
+    status: { type: 'string', enum: ['ok', 'blocked'] },
+    verdict: { type: ['string', 'null'], enum: ['APPROVE', 'CHANGES_REQUESTED', null] },
+    findings: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    model: { type: 'string' }, provider: { type: ['string', 'null'] },
+    session_id: { type: ['string', 'null'] }, duration_ms: { type: 'number' },
+    cost_usd: { type: ['number', 'null'] }, reason: { type: ['string', 'null'] },
   },
-  required: ['verdict', 'findings', 'amendments_applied'],
+  required: ['status', 'verdict', 'findings', 'model', 'provider', 'session_id', 'duration_ms', 'cost_usd', 'reason'],
 }
 
 const GATE_DISCOVERY_SCHEMA = {
@@ -819,14 +829,27 @@ Report "merged": [{id, label, files changed}] for each that merged cleanly (map 
   )
 }
 
-function headImpReview(defaultBranch) {
+function openCodeReview(defaultBranch) {
   return agent(
-    `You are the Head Imp — a single adversarial reviewer combining three independent axes (read ${args.pluginRoot}/agents/head-imp.md for your full brief and follow it exactly). Your plugin root is ${args.pluginRoot} — wherever that brief (or anything it points you to) writes a literal \`\${CLAUDE_PLUGIN_ROOT}\` token, substitute this value yourself; it is never auto-expanded for a file you Read this way. Review this diff by running it yourself, never accept it pasted: \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\`. If it produces no output, say so and stop rather than inventing a diff range.
-Intent source: read the Definition of Done and Global Constraints in ${args.goalFilePath}; assess the diff against them independently from architecture and line correctness.
-${constraintsPointerForReviewer()}
-Argue against the diff per your brief (Technical Architect + Chissy Engineer + Contract axes). Apply the amendments your blocker/major findings demand yourself where the fix is small and disjoint; note larger fixes as findings without applying them.
-Return via the required schema: "verdict" (APPROVE|CHANGES_REQUESTED), "findings" (list of one-line finding summaries), "amendments_applied" (count of fixes you made directly, 0 if none).`,
-    { label: 'head-imp-diff', phase: 'Integrate', model: 'opus', schema: HEAD_IMP_SCHEMA }
+    `You are a mechanical wrapper. Do not read, summarize, review, edit, or otherwise inspect code or a diff. Run exactly this command from the current checkout, capture its final stdout JSON line, and return it unchanged through the required schema:
+REPO="$(git rev-parse --show-toplevel)"
+"${args.pluginRoot}/scripts/opencode-review.sh" --repo "$REPO" --base "origin/${defaultBranch}" --head HEAD --goal "${args.goalFilePath}"
+If the command exits non-zero, still return its final JSON contract. Never substitute a Claude review or alter the contract.`,
+    { label: 'opencode-review', phase: 'Integrate', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
+  )
+}
+
+function openCodePreflight() {
+  return agent(
+    `You are a mechanical wrapper. Do not inspect code. Run exactly \`${args.pluginRoot}/scripts/opencode-review.sh --check\`, capture its final stdout JSON line, and return it unchanged through the required schema. A failure is a hard block; never replace it with a Claude review.`,
+    { label: 'opencode-review-preflight', phase: 'Preflight', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
+  )
+}
+
+function fixCodeReview(findings) {
+  return agent(
+    `OpenCode returned these blocker/major review findings on the merged diff: ${JSON.stringify(findings)}. Fix only those findings in the current checkout. ${constraintsPointer()} Do not push, open a PR, or claim review approval.`,
+    { label: 'fix-opencode-review', phase: 'Integrate', model: 'sonnet' }
   )
 }
 
@@ -1995,6 +2018,15 @@ if (decision === 'integrate partial') {
 
 phase('Dispatch')
 if (!state.dispatched_at) {
+  const reviewPreflight = await openCodePreflight()
+  if (reviewPreflight.status !== 'ok') {
+    const result = { status: 'blocked', reason: 'code_review_unavailable', detail: reviewPreflight }
+    await saveResult(result)
+    return result
+  }
+  await patchState({ review_engine: 'opencode', review_model: reviewPreflight.model, code_review_rounds: 0, code_review_findings: [], code_review_sessions: [], code_review_override: null }, 'save-review-preflight')
+}
+if (!state.dispatched_at) {
   const pre = await preflight(state)
   if (!pre.ok) {
     const result = { status: 'blocked', reason: 'dispatch_failed', detail: { error: pre.error } }
@@ -2064,12 +2096,7 @@ if (mergeResult.conflict) {
   return result
 }
 
-let headImp = null
 const hasDiff = mergeResult.merged.length > 0
-if (hasDiff) {
-  headImp = await headImpReview(defaultBranch)
-}
-
 const syncResult = await syncDefaultBranch(defaultBranch)
 if (syncResult.conflict) {
   const result = { status: 'blocked', reason: 'merge_conflict', detail: syncResult.conflict }
@@ -2090,6 +2117,52 @@ if (gateOutcome.blockedOn) {
   const result = { status: 'blocked', reason: 'gate_red', detail: { gate: gateOutcome.blockedOn.name, cmd: gateOutcome.blockedOn.cmd, tail: failedResult.tail } }
   await saveResult(result)
   return result
+}
+
+// Gates are deliberately before review. A review-driven fix reruns every gate and is then
+// sent to a fresh OpenCode session; no Claude review fallback exists on any failure path.
+let codeReview = hasDiff ? await openCodeReview(defaultBranch) : { status: 'ok', verdict: 'APPROVE', findings: [], model: state.review_model || 'openai/gpt-5.4', provider: 'openai', session_id: null, duration_ms: 0, cost_usd: null, reason: null }
+let codeReviewRounds = 0
+let codeReviewSessions = codeReview.session_id ? [codeReview.session_id] : []
+if (codeReview.status !== 'ok') {
+  const result = { status: 'blocked', reason: 'code_review_unavailable', detail: codeReview }
+  await patchState({ code_review_findings: codeReview.findings || [], code_review_sessions: codeReviewSessions }, 'code-review-failed')
+  await saveResult(result)
+  return result
+}
+while (codeReview.verdict === 'CHANGES_REQUESTED' && codeReviewRounds < 2) {
+  codeReviewRounds += 1
+  await fixCodeReview(codeReview.findings)
+  const repairedGates = await runGatesWithRetry(gateCommands, null)
+  if (repairedGates.blockedOn) {
+    const failedResult = repairedGates.results[repairedGates.results.length - 1]
+    const result = { status: 'blocked', reason: 'gate_red', detail: { gate: repairedGates.blockedOn.name, cmd: repairedGates.blockedOn.cmd, tail: failedResult.tail, after_code_review: true } }
+    await saveResult(result)
+    return result
+  }
+  codeReview = await openCodeReview(defaultBranch)
+  if (codeReview.session_id) codeReviewSessions.push(codeReview.session_id)
+  if (codeReview.status !== 'ok') {
+    const result = { status: 'blocked', reason: 'code_review_unavailable', detail: codeReview }
+    await patchState({ code_review_rounds: codeReviewRounds, code_review_findings: codeReview.findings || [], code_review_sessions: codeReviewSessions }, 'code-review-failed')
+    await saveResult(result)
+    return result
+  }
+}
+await patchState({ code_review_rounds: codeReviewRounds, code_review_findings: codeReview.findings, code_review_sessions: codeReviewSessions }, 'save-code-review')
+if (codeReview.verdict === 'CHANGES_REQUESTED') {
+  const overridePrefix = 'override code review:'
+  const codeReviewOverride = state.operator_decision && state.operator_decision.startsWith(overridePrefix)
+    ? state.operator_decision.slice(overridePrefix.length).trim()
+    : ''
+  if (codeReviewOverride) {
+    await patchState({ code_review_override: codeReviewOverride }, 'override-code-review')
+    codeReview = { ...codeReview, verdict: 'APPROVE' }
+  } else {
+  const result = { status: 'blocked', reason: 'code_review_red', detail: { findings: codeReview.findings, rounds: codeReviewRounds, model: codeReview.model, provider: codeReview.provider, sessions: codeReviewSessions } }
+  await saveResult(result)
+  return result
+  }
 }
 
 const diffStatInfo = await agent(`Run \`git diff origin/${defaultBranch}..HEAD --stat\` and return the summary line (e.g. "12 files changed, 340 insertions(+), 25 deletions(-)").`, { label: 'diff-stat', phase: 'Integrate', model: 'haiku', schema: { type: 'object', properties: { diff_stat: { type: 'string' } }, required: ['diff_stat'] } })
@@ -2143,7 +2216,8 @@ const result = {
   status: 'awaiting_authorization',
   merged: mergeResult.merged,
   failed_tasks: dispatchOutcome.failed,
-  head_imp: headImp ? { verdict: headImp.verdict, amendments: headImp.amendments_applied } : null,
+  code_review: { engine: 'opencode', provider: codeReview.provider, model: codeReview.model, verdict: codeReview.verdict, rounds: codeReviewRounds, findings: codeReview.findings },
+  code_review_override: state.operator_decision && state.operator_decision.startsWith('override code review:') ? state.operator_decision.slice('override code review:'.length).trim() : null,
   gates: gateOutcome.results,
   diff_stat: diffStatInfo.diff_stat,
   default_branch: defaultBranch,

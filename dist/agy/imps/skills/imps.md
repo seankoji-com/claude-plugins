@@ -64,11 +64,8 @@ runs — the remaining text is what mode detection and every phase below operate
 flag anywhere in the argument string counts; order does not matter.
 
 - **`--personas`** — opt into the in-run five-persona review panel. **Default: OFF.**
-  Without this flag, no persona panel runs on either the free-text or issue-driven path;
-  the **Head Imp** adversarial review (plan review in Phase 2, diff review inside the
-  Workflow script's merge step) is the sole review gate, which is sufficient for
-  repositories whose PRs already receive persona reviews from a GitHub-side automation.
-  With this flag, the full panel + fix-loop + adjudication runs exactly as before.
+  Without it, the Head Imp reviews the plan and read-only OpenCode reviews the merged diff.
+  With it, the full panel + fix-loop + adjudication runs exactly as before.
 
 Derive a single boolean `PERSONA_PANEL` (`true` only if `--personas` was present) and
 carry it through: free-text mode passes it into the Workflow call as `personaPanel`
@@ -162,8 +159,8 @@ Report only what is wrong, missing, or mis-scoped." \
 
 It never edits; it returns findings. You act on them.
 
-(On Claude Code the Head Imp is a registered `imps:😈` agent type and the diff review runs
-inside the Workflow script's merge step.)
+(On Claude Code the Head Imp is a registered `imps:😈` plan-review agent. OpenCode reviews
+the merged diff after deterministic gates.)
 
 ### Never pre-judge a reviewer's findings inside its own prompt
 
@@ -336,7 +333,7 @@ when the plan must quote or reason about its contents. Then:
 
 - **Solo-task check, before decomposing:** if the work is genuinely one atomic unit, write
   a **single-row task table** and go straight to Step 2. This is the same process with a
-  smaller DAG — the Head Imp still reviews the plan and the diff, the one task still
+  smaller DAG — the Head Imp reviews the plan and OpenCode reviews the merged diff, the one task still
   dispatches into its own worktree, and gates, the persona panel and the endstate PR all
   still run. A one-task run is a first-class outcome, not a fallback.
 - Otherwise, break the work into discrete, atomic tasks, each with one clearly-stated
@@ -396,7 +393,7 @@ this structure:
 - [ ] <acceptance criterion 1>
 - [ ] <acceptance criterion 2 — one line each from discovery>
 - [ ] Gates green (build · lint · test · type — per GATE_CMDS)
-- [ ] Head Imp adversarially reviewed the plan and the diff; all blocker/major findings addressed
+- [ ] Head Imp reviewed the plan; OpenCode reviewed the merged diff; all blocker/major findings addressed
 - [ ] No merge conflicts with the default branch
 
 ## Global Constraints
@@ -598,9 +595,9 @@ conflicting paths — do not resolve silently. After merging, do not trust the r
 worktree path alone: check `git status --short` and `git log --oneline -3` in the real
 checkout before assuming the tree is clean.
 
-**Step 6 — Head Imp diff review** across architecture, line correctness, and contract fit
-against GOAL.md, then the gates from discovery (build · lint · test · type). A red gate
-stops the loop and goes to Phase 4 for a decision. **The five-persona panel runs only when
+**Step 6 — independent diff review.** Review the merged diff against GOAL.md after gates
+with the runtime's independent OpenAI-lineage reviewer. Fix blocker/major findings, rerun
+gates, and re-review with a fresh session. A reviewer failure blocks. **The five-persona panel runs only when
 `--personas` was passed** (`PERSONA_PANEL` true); by default it is skipped and the Head Imp
 diff review here is the review gate — see the Runtime flags section.
 

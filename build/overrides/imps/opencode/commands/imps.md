@@ -64,8 +64,8 @@ opencode run -m "<deep-tier model>" \
 
 It never edits; it returns findings. You act on them.
 
-(On Claude Code the Head Imp is a registered `imps:😈` agent type and the diff review
-runs inside the Workflow script's merge step.)
+(On Claude Code the Head Imp is a registered `imps:😈` plan-review agent. OpenCode reviews
+the merged diff after deterministic gates.)
 <!-- END-SECTION -->
 
 <!-- REPLACE-SECTION: ## Guard: resume check -->
@@ -135,7 +135,7 @@ directly only when the plan must quote or reason about its contents. Then:
 
 - **Solo-task check, before decomposing:** if the work is genuinely one atomic unit, write
   a **single-row task table** and go straight to Step 2. This is the same process with a
-  smaller DAG — the Head Imp still reviews the plan and the diff, the one task still
+  smaller DAG — the Head Imp reviews the plan and OpenCode reviews the merged diff, the one task still
   dispatches through the harness into its own worktree, and gates, the persona panel and
   the endstate PR all still run. A one-task run is a first-class outcome, not a fallback.
 - Otherwise, break the work into discrete, atomic tasks, each with one clearly-stated
@@ -411,11 +411,11 @@ conflicting paths — do not resolve silently. After merging, do not trust the r
 worktree path alone: check `git status --short` and `git log --oneline -3` in the real
 checkout before assuming the tree is clean.
 
-**Step 5 — Head Imp diff review** across architecture, line correctness, and contract fit
-against GOAL.md, then the gates from discovery (build · lint · test · type). A red gate
-stops the loop and goes to Phase 4 for a decision. **The five-persona panel runs only when
-`--personas` was passed** (`PERSONA_PANEL` true); by default it is skipped and the Head Imp
-diff review here is the review gate — see the Runtime flags section.
+**Step 5 — diff review and gates.** The Head Imp reviews the plan only. Review the merged
+diff against GOAL.md after gates with the runtime's independent OpenAI-lineage reviewer.
+Fix blocker/major findings, rerun all gates, and use a fresh review session. A reviewer
+failure blocks: never silently fall back to Claude. **The five-persona panel runs only when
+`--personas` was passed** (`PERSONA_PANEL` true).
 <!-- END-SECTION -->
 
 <!-- REPLACE-SECTION: ## Phase 4 — Result relay loop -->
@@ -478,8 +478,8 @@ blocks. "Parked" always means *reviewed and ruled on* — never a persona that w
 run. A skipped persona is an unreviewed lens, not a parked finding; say so distinctly.
 
 **Push & PR decision.** With `--personas` set, the persona panel posts findings on a PR
-thread, so the PR must exist first. Ask once branches are merged, the Head Imp has
-reviewed, and gates are green:
+thread, so the PR must exist first. Ask once branches are merged, the independent diff
+review has approved, and gates are green:
 
 1. `Push & open PR, personas post live reviews`
 2. `Push & open PR, findings only (no persona posts)`
