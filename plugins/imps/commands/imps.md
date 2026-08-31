@@ -4,7 +4,7 @@ description: >
   Use when a substantial task should be decomposed, dependency-mapped, dispatched to
   model-routed imps, verified, and integrated on a dedicated run branch. Do not use for
   read-only audits or a single diff's impact analysis.
-argument-hint: '<task description>'
+argument-hint: '[--personas] <task description | issue numbers | discussion ref | checklist.md>'
 ---
 
 # /imps:imps — summon the swarm
@@ -18,8 +18,9 @@ Arguments: `$ARGUMENTS`
 > Imps breaks your task into small, dependency-mapped work units and dispatches each to an
 > isolated-worktree agent — in parallel when the work splits cleanly, solo when it's genuinely
 > one unit. Either way the process is the same: the work happens off in its own agent, out of
-> this session's context, then gets gated, reviewed by a persona panel, and merged back to a
-> holding branch. Think of it as a focused team of specialists sized to the task, not padded
+> this session's context, then gets gated, adversarially reviewed by the Head Imp, and merged
+> back to a holding branch (pass `--personas` to add the full five-persona review panel on
+> top). Think of it as a focused team of specialists sized to the task, not padded
 > to look bigger than it is.
 
 ---
@@ -64,6 +65,38 @@ sentence is the whole defence; each one is locally plausible and globally wrong.
 
 ---
 
+## Runtime flags
+
+Parse and **strip** these flags from `$ARGUMENTS` **before** mode detection or any phase
+runs — the remaining text is what mode detection and every phase below operate on. A
+flag anywhere in the argument string counts; order does not matter.
+
+- **`--personas`** — opt into the in-run five-persona review panel. **Default: OFF.**
+  Without this flag, no persona panel runs on either the free-text or issue-driven path;
+  the **Head Imp** adversarial review (plan review in Phase 2, diff review inside the
+  Workflow script's merge step) is the sole review gate, which is sufficient for
+  repositories whose PRs already receive persona reviews from a GitHub-side automation.
+  With this flag, the full panel + fix-loop + adjudication runs exactly as before.
+
+Derive a single boolean `PERSONA_PANEL` (`true` only if `--personas` was present) and
+carry it through: free-text mode passes it into the Workflow call as `personaPanel`
+(Phase 3 Step 2); issue-driven mode hands it to `commands/issue-mode.md`. Stripping the
+flag first is what keeps `--personas 42 43` resolving to issue mode and
+`--personas fix the parser` resolving to free-text — the flag is never part of the task
+description, issue list, or discussion reference.
+
+Concretely, strip with a token filter, e.g.:
+```bash
+PERSONA_PANEL=false
+STRIPPED_ARGS=""
+for tok in $ARGUMENTS; do
+  if [ "$tok" = "--personas" ]; then PERSONA_PANEL=true; else STRIPPED_ARGS="${STRIPPED_ARGS:+$STRIPPED_ARGS }$tok"; fi
+done
+```
+Use `$STRIPPED_ARGS` wherever the sections below say `$ARGUMENTS`.
+
+---
+
 ## Mode detection
 
 `/imps:imps` has **four modes**, checked in this order:
@@ -84,7 +117,8 @@ sentence is the whole defence; each one is locally plausible and globally wrong.
   whitespace-separated token matches `^#?\d+$` (e.g. `/imps:imps 42 43 51`, `/imps:imps #42`).
   **→ Follow [`commands/issue-mode.md`](./issue-mode.md)** for the
   full scout → rolling-dispatch → holding-branch → gates → persona-panel → handoff
-  workflow. Do not continue with the phases below.
+  workflow, passing `PERSONA_PANEL` through to it (its Phase 4 persona panel is
+  gated on the same flag). Do not continue with the phases below.
 
 - **Discussion-seed mode** — `$ARGUMENTS`, taken as a whole, is a GitHub Discussion
   reference and nothing else: a full URL matching
@@ -385,8 +419,8 @@ quote or reason about its contents. Then:
   the process, it's the same process with a smaller DAG: Head Imp still reviews the plan
   (Step 3) and, later, the diff; the one task still dispatches through the Workflow script
   exactly like any other stage, which is what offloads the actual work into an isolated
-  worktree agent, out of this session's context; gates, the persona panel, and the endstate
-  PR all still run unchanged. The only thing skipped is manufacturing parallel work units
+  worktree agent, out of this session's context; gates, the persona panel (when
+  `--personas` is set), and the endstate PR all still run unchanged. The only thing skipped is manufacturing parallel work units
   where none exist — never hedge on whether to run the swarm at all over this; a one-task
   run is a first-class, expected outcome of planning, not a fallback to ask permission for.
 - Otherwise, break the work into discrete, atomic tasks. Each task has one clearly-stated
@@ -475,7 +509,7 @@ one-liner) — shell state doesn't carry across tool calls. Write with this stru
 - [ ] <acceptance criterion 1>
 - [ ] <acceptance criterion 2 — one line each from discovery>
 - [ ] Gates green (build · lint · test · type — per GATE_CMDS)
-- [ ] Persona panel reviewed; all blocker/major findings addressed
+- [ ] Head Imp adversarially reviewed the plan and the diff; all blocker/major findings addressed
 - [ ] No merge conflicts with the default branch
 
 ## Global Constraints
@@ -543,6 +577,10 @@ Add `- [ ] CI green on the PR` **only if this run will open a PR** (the endstate
 the default for runs that produce code changes; the script adds this line itself when
 a PR opens if you omitted it). Omit it for query/publish-only runs, or it stays
 permanently unresolvable.
+Add `- [ ] Persona panel reviewed; all blocker/major findings addressed` to the
+Definition of Done **only when `--personas` (`PERSONA_PANEL` true) was passed** — that is
+the only run where a panel executes. On a default run the panel never runs, so the box
+would stay permanently unchecked; the Head Imp line above is the review criterion instead.
 
 This file is the `/compact`-durable human-readable spine. It lives outside the project
 on purpose. The JSON state file (Step 6) is the **authoritative** task table — the
@@ -769,6 +807,7 @@ Workflow({
     stateFilePath: "<the echoed $STATE_PATH value, e.g. /Users/you/.claude/imps/runs/<slug>.json>",
     goalFilePath: "<the echoed $GOAL_PATH value, e.g. /Users/you/.claude/imps/runs/<slug>.md>",
     personaPostingProtocolPath: "${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md",
+    personaPanel: <PERSONA_PANEL — the boolean derived in "Runtime flags"; true only if --personas was passed, else false>,
     personaBriefPaths: {
       "solution-architect": { path: "${CLAUDE_PLUGIN_ROOT}/personas/solution-architect.md", model: "opus" },
       "grumpy-engineer": { path: "${CLAUDE_PLUGIN_ROOT}/personas/grumpy-engineer.md", model: "opus" },
@@ -784,6 +823,14 @@ Each roster entry carries its own dispatch `model` and, where relevant, `require
 capability tags the surface-detection skip below filters on. A future persona is handled
 by adding a roster entry (with whatever `model`/`requires` it needs), never by adding a new
 hardcoded slug check to the Workflow script.
+
+**`personaPanel` gates whether the panel runs at all.** It is `false` by default (no
+`--personas` flag): the script skips the entire panel + fix-loop + adjudication block and
+finalizes on the Head Imp's plan and diff reviews alone, which is the intended default for
+repos whose PRs already draw persona reviews from a GitHub-side automation. Pass the
+`PERSONA_PANEL` boolean derived in **Runtime flags**. `personaBriefPaths` is always
+supplied regardless — the script only reads it when `personaPanel` is `true`, so there is
+nothing to conditionalize in the roster below.
 
 `personaBriefPaths` always lists all five briefs. Before the initial panel call only, a
 cheap `model: 'haiku'` classifier reads `git diff --name-only origin/<default>..HEAD` and

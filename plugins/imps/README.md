@@ -24,7 +24,8 @@ at invocation via `opencode run -m`, never as frontmatter); Agy dispatch is seri
 `/imps:imps` decomposes a task (or a batch of GitHub issues) into model-routed agents
 ("imps") — parallel when the work splits into independent units, solo when it's genuinely
 one — dispatches them as staged background subagents, and integrates results through
-deterministic gates and an adversarial persona-review panel.
+deterministic gates and an adversarial **Head Imp** review. An optional five-persona
+review panel runs on top when you pass `--personas` (see [Runtime flags](#runtime-flags)).
 
 The orchestrating session is deliberately minimal: it holds only the operator-facing
 work (plan approval, the push/PR gate, conflict decisions, learnings) while everything
@@ -74,10 +75,21 @@ Four entry modes, auto-detected from the argument:
 
 | Invocation | Mode | What it does |
 | --- | --- | --- |
-| `/imps:imps <free-text task>` | Free-text | Refine → plan (opus plan mode) → decompose → hand to the Workflow script (staged dispatch → merge → gates → persona panel → endstate PR) |
-| `/imps:imps 42 43 51` | Issue-driven | Scout issues → rolling dispatch in isolated worktrees → holding branch → gates → persona panel → operator handoff |
+| `/imps:imps <free-text task>` | Free-text | Refine → plan (opus plan mode) → decompose → hand to the Workflow script (staged dispatch → merge → gates → endstate PR; persona panel only with `--personas`) |
+| `/imps:imps 42 43 51` | Issue-driven | Scout issues → rolling dispatch in isolated worktrees → holding branch → gates → operator handoff (persona panel only with `--personas`) |
 | `/imps:imps https://github.com/<owner>/<repo>/discussions/284` | Discussion-seed | Fetch the discussion via GraphQL, seed it as the free-text task, run the normal free-text flow, and always post a summary comment back to the discussion at the end |
 | `/imps:imps path/to/checklist.md` | Checklist-file | Run each `Verify:`/`Done when:` item as a read-only audit, then offer remediation dispatch |
+
+### Runtime flags
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--personas` | off | Opt into the in-run five-persona review panel (solution-architect, grumpy-engineer, sre, business-analyst, ux-designer). **Without it, no persona panel runs** on either the free-text or issue-driven path — the adversarial **Head Imp** review (plan + diff) is the gate. Intended for repos whose PRs already receive persona reviews from a GitHub-side automation, where an in-run panel would just duplicate that. Combine freely with any mode: `/imps:imps --personas 42 43`, `/imps:imps --personas fix the parser`. The flag is stripped before mode detection, so it never affects which mode is selected. |
+
+Note: issue-driven mode has no Head Imp gate of its own, so with `--personas` off its
+review path is the deterministic gates plus whatever review your PR draws on GitHub —
+only turn the panel off there if such a PR review genuinely exists.
+
 
 ### Free-text mode walkthrough
 
@@ -85,14 +97,14 @@ Four entry modes, auto-detected from the argument:
 2. `/imps:imps` refines the brief via `prompt-builder`, asks five discovery questions, then enters plan mode (opus) to decompose and write `GOAL.md` (to `~/.claude/imps/runs/<slug>.md`, not the repo — see [Runtime state](#runtime-state)). Discovery question 5 ("any constraints?") feeds a `## Global Constraints` section in `GOAL.md` — cross-cutting invariants, stated verbatim, that every task must honor; unlike the Definition of Done (true once, ticked, verified), constraints are true of every task and never ticked. Every code-writing or code-reviewing agent call the script makes receives it by pointer, not by copy.
 3. The Head Imp (opus) adversarially reviews the plan; findings are addressed before dispatch.
 4. After plan approval, `/imps:imps` syncs and invokes the Workflow script, then returns control — `Workflow` runs in the background, and you're notified when it reaches a result. The script does the git preflight, dispatches the task DAG as staged `agent()` calls, and tracks progress in the run state file, so progress is `cat ~/.claude/imps/runs/<slug>.json` (the imps run inside the script's own tracked execution, invisible to the main session's transcript the same way the old subagent design was).
-5. When the imps finish, the script flows straight into integration: merges code branches, drives the Head Imp diff review, runs gates, then returns an `awaiting_authorization` result. After you approve the push, the script (re-invoked fresh with your decision persisted to the state file) opens the endstate PR (the default for runs that change code — decline the push to skip it), runs the persona panel on that PR, applies fixes, and finalizes the run (PR ready, Discussion comment, run stats, monitor state). The main session only relays your decisions, then makes the one `/imps:prs` call to activate the PR monitor.
+5. When the imps finish, the script flows straight into integration: merges code branches, drives the Head Imp diff review, runs gates, then returns an `awaiting_authorization` result. After you approve the push, the script (re-invoked fresh with your decision persisted to the state file) opens the endstate PR (the default for runs that change code — decline the push to skip it), runs the persona panel on that PR **only if you passed `--personas`** (otherwise it finalizes on the Head Imp review alone), applies fixes, and finalizes the run (PR ready, Discussion comment, run stats, monitor state). The main session only relays your decisions, then makes the one `/imps:prs` call to activate the PR monitor.
 
 ### Issue-driven mode walkthrough
 
 1. `/imps:imps 42 43 51` — all tokens are issue numbers.
 2. Scouts (haiku) fan out in parallel per issue; results seed the implementation queue.
 3. Implementation agents run in isolated worktrees up to `PARALLEL_CAP=6` concurrent; file-overlapping issues serialize naturally.
-4. After all issues merge into the holding branch, `/imps:imps` runs full gates, opens the integration PR, and runs the persona panel.
+4. After all issues merge into the holding branch, `/imps:imps` runs full gates, opens the integration PR, and runs the persona panel **only if you passed `--personas`** (otherwise it goes straight to handoff after gates).
 5. Operator handoff — `/imps:imps` does NOT merge the integration PR.
 
 ### Discussion-seed mode walkthrough
@@ -180,6 +192,10 @@ the failures, and offers to dispatch remediation. Read-only throughout: the only
 plan file outside the repo.
 
 ## The persona panel
+
+**Opt-in — the panel runs only when you pass `--personas`** (see
+[Runtime flags](#runtime-flags)). By default the Head Imp review is the gate and this
+whole panel is skipped; the briefs below describe what runs when the flag is set.
 
 Five reviewer briefs, each argued from a distinct, deliberately-conflicting lens.
 Bundled at `${CLAUDE_PLUGIN_ROOT}/personas/` — no manual setup needed.
