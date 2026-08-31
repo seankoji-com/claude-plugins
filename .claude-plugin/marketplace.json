@@ -31,7 +31,7 @@
     },
     {
       "name": "ape",
-      "version": "0.2.16",
+      "version": "0.2.17",
       "source": "./plugins/ape",
       "description": "Forages broadly across open-source repositories or studies one named GitHub source in depth for transferable patterns."
     },

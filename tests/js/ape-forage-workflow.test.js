@@ -29,20 +29,11 @@ function baseArgs(overrides = {}) {
   }
 }
 
-// The workflow may require('fs') to validate report files exist on disk. In the test
-// environment, analysis phases produce stubs, not real files — provide a permissive mock.
-const mockFs = {
-  existsSync: () => true,
-  statSync: () => ({ size: 100 }),
-  readFileSync: () => 'mock report content',
-}
-const mockRequire = (mod) => (mod === 'fs' ? mockFs : require(mod))
-
 function runWorkflow({ agent, parallel, phase, args, log }) {
   const source = fs.readFileSync(SCRIPT_PATH, 'utf8')
   const body = source.replace('export const meta', 'const meta')
-  const factory = new AsyncFunction('agent', 'parallel', 'phase', 'args', 'log', 'require', body)
-  return factory(agent, parallel, phase || (() => {}), args || baseArgs(), log || (() => {}), mockRequire)
+  const factory = new AsyncFunction('agent', 'parallel', 'phase', 'args', 'log', body)
+  return factory(agent, parallel, phase || (() => {}), args || baseArgs(), log || (() => {}))
 }
 
 // Mirrors the real Workflow tool's parallel(): each thunk runs independently; one
@@ -133,6 +124,7 @@ test('a failed clone batch is retried once and results are merged correctly', as
       analyzePrompts.push(prompt)
       return {}
     }
+    if (opts.label === 'verify-reports') return { missing: [] }
     if (opts.label === 'synthesize') {
       return { recommendations: 'do the thing', nearMisses: '', stats: { reposAnalyzed: 2, techniquesSurfaced: 1 } }
     }
@@ -224,4 +216,56 @@ test('blocks with reason "clone_failed" when fewer than 2 repos clone successful
     failed: ['org/x', 'org/y'],
     notes: 'Fewer than 2 repos cloned successfully after one retry — check auth/rate-limit/disk space and re-run.',
   })
+})
+
+test('blocks with reason "missing_reports" when the report-check agent flags a missing or empty file', async () => {
+  async function agent(prompt, opts) {
+    if (opts.label === 'discover:A') return { candidates: [candidate('org/p'), candidate('org/q')], tooFew: false }
+    if (opts.label === 'discover:B') return { candidates: [], tooFew: true }
+    if (opts.label === 'discover:C') return { candidates: [], tooFew: true }
+    if (opts.label === 'rank') {
+      return { selected: [candidate('org/p'), candidate('org/q')], rejected: [] }
+    }
+    if (opts.label === 'clone') return { cloned: ['org/p', 'org/q'], failed: [] }
+    if (opts.label.startsWith('analyze:')) return {}
+    if (opts.label === 'verify-reports') return { missing: ['/workspace/reports/org__q.md'] }
+    throw new Error(`unexpected agent call: ${opts.label}`)
+  }
+
+  const outcome = await runWorkflow({ agent, parallel })
+
+  assert.deepEqual(outcome, {
+    status: 'blocked',
+    reason: 'missing_reports',
+    missing: ['org/q'],
+    notes: 'Analysis completed but reports are missing/empty for: org/q',
+  })
+})
+
+test('logs an explicit warning and proceeds unverified when the verify-reports agent dies', async () => {
+  const logs = []
+  async function agent(prompt, opts) {
+    if (opts.label === 'discover:A') return { candidates: [candidate('org/p'), candidate('org/q')], tooFew: false }
+    if (opts.label === 'discover:B') return { candidates: [], tooFew: true }
+    if (opts.label === 'discover:C') return { candidates: [], tooFew: true }
+    if (opts.label === 'rank') {
+      return { selected: [candidate('org/p'), candidate('org/q')], rejected: [] }
+    }
+    if (opts.label === 'clone') return { cloned: ['org/p', 'org/q'], failed: [] }
+    if (opts.label.startsWith('analyze:')) return {}
+    // Mirrors parallel()'s own contract: a dead agent call resolves to null, not a throw.
+    if (opts.label === 'verify-reports') return null
+    if (opts.label === 'synthesize') {
+      return { recommendations: 'do the thing', nearMisses: '', stats: { reposAnalyzed: 2, techniquesSurfaced: 1 } }
+    }
+    throw new Error(`unexpected agent call: ${opts.label}`)
+  }
+
+  const outcome = await runWorkflow({ agent, parallel, log: (m) => logs.push(m) })
+
+  assert.ok(
+    logs.some((m) => m.includes('verify-reports agent returned no usable result')),
+    `expected an explicit fail-open warning distinguishing "checker died" from "verified clean", got: ${JSON.stringify(logs)}`
+  )
+  assert.equal(outcome.status, 'final', 'a dead verifier must not block the run — it proceeds unverified')
 })

@@ -40,8 +40,6 @@ export const meta = {
   ],
 }
 
-const fs = require('fs')
-
 // owner/repo segments as GitHub allows them; url is restricted to a plain
 // https://github.com/<owner>/<repo>[.git] form. These are model-filled from
 // untrusted third-party repo content, so the schema itself is one of several
@@ -75,6 +73,19 @@ const CANDIDATES_SCHEMA = {
     tooFew: { type: 'boolean', description: 'true if this axis found fewer than 3 strong candidates' },
   },
   required: ['candidates', 'tooFew'],
+}
+
+// Workflow scripts have no filesystem or Node API access, so the post-analysis
+// report check is delegated to a cheap agent with Bash rather than fs.statSync.
+const REPORT_CHECK_SCHEMA = {
+  type: 'object',
+  properties: {
+    missing: {
+      type: 'array',
+      items: { type: 'string', description: 'absolute path of a report that is missing or zero-length' },
+    },
+  },
+  required: ['missing'],
 }
 
 const RANKING_SCHEMA = {
@@ -347,20 +358,30 @@ const analysisResults = await parallel(
 )
 log(`Analysis: ${analysisResults.filter(Boolean).length}/${clonedSelection.length} analysts returned`)
 
-// Validate every expected report exists and is non-empty before synthesis
-const missingReports = []
-for (const c of clonedSelection) {
-  const dirName = c.fullName.replace('/', '__')
-  const reportPath = `${args.workspaceDir}/reports/${dirName}.md`
-  try {
-    // eslint-disable-next-line no-sync
-    if (!fs.existsSync(reportPath) || fs.statSync(reportPath).size === 0) {
-      missingReports.push(c.fullName)
-    }
-  } catch (_err) {
-    missingReports.push(c.fullName)
-  }
+// Validate every expected report exists and is non-empty before synthesis.
+// No fs here — the script sandbox has no Node APIs — so one cheap agent stats
+// the files. If that agent itself dies, proceed rather than block falsely — but
+// log it explicitly (below): synthesis only globs reports/*.md and is never told
+// which repos were expected, so it has no independent way to notice one missing.
+// The log line is the only operator-visible signal that the gate went unverified.
+const expectedReports = clonedSelection.map((c) => ({
+  fullName: c.fullName,
+  path: `${args.workspaceDir}/reports/${c.fullName.replace('/', '__')}.md`,
+}))
+const reportCheck = await agent(
+  `Check whether each of these files exists and is non-empty:\n` +
+    expectedReports.map((r) => r.path).join('\n') +
+    `\n\nReturn the paths that are missing or zero-length, verbatim as given. ` +
+    `Read nothing else and create, modify or delete no file.`,
+  { label: 'verify-reports', phase: 'Analysis', model: 'haiku', schema: REPORT_CHECK_SCHEMA },
+)
+if (!reportCheck || !Array.isArray(reportCheck.missing)) {
+  log('Report check: verify-reports agent returned no usable result — proceeding unverified, not blocked')
 }
+const missingPaths = reportCheck?.missing ?? []
+const missingReports = expectedReports
+  .filter((r) => missingPaths.includes(r.path))
+  .map((r) => r.fullName)
 if (missingReports.length > 0) {
   return {
     status: 'blocked',
