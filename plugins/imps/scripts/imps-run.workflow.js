@@ -24,13 +24,19 @@
 // persisted marker in the state file (`pr`, `verdicts`, `discussion_comment_url`,
 // `learnings_saved`) before acting.
 //
-// args shape (all required): {
-//   pluginRoot, stateFilePath, goalFilePath, personaPostingProtocolPath,
-//   personaBriefPaths: {
+// args shape: {
+//   pluginRoot, stateFilePath, goalFilePath, personaPostingProtocolPath,  // all required
+//   personaBriefPaths: {                                                  // required
 //     "solution-architect": { path, model }, "grumpy-engineer": { path, model },
 //     "sre": { path, model }, "business-analyst": { path, model },
 //     "ux-designer": { path, model, requires: ["browser-surface"] }
-//   }
+//   },
+//   personaPanel: boolean  // OPTIONAL, default false. The in-run five-persona panel is
+//                          // OPT-IN — only runs when this is exactly `true` (set by the
+//                          // `--personas` flag in commands/imps.md). Absent/false: the
+//                          // panel and its fix loop are skipped and the Head Imp diff
+//                          // review is the gate. personaBriefPaths is still passed either
+//                          // way — it is only read when the panel actually runs.
 // }
 // Each entry carries its own dispatch model and capability tags — a persona's model
 // routing and its eligibility for the browser-surface skip both live on the roster entry,
@@ -1419,6 +1425,32 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
   // entirely (verdicts already set, e.g. an `override findings:` resume) — falls back to the
   // persisted count from a prior invocation's fix loop rather than always reporting 0.
   let round = state.fix_rounds_done || 0
+  // Persona panel is OPT-IN (args.personaPanel). Default OFF: the callers here run PRs
+  // through a GitHub-side persona-review App, which makes an in-run panel redundant — the
+  // Head Imp diff review (Integrate phase, above) is the gate. When the panel is disabled
+  // we short-circuit `verdicts` to an empty (no-dissent) map right before the guard below,
+  // reusing the exact "verdicts already set -> skip the panel/fix-loop block -> drop to
+  // phase('Finalize')" path the `override findings:` resume relies on. finalizeRun,
+  // findings_inline, PR creation and learnings all stay intact; the only thing skipped is
+  // dispatching the five persona agents and the fix loop.
+  //
+  // Gated on `!resumingFindings` deliberately: `retry findings` / `override findings:` only
+  // arrive from a prior `unresolved_findings` block, which the panel itself produces — so a
+  // panel-disabled run can never legitimately reach a findings resume. If one somehow does
+  // (a hand-edited or cross-version state file), let it fall through to the real block
+  // rather than silently swallowing it here.
+  const personaPanelEnabled = args.personaPanel === true
+  if (!personaPanelEnabled && !verdicts && !resumingFindings) {
+    verdicts = {}
+    await patchState(
+      {
+        verdicts,
+        verdicts_pending: null,
+        posting_mode: postingMode,
+      },
+      'skip-persona-panel'
+    )
+  }
   if (!verdicts && prInfo) {
     let results
     let current
@@ -1877,6 +1909,12 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     status: 'final',
     pr: prInfo ? { url: prInfo.url, number: prInfo.number, ready: finalized.pr_ready } : null,
     verdicts,
+    // Whether the in-run persona panel ran this cycle. Skipped by default (see the
+    // `personaPanelEnabled` short-circuit above) unless `--personas` was passed; surfaced
+    // here so the operator's record shows the empty `verdicts` above means "panel not run",
+    // not "panel ran and found nothing" — the two are indistinguishable from `verdicts`
+    // alone once the state file is deleted.
+    persona_panel: personaPanelEnabled ? 'ran' : 'skipped (--personas not set)',
     diff_stat: state.last_result.diff_stat,
     // Reflects the post-fix-loop recompute above when one happened, not just the
     // Integrate-phase snapshot — otherwise a criterion the fix loop just satisfied would

@@ -14,15 +14,26 @@ argument-hint: '<issue numbers...> | {"issues": [...], "holdingBranch": "..."}'
 > 🦇 **imps** (issue mode) — turning GitHub issues into merged code
 >
 > Scouting the requested issues, decomposing them into parallel work units, dispatching
-> agents to isolated git worktrees, gating with a persona review panel, and opening a PR
-> — all in one run. Each issue is handled independently so they can proceed in parallel.
+> agents to isolated git worktrees, gating with deterministic checks (and, when
+> `--personas` is passed, a persona review panel), and opening a PR — all in one run.
+> Each issue is handled independently so they can proceed in parallel.
 
 ---
 
 This is the workflow `/imps:imps` follows when its arguments are entirely GitHub issue
 numbers (see the **Mode detection** section of [`./imps.md`](./imps.md)).
-`/imps:imps 42 43` scouts those issues and drives them through implementation, gates, and a
-persona-review panel to an operator handoff.
+`/imps:imps 42 43` scouts those issues and drives them through implementation and gates to
+an operator handoff (add `--personas` to also run the persona-review panel).
+
+**Persona panel is opt-in (`PERSONA_PANEL`).** `/imps:imps` parses `--personas` and hands
+this mode the resulting boolean (see imps.md's **Runtime flags**). When it is false
+(the default), **skip Phase 4 (persona panel) and Phase 5 (fix loop) entirely** — run
+Phases 0–3 and 6 only, and say so in the handoff. This is the intended default for repos
+whose PRs already receive persona reviews from a GitHub-side automation: the panel here
+would duplicate that. When it is true, run every phase below unchanged. Unlike the
+free-text run, this mode has no Head Imp gate — with the panel off, the deterministic
+gates (Phase 3) plus that GitHub-side PR review are the review path, so only disable it
+when such a PR review genuinely exists.
 
 A stack-agnostic orchestrator. Nothing below assumes a language, framework, or
 repo — the **Project profile** step (resolved once, before Phase 0) discovers the
@@ -287,6 +298,10 @@ Tick tracking checkboxes and update the live comment as merges land.
 
 ## Phase 4 — Persona panel
 
+**Skip this entire phase when `PERSONA_PANEL` is false** (the default — no `--personas`).
+Go straight to Phase 6; there are no persona verdicts to fix, so Phase 5 is skipped too.
+Run this phase only when `--personas` was passed.
+
 Skip this entire phase's browser half when the Project profile found no UI surface
 (or no browser transport is available) — run the code panel only and note it.
 
@@ -324,6 +339,9 @@ Update the live comment with the verdict table once all personas have posted.
 
 ## Phase 5 — Fix loop (max 3 rounds)
 
+**Skipped entirely when `PERSONA_PANEL` is false** — it exists only to resolve persona
+findings, and no panel ran. Run it only when Phase 4 ran.
+
 1. Parse all VERDICT lines at the current SHA. No open `blocker`/`major`
    findings → Phase 6.
 2. Dedupe findings across personas; group by disjoint file sets.
@@ -360,7 +378,12 @@ treated as unhandled review feedback needing a fix. Note each persona's delivery
 next to its verdict — `(posted)` for a real GitHub review under its own App identity,
 `(inline — <reason>)` when it fell back (no App identity installed for this org, or the
 post was denied) — so this comment never reads as a fully independent panel when some
-verdicts only exist here:
+verdicts only exist here.
+
+When `PERSONA_PANEL` is false the panel did not run: write the Personas line as
+`Personas: skipped (--personas not set — relying on the repo's GitHub-side PR review)`
+rather than a verdict list, and drop the "Unresolved after N rounds" clause (no rounds
+ran). Otherwise render it as below:
 
 ```
 [imps-status]

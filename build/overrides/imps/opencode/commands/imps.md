@@ -413,7 +413,9 @@ checkout before assuming the tree is clean.
 
 **Step 5 — Head Imp diff review** across architecture, line correctness, and contract fit
 against GOAL.md, then the gates from discovery (build · lint · test · type). A red gate
-stops the loop and goes to Phase 4 for a decision.
+stops the loop and goes to Phase 4 for a decision. **The five-persona panel runs only when
+`--personas` was passed** (`PERSONA_PANEL` true); by default it is skipped and the Head Imp
+diff review here is the review gate — see the Runtime flags section.
 <!-- END-SECTION -->
 
 <!-- REPLACE-SECTION: ## Phase 4 — Result relay loop -->
@@ -475,12 +477,18 @@ All four are written to GOAL.md's `## Parked findings` except `load-bearing`, wh
 blocks. "Parked" always means *reviewed and ruled on* — never a persona that was never
 run. A skipped persona is an unreviewed lens, not a parked finding; say so distinctly.
 
-**Push & PR decision.** The persona panel posts findings on a PR thread, so the PR must
-exist first. Ask once branches are merged, the Head Imp has reviewed, and gates are green:
+**Push & PR decision.** With `--personas` set, the persona panel posts findings on a PR
+thread, so the PR must exist first. Ask once branches are merged, the Head Imp has
+reviewed, and gates are green:
 
 1. `Push & open PR, personas post live reviews`
 2. `Push & open PR, findings only (no persona posts)`
 3. `Not yet` — no push, no PR; findings return inline and the branch stays local.
+
+Without `--personas` there is no panel to post: option 1 collapses into a plain
+`Push & open PR` and no persona posting happens either way — the PR still opens for
+whatever GitHub-side review the repo runs. The `unresolved_findings` state and the
+`retry findings` / `override findings:` verbs below cannot occur on a panel-less run.
 
 **Self-review disclosure.** If this session wrote code directly into the diff during the
 Head Imp fix loop, say so before asking. Persona posting under dedicated GitHub App

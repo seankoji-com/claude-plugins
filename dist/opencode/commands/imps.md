@@ -3,7 +3,7 @@ description: >
   Use when a substantial task should be decomposed, dependency-mapped, dispatched to
   model-routed imps, verified, and integrated on a dedicated run branch. Do not use for
   read-only audits or a single diff's impact analysis.
-argument-hint: '<task description>'
+argument-hint: '[--personas] <task description | issue numbers | discussion ref | checklist.md>'
 ---
 
 # /imps — summon the swarm
@@ -55,6 +55,38 @@ sentence is the whole defence; each one is locally plausible and globally wrong.
 | "The diff is right here — pasting it into the reviewer's prompt is faster than a command." | The artifact enters this session's context, which is re-read every turn, and the reviewer reads a snapshot instead of the tree. | Pass artifacts by reference: a file path to `Read`, a command to run. See the Head Imp section. |
 | "The signing agent looks locked — `--no-gpg-sign` just this once." | Under concurrent swarm agents that lock is usually transient, and the unsigned commit is permanent. | Retry the commit a few times with a short pause; if it persists, surface it as blocked. Never bypass signing. |
 | "The PR is open, gates are green — the run is done." | The learnings gate has not run and the state file is still on disk. Stopping here loses the run's learnings and the `.prs.json` handoff. | The run ends at `done` — learnings persisted, state file deleted by the script. Not before. |
+
+---
+
+## Runtime flags
+
+Parse and **strip** these flags from `$ARGUMENTS` **before** mode detection or any phase
+runs — the remaining text is what mode detection and every phase below operate on. A
+flag anywhere in the argument string counts; order does not matter.
+
+- **`--personas`** — opt into the in-run five-persona review panel. **Default: OFF.**
+  Without this flag, no persona panel runs on either the free-text or issue-driven path;
+  the **Head Imp** adversarial review (plan review in Phase 2, diff review inside the
+  Workflow script's merge step) is the sole review gate, which is sufficient for
+  repositories whose PRs already receive persona reviews from a GitHub-side automation.
+  With this flag, the full panel + fix-loop + adjudication runs exactly as before.
+
+Derive a single boolean `PERSONA_PANEL` (`true` only if `--personas` was present) and
+carry it through: free-text mode passes it into the Workflow call as `personaPanel`
+(Phase 3 Step 2); issue-driven mode hands it to `commands/issue-mode.md`. Stripping the
+flag first is what keeps `--personas 42 43` resolving to issue mode and
+`--personas fix the parser` resolving to free-text — the flag is never part of the task
+description, issue list, or discussion reference.
+
+Concretely, strip with a token filter, e.g.:
+```bash
+PERSONA_PANEL=false
+STRIPPED_ARGS=""
+for tok in $ARGUMENTS; do
+  if [ "$tok" = "--personas" ]; then PERSONA_PANEL=true; else STRIPPED_ARGS="${STRIPPED_ARGS:+$STRIPPED_ARGS }$tok"; fi
+done
+```
+Use `$STRIPPED_ARGS` wherever the sections below say `$ARGUMENTS`.
 
 ---
 
@@ -366,7 +398,7 @@ this structure:
 - [ ] <acceptance criterion 1>
 - [ ] <acceptance criterion 2 — one line each from discovery>
 - [ ] Gates green (build · lint · test · type — per GATE_CMDS)
-- [ ] Persona panel reviewed; all blocker/major findings addressed
+- [ ] Head Imp adversarially reviewed the plan and the diff; all blocker/major findings addressed
 - [ ] No merge conflicts with the default branch
 
 ## Global Constraints
@@ -592,7 +624,9 @@ checkout before assuming the tree is clean.
 
 **Step 5 — Head Imp diff review** across architecture, line correctness, and contract fit
 against GOAL.md, then the gates from discovery (build · lint · test · type). A red gate
-stops the loop and goes to Phase 4 for a decision.
+stops the loop and goes to Phase 4 for a decision. **The five-persona panel runs only when
+`--personas` was passed** (`PERSONA_PANEL` true); by default it is skipped and the Head Imp
+diff review here is the review gate — see the Runtime flags section.
 
 ## Phase 4 — Decision points
 
@@ -652,12 +686,18 @@ All four are written to GOAL.md's `## Parked findings` except `load-bearing`, wh
 blocks. "Parked" always means *reviewed and ruled on* — never a persona that was never
 run. A skipped persona is an unreviewed lens, not a parked finding; say so distinctly.
 
-**Push & PR decision.** The persona panel posts findings on a PR thread, so the PR must
-exist first. Ask once branches are merged, the Head Imp has reviewed, and gates are green:
+**Push & PR decision.** With `--personas` set, the persona panel posts findings on a PR
+thread, so the PR must exist first. Ask once branches are merged, the Head Imp has
+reviewed, and gates are green:
 
 1. `Push & open PR, personas post live reviews`
 2. `Push & open PR, findings only (no persona posts)`
 3. `Not yet` — no push, no PR; findings return inline and the branch stays local.
+
+Without `--personas` there is no panel to post: option 1 collapses into a plain
+`Push & open PR` and no persona posting happens either way — the PR still opens for
+whatever GitHub-side review the repo runs. The `unresolved_findings` state and the
+`retry findings` / `override findings:` verbs below cannot occur on a panel-less run.
 
 **Self-review disclosure.** If this session wrote code directly into the diff during the
 Head Imp fix loop, say so before asking. Persona posting under dedicated GitHub App
