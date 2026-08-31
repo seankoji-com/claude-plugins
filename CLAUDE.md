@@ -1,33 +1,10 @@
-# CLAUDE.md — maintainer guide for claude-plugins
+@AGENTS.md
 
-This file is loaded automatically by Claude Code for sessions **inside this repo**. It
-is for **marketplace maintainers**. Plugin *users* never see it.
-
-Sessions in other agent runtimes read `AGENTS.md` instead — but see that file's note on
-Agy's auto-load caveat before assuming any instruction file reaches every agent by
-default.
-
-Default branch: `master`.
-
----
-
-## Layout
-
-```
-.claude-plugin/marketplace.json   # lists every plugin in plugins/
-plugins/<name>/
-  .claude-plugin/plugin.json      # this plugin's manifest
-  commands/<name>.md              # the slash-command (its frontmatter is the source of truth)
-  agents/<name>.md                # optional: subagent types this plugin registers on install
-  scripts/*.sh                    # helpers; must be chmod +x
-  README.md                       # user-facing docs for this plugin
-build/                            # cross-platform generator: platform-table, per-plugin overrides, npm channel source
-dist/                             # generated OpenCode/Agy output — committed, never hand-edited
-docs/MAINTAINING.md               # extended maintainer prose (generator, install paths, versioning)
-README.md                         # marketplace overview + install table (one row per plugin)
-```
-
----
+<!-- The maintainer invariants below are intentionally mirrored from AGENTS.md, not
+     duplicated by accident: build/dist-lint.sh's `mirrored-block` check requires this
+     SHARED-MAINTAINER-BLOCK to stay byte-identical in both files, so the invariants reach
+     Claude Code (reads CLAUDE.md) and other agent runtimes (read AGENTS.md) alike. If you
+     edit the block, edit it in both files. Everything else lives only in AGENTS.md above. -->
 
 <!-- BEGIN SHARED-MAINTAINER-BLOCK -->
 ## Add-a-plugin checklist
@@ -87,21 +64,3 @@ The free-text logs (`learnings.md`, `claude-tuneup.notes.md`) are not being repl
 they hold qualitative "Active rules" narratives a single JSON line can't express well.
 `audit.jsonl` is additive: a queryable event stream layered on top.
 <!-- END SHARED-MAINTAINER-BLOCK -->
-
----
-
-## Validate before committing
-
-CI runs these checks automatically on every push and PR. For a quick local pre-commit check:
-```bash
-jq . .claude-plugin/marketplace.json && for f in plugins/*/.claude-plugin/plugin.json; do jq -e '.name' "$f"; done
-grep -rn --include="*.md" 'CLAUDE_PLUGIN_ROOT' plugins/*/commands/ | head  # confirm rewrites landed
-```
-See `.github/workflows/validate.yml` for the full check suite; `build/dist-lint.sh`
-gates generated `dist/` output separately, including a self-test that this shared block
-stays identical between this file and `AGENTS.md`.
-
-## Further reading
-
-`docs/MAINTAINING.md` covers the cross-platform generator, install paths per platform,
-and versioning in more depth than this budget-capped file has room for.
