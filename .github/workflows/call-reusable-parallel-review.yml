@@ -30,8 +30,9 @@ jobs:
   parallel-review:
     uses: seankoji-com/.github/.github/workflows/reusable-parallel-review.yml@main
     secrets:
-      # OpenRouter API key for the review LLM calls (org secret). The personas
-      # run on `openrouter/free`, OpenRouter's Free Models Router.
+      # LiteLLM proxy token for the primary review leg (org secret).
+      LITELLM_GHA_KEY: ${{ secrets.LITELLM_GHA_KEY }}
+      # OpenRouter API key for the paid retry (org secret).
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       # mm-solution-architect: used for .github private repo checkout (read-only)
       MM_SOLUTION_ARCHITECT_APP_ID: ${{ secrets.MM_SOLUTION_ARCHITECT_APP_ID }}
