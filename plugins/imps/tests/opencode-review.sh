@@ -106,7 +106,7 @@ if [ "$rc" = 0 ] && [ "$before" = "$after" ]; then ok 'source repository remains
 # A background non-interactive Bash inherits ignored TERM on some macOS shells, which
 # makes a signal test about the test runner rather than the harness. Keep the behavioral
 # cleanup assertions above for success/failure, then pin the signal path structurally.
-if rg -q 'trap.*HUP' "$REVIEW" && rg -q 'trap.*INT' "$REVIEW" && rg -q 'trap.*TERM' "$REVIEW" && rg -q 'cleanup; emit_contract' "$REVIEW"; then ok 'cleanup path is installed for signals'; else bad 'cleanup path is installed for signals' 'missing signal cleanup trap'; fi
+if grep -q 'trap.*HUP' "$REVIEW" && grep -q 'trap.*INT' "$REVIEW" && grep -q 'trap.*TERM' "$REVIEW" && grep -q 'cleanup; emit_contract' "$REVIEW"; then ok 'cleanup path is installed for signals'; else bad 'cleanup path is installed for signals' 'missing signal cleanup trap'; fi
 
 printf '%s passed, %s failed\n' "$pass" "$fail"
 [ "$fail" = 0 ]
