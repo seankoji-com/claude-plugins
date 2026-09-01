@@ -1,6 +1,6 @@
 {
   "name": "imps",
-  "version": "0.3.50",
+  "version": "0.3.51",
   "description": "Swarm orchestrator for Claude Code with model-routed execution, deterministic gates, persona review, whole-repo audits, PR monitoring, and proof-led blast-radius analysis.",
   "author": {
     "name": "seankoji",
