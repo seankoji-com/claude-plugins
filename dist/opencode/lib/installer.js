@@ -452,11 +452,22 @@ function doctor(opts) {
     );
   }
   const files = Array.isArray(manifest.files) ? manifest.files : [];
+  const prefixResolved = path.resolve(prefix) + path.sep;
+  const outOfPrefixFiles = [];
   for (const file of files) {
-    if (!fs.existsSync(file)) report.missingFiles.push(file);
+    if (!fs.existsSync(file)) {
+      report.missingFiles.push(file);
+    } else if (!withinPrefix(file, prefixResolved)) {
+      outOfPrefixFiles.push(file);
+    }
   }
   if (report.missingFiles.length > 0) {
     report.problems.push(`${report.missingFiles.length} manifest-tracked file(s) missing on disk`);
+  }
+  if (outOfPrefixFiles.length > 0) {
+    report.problems.push(
+      `${outOfPrefixFiles.length} manifest-tracked file(s) outside install prefix: ${outOfPrefixFiles.map((f) => JSON.stringify(f)).join(', ')}`
+    );
   }
   if (manifest.packageVersion !== report.packageVersion) {
     report.problems.push(
