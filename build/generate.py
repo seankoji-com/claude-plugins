@@ -659,14 +659,33 @@ def clear_paths(paths) -> None:
             path.unlink()
 
 
-def plugin_output_targets(plugin: str, platform_table: dict) -> list[Path]:
+def plugin_for_command_file(filename: str, plugins: list[str]) -> str | None:
+    """
+    Determine which plugin owns a command file using longest-name-first matching.
+    Mirrors the algorithm in build/npm/lib/installer.js pluginForCommandFile().
+    """
+    base = filename.replace(".md", "")
+    # Sort plugins by length descending (longest first) so a shorter plugin name
+    # doesn't shadow a longer one (e.g., "imps" shouldn't match "imps-lite-cmd.md")
+    sorted_plugins = sorted(plugins, key=len, reverse=True)
+    for plugin in sorted_plugins:
+        if base == plugin or base.startswith(f"{plugin}-"):
+            return plugin
+    return None
+
+
+def plugin_output_targets(plugin: str, platform_table: dict, all_plugins: list[str] | None = None) -> list[Path]:
     targets = [DIST_DIR / "agy" / plugin]
     asset_root = platform_table["opencode"]["layout"]["asset_root"].replace("<plugin>", plugin)
     targets.append(DIST_DIR / "opencode" / asset_root)
     commands_dir = DIST_DIR / "opencode" / platform_table["opencode"]["layout"]["commands_dir"]
     if commands_dir.is_dir():
+        # Use longest-name-first matching to correctly identify which plugin owns each file
+        if all_plugins is None:
+            all_plugins = [plugin]
         for path in sorted(commands_dir.glob("*.md")):
-            if path.name == f"{plugin}.md" or path.name.startswith(f"{plugin}-"):
+            matched_plugin = plugin_for_command_file(path.name, all_plugins)
+            if matched_plugin == plugin:
                 targets.append(path)
     return targets
 
@@ -737,7 +756,7 @@ def main(argv=None) -> int:
             reason = dict(skipped)[plugin]
             raise GenerateError(f"--only {plugin}: not generatable — {reason}")
         plugins = [plugin]
-        clear_paths(plugin_output_targets(plugin, platform_table))
+        clear_paths(plugin_output_targets(plugin, platform_table, ready))
     else:
         plugins = ready
         clear_paths([DIST_DIR])
