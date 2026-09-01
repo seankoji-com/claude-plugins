@@ -209,7 +209,7 @@ class Override:
 
     def __init__(self, path: Path | None = None):
         self.path = path
-        self.replacements: list[tuple[str, str | None]] = []
+        self.replacements: list[tuple[str, str | None, bool]] = []
         self.frontmatter: list[tuple[str, str]] = []
         self.used: set[str] = set()
 
@@ -224,11 +224,19 @@ def parse_override(path: Path) -> Override:
     Directives, each on its own line:
         <!-- REPLACE-SECTION: <exact heading line> -->  ... <!-- END-SECTION -->
         <!-- DROP-SECTION: <exact heading line> -->
+        <!-- REPLACE-SUBTREE: <exact heading line> -->  ... <!-- END-SECTION -->
+        <!-- DROP-SUBTREE: <exact heading line> -->
         <!-- SET-FRONTMATTER: <key>: <value> -->
 
     A "section" runs from its heading line up to the next heading line of any level, or
     end of file. Replacement text is inserted verbatim: the platform mapping does not run
     over it, so write `__PLUGIN_ROOT__` and platform paths directly.
+
+    A "subtree" (REPLACE-SUBTREE / DROP-SUBTREE) is the depth-aware counterpart: it runs
+    from its heading line up to the next heading of level <= the target's own level (or
+    end of file), so nested child headings are swallowed along with it. Opt-in and
+    additive -- see find_subtree()'s docstring and find_section()'s docstring for why the
+    plain SECTION directives keep their any-level-ends-it behavior unchanged.
     """
     override = Override(path)
     lines = read_text(path).split("\n")
@@ -237,8 +245,17 @@ def parse_override(path: Path) -> Override:
         line = lines[index].strip()
         replace = re.fullmatch(r"<!--\s*REPLACE-SECTION:\s*(.+?)\s*-->", line)
         drop = re.fullmatch(r"<!--\s*DROP-SECTION:\s*(.+?)\s*-->", line)
+        replace_subtree = re.fullmatch(r"<!--\s*REPLACE-SUBTREE:\s*(.+?)\s*-->", line)
+        drop_subtree = re.fullmatch(r"<!--\s*DROP-SUBTREE:\s*(.+?)\s*-->", line)
         setfm = re.fullmatch(r"<!--\s*SET-FRONTMATTER:\s*([A-Za-z0-9_-]+):\s*(.*?)\s*-->", line)
-        if replace:
+        if replace or replace_subtree:
+            directive = replace or replace_subtree
+            is_subtree = replace_subtree is not None
+            heading = directive.group(1)
+            if is_subtree and not HEADING_RE.match(heading):
+                raise GenerateError(
+                    f"{rel(path)}: REPLACE-SUBTREE target {heading!r} is not a heading line"
+                )
             body: list[str] = []
             index += 1
             while index < len(lines) and not re.fullmatch(
@@ -247,12 +264,22 @@ def parse_override(path: Path) -> Override:
                 body.append(lines[index])
                 index += 1
             if index >= len(lines):
+                name = "REPLACE-SUBTREE" if is_subtree else "REPLACE-SECTION"
                 raise GenerateError(
-                    f"{rel(path)}: REPLACE-SECTION for {replace.group(1)!r} has no END-SECTION"
+                    f"{rel(path)}: {name} for {heading!r} has no END-SECTION"
                 )
-            override.replacements.append((replace.group(1), "\n".join(body).strip("\n")))
-        elif drop:
-            override.replacements.append((drop.group(1), None))
+            override.replacements.append(
+                (heading, "\n".join(body).strip("\n"), is_subtree)
+            )
+        elif drop or drop_subtree:
+            directive = drop or drop_subtree
+            is_subtree = drop_subtree is not None
+            heading = directive.group(1)
+            if is_subtree and not HEADING_RE.match(heading):
+                raise GenerateError(
+                    f"{rel(path)}: DROP-SUBTREE target {heading!r} is not a heading line"
+                )
+            override.replacements.append((heading, None, is_subtree))
         elif setfm:
             override.frontmatter.append((setfm.group(1), setfm.group(2)))
         elif line and not line.startswith("<!--"):
@@ -301,12 +328,43 @@ def find_section(body_lines: list[str], heading: str) -> tuple[int, int] | None:
     return None
 
 
+def _heading_level(line: str) -> int | None:
+    """Number of leading '#' characters if `line` is a heading, else None."""
+    if not HEADING_RE.match(line):
+        return None
+    return len(line) - len(line.lstrip("#"))
+
+
+def find_subtree(body_lines: list[str], heading: str) -> tuple[int, int] | None:
+    """Span of the subtree introduced by `heading`, as [start, end).
+
+    Depth-aware counterpart to find_section(): this ends the span at the next heading
+    whose level is <= the target heading's own level (or end of file), so any nested
+    child headings are included in the span rather than surviving it. Backs
+    REPLACE-SUBTREE / DROP-SUBTREE, the opt-in directives for "replace/drop this section
+    AND everything nested under it" -- see find_section()'s docstring for why the plain
+    SECTION directives deliberately keep their shallower, any-level-ends-it behavior.
+    """
+    level = _heading_level(heading)
+    for start, line in enumerate(body_lines):
+        if line.strip() != heading:
+            continue
+        end = start + 1
+        while end < len(body_lines):
+            child_level = _heading_level(body_lines[end])
+            if child_level is not None and child_level <= level:
+                break
+            end += 1
+        return start, end
+    return None
+
+
 def apply_override(body: str, override: Override, where: str) -> tuple[str, list[str]]:
     """Swap overridden sections for sentinels so the mapping cannot rewrite them."""
     held: list[str] = []
-    for heading, replacement in override.replacements:
+    for heading, replacement, is_subtree in override.replacements:
         lines = body.split("\n")
-        span = find_section(lines, heading)
+        span = find_subtree(lines, heading) if is_subtree else find_section(lines, heading)
         if span is None:
             raise GenerateError(
                 f"{override.label}: heading {heading!r} not found in {where}. Override "
