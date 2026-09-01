@@ -666,7 +666,7 @@ async function runDispatch(state) {
 }
 
 // ---------------------------------------------------------------------------
-// Integrate — merge, Head Imp diff review, sync default branch, gates
+// Integrate — merge, cross-lineage OpenCode review, sync default branch, gates
 // ---------------------------------------------------------------------------
 
 function mergeBranches(worktrees, doneIds, defaultBranch) {
@@ -1302,7 +1302,7 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
   let round = state.fix_rounds_done || 0
   // Persona panel is OPT-IN (args.personaPanel). Default OFF: the callers here run PRs
   // through a GitHub-side persona-review App, which makes an in-run panel redundant — the
-  // Head Imp diff review (Integrate phase, above) is the gate. When the panel is disabled
+  // Cross-lineage OpenCode diff review (Integrate phase, above) is the gate. When the panel is disabled
   // we short-circuit `verdicts` to an empty (no-dissent) map right before the guard below,
   // reusing the exact "verdicts already set -> skip the panel/fix-loop block -> drop to
   // phase('Finalize')" path the `override findings:` resume relies on. finalizeRun,
@@ -1973,7 +1973,7 @@ if (gateOutcome.blockedOn) {
 
 // Gates are deliberately before review. A review-driven fix reruns every gate and is then
 // sent to a fresh OpenCode session; no Claude review fallback exists on any failure path.
-let codeReview = hasDiff ? await openCodeReview(defaultBranch) : { status: 'ok', verdict: 'APPROVE', findings: [], model: state.review_model || 'openai/gpt-5.4', provider: 'openai', session_id: null, duration_ms: 0, cost_usd: null, reason: null }
+let codeReview = hasDiff ? await openCodeReview(defaultBranch) : { status: 'ok', verdict: 'APPROVE', findings: [], model: state.review_model || 'litellm/deepseek-v4-flash', provider: 'litellm', session_id: null, duration_ms: 0, cost_usd: null, reason: null }
 let codeReviewRounds = 0
 let codeReviewSessions = codeReview.session_id ? [codeReview.session_id] : []
 if (codeReview.status !== 'ok') {

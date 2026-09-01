@@ -28,8 +28,9 @@ comes from `build/overrides/imps/`; generated output lives under `dist/opencode/
 `/imps:imps` decomposes a task (or a batch of GitHub issues) into model-routed agents
 ("imps") — parallel when the work splits into independent units, solo when it's genuinely
 one — dispatches them as staged background subagents, and integrates results through
-deterministic gates and an adversarial **Head Imp** review. An optional five-persona
-review panel runs on top when you pass `--personas` (see [Runtime flags](#runtime-flags)).
+an adversarial **Head Imp** plan review, deterministic gates, and cross-lineage OpenCode
+code review. An optional five-persona review panel runs on top when you pass `--personas`
+(see [Runtime flags](#runtime-flags)).
 
 The orchestrating session is deliberately minimal: it holds only the operator-facing
 work (plan approval, the push/PR gate, conflict decisions, learnings) while everything
@@ -102,11 +103,10 @@ Four entry modes, auto-detected from the argument:
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `--personas` | off | Opt into the in-run five-persona review panel (solution-architect, grumpy-engineer, sre, business-analyst, ux-designer). **Without it, no persona panel runs** on either the free-text or issue-driven path — the adversarial **Head Imp** review (plan + diff) is the gate. Intended for repos whose PRs already receive persona reviews from a GitHub-side automation, where an in-run panel would just duplicate that. Combine freely with any mode: `/imps:imps --personas 42 43`, `/imps:imps --personas fix the parser`. The flag is stripped before mode detection, so it never affects which mode is selected. |
+| `--personas` | off | Opt into the in-run five-persona review panel (solution-architect, grumpy-engineer, sre, business-analyst, ux-designer). **Without it, no persona panel runs** on either the free-text or issue-driven path. Head Imp reviews plans only; read-only OpenCode on `litellm/deepseek-v4-flash` reviews merged code. Intended for repos whose PRs already receive persona reviews from a GitHub-side automation, where an in-run panel would just duplicate that. Combine freely with any mode: `/imps:imps --personas 42 43`, `/imps:imps --personas fix the parser`. The flag is stripped before mode detection, so it never affects which mode is selected. |
 
 Note: issue-driven mode has no Head Imp gate of its own, so with `--personas` off its
-review path is the deterministic gates plus whatever review your PR draws on GitHub —
-only turn the panel off there if such a PR review genuinely exists.
+review path is deterministic gates plus the same cross-lineage OpenCode code-review gate.
 
 
 ### Free-text mode walkthrough
@@ -115,7 +115,7 @@ only turn the panel off there if such a PR review genuinely exists.
 2. `/imps:imps` refines the brief via `prompt-builder`, asks five discovery questions, then enters plan mode (opus) to decompose and write `GOAL.md` (to `~/.claude/imps/runs/<slug>.md`, not the repo — see [Runtime state](#runtime-state)). Discovery question 5 ("any constraints?") feeds a `## Global Constraints` section in `GOAL.md` — cross-cutting invariants, stated verbatim, that every task must honor; unlike the Definition of Done (true once, ticked, verified), constraints are true of every task and never ticked. Every code-writing or code-reviewing agent call the script makes receives it by pointer, not by copy.
 3. The Head Imp (opus) adversarially reviews the plan; findings are addressed before dispatch.
 4. After plan approval, `/imps:imps` syncs and invokes the Workflow script, then returns control — `Workflow` runs in the background, and you're notified when it reaches a result. The script does the git preflight, dispatches the task DAG as staged `agent()` calls, and tracks progress in the run state file, so progress is `cat ~/.claude/imps/runs/<slug>.json` (the imps run inside the script's own tracked execution, invisible to the main session's transcript the same way the old subagent design was).
-5. When the imps finish, the script merges branches, syncs master, runs gates, then sends the merged diff to read-only OpenCode review. ChatGPT OAuth is preferred; OpenRouter is opt-in. Claude fixes blocker/major findings, reruns gates, and OpenCode reviews the fresh diff in a new session. Setup or verdict failure blocks rather than falling back to Claude. Only approval reaches `awaiting_authorization`, and the final summary names the provider and model.
+5. When the imps finish, the script merges branches, syncs master, runs gates, then sends the merged diff to read-only OpenCode review pinned to `litellm/deepseek-v4-flash`. Claude fixes blocker/major findings, reruns gates, and OpenCode reviews the fresh diff in a new session. Setup or verdict failure blocks rather than falling back to Claude or Head Imp. Only approval reaches `awaiting_authorization`, and the final summary names the provider and model.
 
 ### Issue-driven mode walkthrough
 
@@ -212,8 +212,8 @@ plan file outside the repo.
 ## The persona panel
 
 **Opt-in — the panel runs only when you pass `--personas`** (see
-[Runtime flags](#runtime-flags)). By default the Head Imp review is the gate and this
-whole panel is skipped; the briefs below describe what runs when the flag is set.
+[Runtime flags](#runtime-flags)). By default Head Imp reviews the plan and cross-lineage
+OpenCode reviews merged code; this whole panel is skipped.
 
 Five reviewer briefs, each argued from a distinct, deliberately-conflicting lens.
 Bundled at `${CLAUDE_PLUGIN_ROOT}/personas/` — no manual setup needed.

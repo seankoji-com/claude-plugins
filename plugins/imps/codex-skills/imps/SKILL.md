@@ -201,10 +201,13 @@ IMPS_PLUGIN_ROOT/scripts/opencode-review.sh \
 ```
 
 Read the OpenCode review reference first. The helper is read-only and fail-closed. Missing
-authentication, an unavailable model, timeout, malformed output, or unresolved findings
-blocks publication. For `CHANGES_REQUESTED`, dispatch a repair worker, rerun deterministic
-gates, and start a fresh review. Stop after three failed review rounds unless the user
-provides the exact override instruction and rationale.
+LiteLLM configuration, an unavailable model, timeout, malformed output, or unresolved
+findings blocks publication. Code review is exclusively this cross-lineage OpenCode gate,
+pinned to `litellm/deepseek-v4-flash`. Never spawn, resume, or consult the Head Imp or any
+same-lineage subagent to review code or a merged diff; the Head Imp is a plan reviewer only.
+For `CHANGES_REQUESTED`, dispatch a repair worker, rerun deterministic gates, and start a
+fresh OpenCode review. Stop after three failed review rounds unless the user provides the
+exact override instruction and rationale.
 
 When `--personas` is present, review the approved diff with the applicable persona briefs.
 Use separate read-only subagents, dispatching in waves. Skip the UX persona when the diff

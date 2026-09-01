@@ -191,7 +191,7 @@ function sample() {
     fix_rounds_done: 3,
     fix_cycles: 1,
     posting_mode: 'live',
-    review_engine: 'opencode', review_model: 'openai/gpt-5.4', code_review_rounds: 1,
+    review_engine: 'opencode', review_model: 'litellm/deepseek-v4-flash', code_review_rounds: 1,
     code_review_findings: [], code_review_sessions: ['ses_test'], code_review_override: null,
   }
 }

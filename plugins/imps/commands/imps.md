@@ -17,11 +17,10 @@ Arguments: `$ARGUMENTS`
 >
 > Imps breaks your task into small, dependency-mapped work units and dispatches each to an
 > isolated-worktree agent — in parallel when the work splits cleanly, solo when it's genuinely
-> one unit. Either way the process is the same: the work happens off in its own agent, out of
-> this session's context, then gets gated, adversarially reviewed by the Head Imp, and merged
-> back to a holding branch (pass `--personas` to add the full five-persona review panel on
-> top). Think of it as a focused team of specialists sized to the task, not padded
-> to look bigger than it is.
+> one unit. The Head Imp challenges the plan before execution; after merge, deterministic
+> gates and cross-lineage OpenCode review the code. Pass `--personas` to add the full
+> five-persona review panel. Think of it as a focused team of specialists sized to the task,
+> not padded to look bigger than it is.
 
 ---
 
@@ -59,7 +58,7 @@ sentence is the whole defence; each one is locally plausible and globally wrong.
 | "While I'm here, this extra issue is obviously worth filing." | The auto-mode classifier denies GitHub writes beyond the operator's explicit selection — and it denies the *whole* imp, not just the extra artifact, forcing a re-dispatch. | Create and close exactly the artifacts the operator named. If another one is worth filing, ask; don't add it. |
 | "The audit/forage recommendation is minutes old, so the gap it names is real." | Fingerprints go stale immediately, and twice now a "missing capability" already existed in full in the target repo — the plan dispatched imps to rebuild it. | Grep or read the actual files for each claimed gap before writing a task around it. |
 | "The Head Imp approved after I applied its fixes — one review pass is enough." | Round-1 fixes introduce round-2 bugs; a "make this executable" fix once turned out to be platform-unsound on the actual dev machine. | After substantial fixes, budget a second adversarial pass. An approval of the *unfixed* plan is not an approval of the fixed one. |
-| "The diff is right here — pasting it into the reviewer's prompt is faster than a command." | The artifact enters this session's context, which is re-read every turn, and the reviewer reads a snapshot instead of the tree. | Pass artifacts by reference: a file path to `Read`, a command to run. See the Head Imp section. |
+| "The diff is right here — I'll ask the Head Imp for one more review." | That is same-lineage review and duplicates the plan reviewer instead of testing the code independently. | Use only the read-only OpenCode harness for code and diff review. Head Imp reviews plans only. |
 | "The signing agent looks locked — `--no-gpg-sign` just this once." | Under concurrent swarm agents that lock is usually transient, and the unsigned commit is permanent. | Retry the commit a few times with a short pause; if it persists, surface it as blocked. Never bypass signing. |
 | "The PR is open, gates are green — the run is done." | The learnings gate has not run and the state file is still on disk. Stopping here loses the run's learnings and the `.prs.json` handoff. | The run ends at `done` — learnings persisted, state file deleted by the script. Not before. |
 
@@ -154,13 +153,11 @@ code block). It is purely cosmetic — skip silently if absent.
 ## The Head Imp — opus adversarial reviewer
 
 The Head Imp is a reusable one-shot `model: opus` agent that reviews plans adversarially.
-OpenCode reviews the merged diff in a read-only snapshot after gates pass. ChatGPT OAuth
-is preferred (`opencode auth login`); OpenRouter is opt-in with
-`IMPS_OPENCODE_REVIEW_MODEL=openrouter/deepseek/deepseek-v4-flash` (or
-`openrouter/openai/gpt-5.6-terra`). A missing setup, timeout, malformed output, or
-unresolved major finding blocks rather than falling back to Claude. See
-`references/opencode-review.md` for the default model/reasoning-effort and the model
-allowlist.
+OpenCode alone reviews the merged diff in a read-only snapshot after gates pass, pinned to
+`litellm/deepseek-v4-flash`. Never invoke or resume Head Imp for code review, and never add
+a same-lineage subagent review beside OpenCode. Missing setup, timeout, malformed output,
+or an unresolved major finding blocks rather than falling back to Claude. See
+`references/opencode-review.md` for the provider contract.
 
 Invoke it like this (swap in the actual reference and role):
 
@@ -998,11 +995,11 @@ Then the operator gate:
 
 **Push & PR decision.** The persona panel posts its findings as comments on a PR
 thread, so the PR must exist first. This is the correct moment: branches are merged,
-the Head Imp reviewed the diff, gates are green — and nothing has been pushed yet.
+cross-lineage OpenCode reviewed the diff, gates are green — and nothing has been pushed yet.
 
-**Self-review disclosure.** If the `awaiting_authorization` result's `head_imp.amendments`
-is non-zero, this session wrote code directly into the diff during the Head Imp fix-loop —
-say so before asking below. Persona posting through each's dedicated GitHub App identity
+**Self-review disclosure.** If the `awaiting_authorization` result's `code_review.rounds`
+is greater than one, this session wrote code directly into the diff during the OpenCode
+repair loop; say so before asking below. Persona posting through each's dedicated GitHub App identity
 (`${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md`) is attribution/audit-trail
 only; it is not an independent review of content this same session authored, and
 pushing/PR-creation is a separate authorization from letting personas post live GitHub

@@ -44,9 +44,8 @@ enforced by you.)
 
 The Head Imp is a one-shot adversarial reviewer dispatched at the **deepest reasoning
 tier available** (see [Model selection reference](#model-selection-reference)). It reviews
-three axes independently: architecture, line correctness, and contract fit. For a diff it
-reads applicable repository standards plus GOAL.md's Definition of Done and Global
-Constraints; clean code cannot mask the wrong behavior or unauthorized scope.
+plans only across architecture, correctness, and contract fit. Never use it for code or
+diff review.
 
 Dispatch it exactly like any other task — one `agy -p` invocation, model passed at
 invocation:
@@ -58,7 +57,8 @@ Report only what is wrong, missing, or mis-scoped." \
 ```
 
 - **Plan review** happens in Phase 2 Step 3, before the approval gate.
-- **Diff review** happens after the merge step in Phase 3, against the merged diff.
+- **Code review** belongs only to the fresh OpenCode review session after deterministic
+  gates, pinned to `litellm/deepseek-v4-flash`.
 
 It never edits; it returns findings. You act on them.
 
@@ -387,10 +387,10 @@ worktree path alone: check `git status --short` and `git log --oneline -3` in th
 checkout before assuming the tree is clean.
 
 **Step 6 — independent diff review.** Review the merged diff against GOAL.md after gates
-with the runtime's independent OpenAI-lineage reviewer. Fix blocker/major findings, rerun
-gates, and re-review with a fresh session. A reviewer failure blocks. **The five-persona panel runs only when
-`--personas` was passed** (`PERSONA_PANEL` true); by default it is skipped and the Head Imp
-diff review here is the review gate — see the Runtime flags section.
+in a fresh OpenCode session pinned to `litellm/deepseek-v4-flash`. Fix blocker/major
+findings, rerun gates, and re-review with a fresh session. A reviewer failure blocks;
+never fall back to Head Imp. **The five-persona panel runs only when `--personas` was
+passed** (`PERSONA_PANEL` true).
 <!-- END-SECTION -->
 
 <!-- REPLACE-SECTION: ## Phase 4 — Result relay loop -->
@@ -466,7 +466,7 @@ whatever GitHub-side review the repo runs. The `unresolved_findings` state and t
 `retry findings` / `override findings:` verbs below cannot occur on a panel-less run.
 
 **Self-review disclosure.** If this session wrote code directly into the diff during the
-Head Imp fix loop, say so before asking. Persona posting under dedicated GitHub App
+OpenCode repair loop, say so before asking. Persona posting under dedicated GitHub App
 identities (`__PLUGIN_ROOT__/references/persona-posting.md`) is attribution and audit
 trail only; it is not an independent review of content this same session authored. Pushing
 and PR creation is a separate authorization from letting personas post live reviews — one

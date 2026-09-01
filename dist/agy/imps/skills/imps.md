@@ -51,7 +51,7 @@ sentence is the whole defence; each one is locally plausible and globally wrong.
 | "While I'm here, this extra issue is obviously worth filing." | The auto-mode classifier denies GitHub writes beyond the operator's explicit selection — and it denies the *whole* imp, not just the extra artifact, forcing a re-dispatch. | Create and close exactly the artifacts the operator named. If another one is worth filing, ask; don't add it. |
 | "The audit/forage recommendation is minutes old, so the gap it names is real." | Fingerprints go stale immediately, and twice now a "missing capability" already existed in full in the target repo — the plan dispatched imps to rebuild it. | Grep or read the actual files for each claimed gap before writing a task around it. |
 | "The Head Imp approved after I applied its fixes — one review pass is enough." | Round-1 fixes introduce round-2 bugs; a "make this executable" fix once turned out to be platform-unsound on the actual dev machine. | After substantial fixes, budget a second adversarial pass. An approval of the *unfixed* plan is not an approval of the fixed one. |
-| "The diff is right here — pasting it into the reviewer's prompt is faster than a command." | The artifact enters this session's context, which is re-read every turn, and the reviewer reads a snapshot instead of the tree. | Pass artifacts by reference: a file path to `Read`, a command to run. See the Head Imp section. |
+| "The diff is right here — I'll ask the Head Imp for one more review." | That is same-lineage review and duplicates the plan reviewer instead of testing the code independently. | Use only the read-only OpenCode harness for code and diff review. Head Imp reviews plans only. |
 | "The signing agent looks locked — `--no-gpg-sign` just this once." | Under concurrent swarm agents that lock is usually transient, and the unsigned commit is permanent. | Retry the commit a few times with a short pause; if it persists, surface it as blocked. Never bypass signing. |
 | "The PR is open, gates are green — the run is done." | The learnings gate has not run and the state file is still on disk. Stopping here loses the run's learnings and the `.prs.json` handoff. | The run ends at `done` — learnings persisted, state file deleted by the script. Not before. |
 
@@ -141,9 +141,8 @@ code block). It is purely cosmetic — skip silently if absent.
 
 The Head Imp is a one-shot adversarial reviewer dispatched at the **deepest reasoning
 tier available** (see [Model selection reference](#model-selection-reference)). It reviews
-three axes independently: architecture, line correctness, and contract fit. For a diff it
-reads applicable repository standards plus GOAL.md's Definition of Done and Global
-Constraints; clean code cannot mask the wrong behavior or unauthorized scope.
+plans only across architecture, correctness, and contract fit. Never use it for code or
+diff review.
 
 Dispatch it exactly like any other task — one `agy -p` invocation, model passed at
 invocation:
@@ -155,7 +154,8 @@ Report only what is wrong, missing, or mis-scoped." \
 ```
 
 - **Plan review** happens in Phase 2 Step 3, before the approval gate.
-- **Diff review** happens after the merge step in Phase 3, against the merged diff.
+- **Code review** belongs only to the fresh OpenCode review session after deterministic
+  gates, pinned to `litellm/deepseek-v4-flash`.
 
 It never edits; it returns findings. You act on them.
 
@@ -596,10 +596,10 @@ worktree path alone: check `git status --short` and `git log --oneline -3` in th
 checkout before assuming the tree is clean.
 
 **Step 6 — independent diff review.** Review the merged diff against GOAL.md after gates
-with the runtime's independent OpenAI-lineage reviewer. Fix blocker/major findings, rerun
-gates, and re-review with a fresh session. A reviewer failure blocks. **The five-persona panel runs only when
-`--personas` was passed** (`PERSONA_PANEL` true); by default it is skipped and the Head Imp
-diff review here is the review gate — see the Runtime flags section.
+in a fresh OpenCode session pinned to `litellm/deepseek-v4-flash`. Fix blocker/major
+findings, rerun gates, and re-review with a fresh session. A reviewer failure blocks;
+never fall back to Head Imp. **The five-persona panel runs only when `--personas` was
+passed** (`PERSONA_PANEL` true).
 
 ## Phase 4 — Decision points
 
@@ -673,7 +673,7 @@ whatever GitHub-side review the repo runs. The `unresolved_findings` state and t
 `retry findings` / `override findings:` verbs below cannot occur on a panel-less run.
 
 **Self-review disclosure.** If this session wrote code directly into the diff during the
-Head Imp fix loop, say so before asking. Persona posting under dedicated GitHub App
+OpenCode repair loop, say so before asking. Persona posting under dedicated GitHub App
 identities (`__PLUGIN_ROOT__/references/persona-posting.md`) is attribution and audit
 trail only; it is not an independent review of content this same session authored. Pushing
 and PR creation is a separate authorization from letting personas post live reviews — one

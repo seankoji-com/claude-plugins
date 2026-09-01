@@ -14,7 +14,7 @@ ok() { printf 'ok   %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL %s: %s\n' "$1" "$2" >&2; fail=$((fail + 1)); }
 assert() { "$@"; }
 
-mkdir -p "$ROOT/bin" "$ROOT/home/.local/share/opencode" "$ROOT/tmp"
+mkdir -p "$ROOT/bin" "$ROOT/home/.config/opencode" "$ROOT/tmp"
 cat > "$ROOT/bin/opencode" <<'STUB'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -30,13 +30,18 @@ case "${1:-}" in
       malformed_verdict) printf '%s\n' '{"type":"text","text":"IMPS_REVIEW_V1 {bad}"}' ;;
       changes) printf '%s\n' '{"type":"text","text":"IMPS_REVIEW_V1 {\"verdict\":\"CHANGES_REQUESTED\",\"findings\":[{\"severity\":\"major\",\"path\":\"lib/a.js\",\"line\":2,\"message\":\"zero input fails; validate it\"}]}"}' ;;
       provider_only)
-        jq -e 'keys == ["openai"]' "$XDG_DATA_HOME/opencode/auth.json" >/dev/null || exit 9
+        jq -e '.provider | keys == ["litellm"]' "$XDG_CONFIG_HOME/opencode/opencode.json" >/dev/null || exit 9
+        jq -e '.permission.edit == "deny" and .permission.task == "deny"' "$XDG_CONFIG_HOME/opencode/opencode.json" >/dev/null || exit 9
         printf '%s\n' '{"type":"text","text":"IMPS_REVIEW_V1 {\"verdict\":\"APPROVE\",\"findings\":[]}"}' ;;
       *) printf '%s\n' '{"type":"text","text":"IMPS_REVIEW_V1 {\"verdict\":\"APPROVE\",\"findings\":[]}"}' ;;
     esac
     ;;
   models)
-    case "${STUB_CASE:-approve}" in missing_model) printf '%s\n' '[{"id":"openai/other"}]' ;; *) printf '%s\n' '[{"id":"openai/gpt-5.4"},{"id":"openai/gpt-5.6-terra"},{"id":"openrouter/openai/gpt-5.4"},{"id":"openrouter/deepseek/deepseek-v4-flash"}]' ;; esac
+    case "${STUB_CASE:-approve}" in
+      missing_model) printf '%s\n' '[{"id":"litellm/other"}]' ;;
+      line_models) printf '%s\n' 'litellm/deepseek-v4-flash' ;;
+      *) printf '%s\n' '[{"id":"litellm/deepseek-v4-flash"}]' ;;
+    esac
     ;;
   *) exit 2 ;;
 esac
@@ -54,12 +59,12 @@ printf 'const value = 2;\n' > "$ROOT/repo/lib/a.js"
 git -C "$ROOT/repo" add . && git -C "$ROOT/repo" commit -qm change
 printf '%s\n' '## Definition of Done' '- [ ] test' '## Global Constraints' '_None._' > "$ROOT/GOAL.md"
 
-write_auth() { printf '%s\n' "$1" > "$ROOT/home/.local/share/opencode/auth.json"; }
-write_auth '{"openai":{"type":"oauth","refresh":"secret-openai"},"openrouter":{"type":"api","key":"secret-router"}}'
+write_config() { printf '%s\n' "$1" > "$ROOT/home/.config/opencode/opencode.json"; }
+write_config '{"provider":{"litellm":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"https://litellm.example.invalid/v1","apiKey":"secret-lite"},"models":{"deepseek-v4-flash":{"name":"DeepSeek V4 Flash"}}},"other":{"options":{"apiKey":"secret-other"}}}}'
 
 run_review() {
   env STUB_CASE="${STUB_CASE:-approve}" HOME="$ROOT/home" TMPDIR="$ROOT/tmp" PATH="$ROOT/bin:$PATH" IMPS_OPENCODE_BIN=opencode \
-    IMPS_OPENCODE_AUTH_PATH="$ROOT/home/.local/share/opencode/auth.json" \
+    IMPS_OPENCODE_CONFIG_PATH="$ROOT/home/.config/opencode/opencode.json" \
     "$REVIEW" --repo "$ROOT/repo" --base "$BASE" --goal "$ROOT/GOAL.md" --timeout 1 "$@"
 }
 
@@ -67,31 +72,27 @@ check_contract() { jq -e '.status and has("verdict") and has("findings") and has
 
 out="$ROOT/out" err="$ROOT/err"
 STUB_CASE=approve run_review >"$out" 2>"$err"; rc=$?
-if [ "$rc" = 0 ] && check_contract "$out" && jq -e '.status == "ok" and .provider == "openai" and .verdict == "APPROVE"' "$out" >/dev/null && ! grep -q 'secret-' "$out" "$err"; then ok 'direct OpenAI OAuth and secret-free contract'; else bad 'direct OpenAI OAuth and secret-free contract' "rc=$rc"; fi
+if [ "$rc" = 0 ] && check_contract "$out" && jq -e '.status == "ok" and .provider == "litellm" and .model == "litellm/deepseek-v4-flash" and .verdict == "APPROVE"' "$out" >/dev/null && ! grep -q 'secret-' "$out" "$err"; then ok 'pinned LiteLLM DeepSeek and secret-free contract'; else bad 'pinned LiteLLM DeepSeek and secret-free contract' "rc=$rc"; fi
 [ -z "$(find "$ROOT/tmp" -mindepth 1 -maxdepth 1 -name 'imps-opencode-review.*' -print)" ] && ok 'cleanup after success' || bad 'cleanup after success' 'temporary review directory remained'
 
-STUB_CASE=approve run_review --model openrouter/openai/gpt-5.4 >"$out" 2>"$err"; rc=$?
-if [ "$rc" = 0 ] && jq -e '.provider == "openrouter" and .model == "openrouter/openai/gpt-5.4"' "$out" >/dev/null; then ok 'explicit OpenRouter fallback'; else bad 'explicit OpenRouter fallback' "rc=$rc"; fi
+STUB_CASE=line_models run_review --check >"$out" 2>"$err"; rc=$?
+if [ "$rc" = 0 ] && jq -e '.status == "ok" and .model == "litellm/deepseek-v4-flash"' "$out" >/dev/null; then ok 'accepts line-oriented OpenCode model listing'; else bad 'accepts line-oriented OpenCode model listing' "rc=$rc"; fi
 
 STUB_CASE=approve run_review --model anthropic/claude-sonnet >"$out" 2>"$err"; rc=$?
-if [ "$rc" != 0 ] && jq -e '.reason == "model_rejected"' "$out" >/dev/null; then ok 'rejects non-OpenAI lineage'; else bad 'rejects non-OpenAI lineage' "rc=$rc"; fi
+if [ "$rc" != 0 ] && jq -e '.reason == "model_rejected"' "$out" >/dev/null; then ok 'rejects same-lineage model'; else bad 'rejects same-lineage model' "rc=$rc"; fi
 
-STUB_CASE=approve run_review --model openrouter/deepseek/deepseek-v4-flash >"$out" 2>"$err"; rc=$?
-if [ "$rc" = 0 ] && jq -e '.provider == "openrouter" and .model == "openrouter/deepseek/deepseek-v4-flash"' "$out" >/dev/null; then ok 'explicit deepseek-on-OpenRouter fallback'; else bad 'explicit deepseek-on-OpenRouter fallback' "rc=$rc"; fi
-
-# Scoping check: the deepseek allowlist entry must not widen into the whole openrouter/*
-# namespace — a rejected model here proves openrouter/anthropic/* (a Claude model) still
-# cannot reach this script through the fallback path.
-STUB_CASE=approve run_review --model openrouter/mistral/mistral-large >"$out" 2>"$err"; rc=$?
-if [ "$rc" != 0 ] && jq -e '.reason == "model_rejected"' "$out" >/dev/null; then ok 'rejects non-allowlisted OpenRouter lineage'; else bad 'rejects non-allowlisted OpenRouter lineage' "rc=$rc"; fi
+for rejected_model in openai/gpt-5.6-terra openrouter/deepseek/deepseek-v4-flash litellm/deepseek-v4-pro; do
+  STUB_CASE=approve run_review --model "$rejected_model" >"$out" 2>"$err"; rc=$?
+  if [ "$rc" != 0 ] && jq -e '.reason == "model_rejected"' "$out" >/dev/null; then ok "rejects unpinned model $rejected_model"; else bad "rejects unpinned model $rejected_model" "rc=$rc"; fi
+done
 
 STUB_CASE=approve run_review --variant bogus >"$out" 2>"$err"; rc=$?
 if [ "$rc" != 0 ] && jq -e '.reason == "bad_arguments"' "$out" >/dev/null; then ok 'rejects unknown --variant'; else bad 'rejects unknown --variant' "rc=$rc"; fi
 
-printf '{}' > "$ROOT/home/.local/share/opencode/auth.json"
+mv "$ROOT/home/.config/opencode/opencode.json" "$ROOT/home/.config/opencode/opencode.json.missing"
 STUB_CASE=approve run_review >"$out" 2>"$err"; rc=$?
-if [ "$rc" != 0 ] && jq -e '.reason == "auth_missing"' "$out" >/dev/null; then ok 'missing selected credential blocks'; else bad 'missing selected credential blocks' "rc=$rc"; fi
-write_auth '{"openai":{"type":"oauth","refresh":"secret-openai"},"openrouter":{"type":"api","key":"secret-router"}}'
+if [ "$rc" != 0 ] && jq -e '.reason == "provider_config_missing"' "$out" >/dev/null; then ok 'missing LiteLLM provider config blocks'; else bad 'missing LiteLLM provider config blocks' "rc=$rc"; fi
+mv "$ROOT/home/.config/opencode/opencode.json.missing" "$ROOT/home/.config/opencode/opencode.json"
 
 STUB_CASE=missing_model run_review >"$out" 2>"$err"; rc=$?
 if [ "$rc" != 0 ] && jq -e '.reason == "model_unavailable"' "$out" >/dev/null; then ok 'missing model blocks'; else bad 'missing model blocks' "rc=$rc"; fi
@@ -108,7 +109,7 @@ STUB_CASE=changes run_review >"$out" 2>"$err"; rc=$?
 if [ "$rc" = 0 ] && jq -e '.verdict == "CHANGES_REQUESTED" and .findings[0].severity == "major"' "$out" >/dev/null; then ok 'strict changes-requested verdict'; else bad 'strict changes-requested verdict' "rc=$rc"; fi
 
 STUB_CASE=provider_only run_review >"$out" 2>"$err"; rc=$?
-if [ "$rc" = 0 ] && jq -e '.provider == "openai"' "$out" >/dev/null; then ok 'copies only selected provider credential'; else bad 'copies only selected provider credential' "rc=$rc"; fi
+if [ "$rc" = 0 ] && jq -e '.provider == "litellm"' "$out" >/dev/null; then ok 'copies only LiteLLM provider configuration'; else bad 'copies only LiteLLM provider configuration' "rc=$rc"; fi
 
 before="$(git -C "$ROOT/repo" status --porcelain=v1; git -C "$ROOT/repo" rev-parse HEAD)"
 STUB_CASE=approve run_review >"$out" 2>"$err"; rc=$?
