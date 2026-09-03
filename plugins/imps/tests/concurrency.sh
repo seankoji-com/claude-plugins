@@ -86,7 +86,7 @@ assert "claude-project-dir-does-not-collapse-slug" \
 spacey="$TMP/dir with space"
 mkdir -p "$spacey"
 git init -q "$spacey/repo"
-( cd "$spacey/repo"
+( cd "$spacey/repo" || exit 1
   eval "$("$PATHS_SH" --no-migrate)"
   # STATE_PATH must round-trip intact; an unquoted emit would split on the space and
   # leave STATE_PATH holding only the first word.
@@ -115,7 +115,7 @@ assert "remove-succeeds-when-idle" \
 # --- E: concurrent learnings appends do not lose updates -------------------
 # The user-scoped learnings file is the one mutable file concurrent runs truly share.
 N=12
-( cd "$TMP/repo"
+( cd "$TMP/repo" || exit 1
   for i in $(seq 1 $N); do
     "$LEARN_SH" --scope project --heading "run-$i" --rule "rule-from-run-$i" >/dev/null 2>&1 &
   done
