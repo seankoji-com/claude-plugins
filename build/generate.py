@@ -810,6 +810,11 @@ def main(argv=None) -> int:
             raise GenerateError(f"{rel(PLATFORM_TABLE_PATH)}: missing platform {platform!r}")
 
     ready, skipped = generatable(manifest)
+    # Filter to only OpenCode-full plugins for command-file matching.
+    # The installer only knows about OpenCode-full plugins; including Agy-only
+    # plugins in the candidate set could cause a longer Agy-only name to shadow
+    # an OpenCode plugin's command file.
+    opencode_ready = [p for p in ready if manifest[p].get("opencode") == "full"]
 
     if args.only:
         plugin = args.only
@@ -822,7 +827,7 @@ def main(argv=None) -> int:
             reason = dict(skipped)[plugin]
             raise GenerateError(f"--only {plugin}: not generatable — {reason}")
         plugins = [plugin]
-        clear_paths(plugin_output_targets(plugin, platform_table, ready))
+        clear_paths(plugin_output_targets(plugin, platform_table, opencode_ready))
     else:
         plugins = ready
         clear_paths([DIST_DIR])
