@@ -1,0 +1,61 @@
+# PR Gatekeeper — synced from seankoji-com/.github (panel/call-reusable-pr-gatekeeper.yml)
+# Posts the single aggregator check `gatekeeper / all-checks-passed`, required
+# org-wide, which blocks on ANY red check rather than only the ones this repo
+# happens to list as required.
+# Uses this repository's own GITHUB_TOKEN to post the check run — never an App
+# identity, so the ruleset's context match stays unambiguous.
+name: PR Gatekeeper
+
+on:
+  # The wildcard is deliberate and load-bearing: `workflows` is a REQUIRED key
+  # with minItems 1, so it cannot be omitted, and an enumerated list would go
+  # stale the moment a repo adds a workflow. check_run/check_suite cannot be
+  # used at all — GitHub suppresses both for any head SHA that ran an Actions
+  # workflow, which is every PR here.
+  workflow_run:
+    workflows: ['*']
+    types: [completed]
+  # The reconciler's path, for a PR the event route never noticed.
+  workflow_dispatch:
+    inputs:
+      head_sha:
+        description: 'Commit SHA to evaluate and report the gate against.'
+        required: true
+        type: string
+
+# Deliberately NOT `contents: read` alone. A reusable workflow can never be
+# granted more than its caller holds, so narrowing here would 403 the check-run
+# POST in every repo — invisibly, since a resolution failure produces no check
+# run to go red.
+permissions:
+  checks: write
+  pull-requests: read
+  contents: read
+
+# Keyed on the head SHA, never `github.sha`: on a workflow_run run `github.sha`
+# is the DEFAULT BRANCH sha, which would pool every open PR in the repo into a
+# single group. Never cancel — a cancelled run leaves the gate mid-evaluation
+# and there is no seed to re-post it.
+concurrency:
+  group: pr-gatekeeper-${{ github.event.workflow_run.head_sha || inputs.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  gatekeeper:
+    # Guarding at the job level, not inside a step: an in-job early exit still
+    # claims a self-hosted runner first, and fleet capacity is scarce.
+    #   - Skipping the gate's own runs stops it re-triggering itself, which
+    #     would burn workflow_run's three-level chain cap.
+    #   - `pull_requests` is empty on fork runs, so the event allowlist is what
+    #     keeps fork PRs gated rather than ignored.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.name != 'PR Gatekeeper' &&
+       (github.event.workflow_run.pull_requests[0] != null ||
+        contains(fromJSON('["pull_request", "pull_request_target", "dynamic"]'), github.event.workflow_run.event)))
+    uses: seankoji-com/.github/.github/workflows/reusable-pr-gatekeeper.yml@main
+    with:
+      head_sha: ${{ github.event.workflow_run.head_sha || inputs.head_sha }}
+    # Forwards SEANKOJI_CI_PRIVATE_KEY, used only to read the evaluator out of
+    # the private .github repo. The check run itself is posted by GITHUB_TOKEN.
+    secrets: inherit
