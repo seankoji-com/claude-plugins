@@ -349,6 +349,21 @@ else
   skip "imps/tests/run-ocr.sh" "missing or not executable: $imps_ocr_review"
 fi
 
+# /imps concurrency invariants — the slug derivation that keeps two runs against one repo
+# from sharing a state file, plus the learnings-append lock. Pure git + bash, no network.
+imps_concurrency="$ROOT/plugins/imps/tests/concurrency.sh"
+if [ -x "$imps_concurrency" ]; then
+  concurrency_out="$(bash "$imps_concurrency" 2>&1)"
+  concurrency_rc=$?
+  if [ "$concurrency_rc" -eq 0 ]; then
+    report "imps/tests/concurrency.sh" 1
+  else
+    report "imps/tests/concurrency.sh" 0 "$concurrency_out"
+  fi
+else
+  skip "imps/tests/concurrency.sh" "missing or not executable: $imps_concurrency"
+fi
+
 # Cross-platform e2e (OpenCode npm channel, Agy plugin channel). These exercise real
 # package-manager/registry machinery (tests/npm-install-smoke.sh talks to the npm
 # registry even for a local tarball path) or a live `agy` binary — neither of which a

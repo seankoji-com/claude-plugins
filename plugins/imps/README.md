@@ -285,13 +285,16 @@ a durable, readable record even after the state file is deleted at finalize.
 | `🦇` agent type | `${CLAUDE_PLUGIN_ROOT}/agents/imp.md` |
 | `😈` agent type | `${CLAUDE_PLUGIN_ROOT}/agents/head-imp.md` |
 | `👺` agent type (audit orchestrator) | `${CLAUDE_PLUGIN_ROOT}/agents/imp-agency.md` |
-| Free-text run's Workflow script | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-run.workflow.js` — synced to `~/.claude/workflows/imps-run.js` on every invocation |
+| Free-text run's Workflow script | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-run.workflow.js` — synced to `~/.claude/workflows/imps-run-<sha8>.js` on every invocation (content-addressed, so concurrent runs on different plugin versions never swap it under each other) |
 | Checklist-file mode workflow | `${CLAUDE_PLUGIN_ROOT}/references/checklist-mode.md` |
 | Discussion-seed mode workflow | `${CLAUDE_PLUGIN_ROOT}/references/discussion-mode.md` |
 | Summon banner (cosmetic) | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-intro.py` |
 | Dispatch banner (cosmetic) | `${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-banner.py` |
 | Final banner (cosmetic) | `${CLAUDE_PLUGIN_ROOT}/scripts/final-banner.py` |
 | Structured audit-log appender | `${CLAUDE_PLUGIN_ROOT}/scripts/audit-log.sh` |
+| Run slug/path derivation (single source of truth) | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh` |
+| Run-worktree manager (concurrent runs) | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh` |
+| Locked learnings appender | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-learnings-append.sh` |
 
 No manual setup needed for any of these — the plugin installs them at
 `${CLAUDE_PLUGIN_ROOT}` and the commands resolve them at runtime. The bundled
@@ -304,11 +307,54 @@ Written to `~/.claude/imps/` on first run — not bundled:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.claude/imps/runs/<slug>.json` | Per-project run state — resume spine, owned by the Workflow script after handover; it heartbeats `last_heartbeat` + `tasks_done` while imps run, so `cat` this file for live progress. Every invocation of the script is fresh (never `resumeFromRunId`) — this file, plus git ground truth, is the entire resume mechanism |
+| `~/.claude/imps/runs/<slug>.json` | Per-run state — resume spine, owned by the Workflow script after handover; it heartbeats `last_heartbeat` + `tasks_done` while imps run, so `cat` this file for live progress. Every invocation of the script is fresh (never `resumeFromRunId`) — this file, plus git ground truth, is the entire resume mechanism |
 | `~/.claude/imps/runs/<slug>.md` | Per-run `GOAL.md` spine (`/compact`-durable), including the final nontrivial decision trail — lives here, not in the repo, so writing it never needs project-directory permission |
 | `~/.claude/imps/runs/<slug>.prs.json` | Per-PR monitor state for `/imps:prs` |
 | `~/.claude/imps/learnings.md` | Self-tuning `## Active rules` (≤10 bullets) + per-run notes |
 | `~/.claude/audit.jsonl` | One structured JSON line per completed run — shared across plugins in this marketplace (schema in the root `AGENTS.md`) |
+
+The slug is derived by `scripts/imps-paths.sh` from the **working tree**
+(`git rev-parse --show-toplevel`), disambiguated by the remote — e.g.
+`seankoji_claude-plugins__claude-plugins`. Two worktrees of one repo therefore get two
+slugs, which is what keeps concurrent runs apart (see below).
+
+## Concurrent runs against one repo
+
+Several `/imps:imps` runs can work on the same repo at once — **one run per git worktree,
+each in its own session.**
+
+The reason it needs a worktree rather than just a second session is that every
+orchestration step (cutting the run branch, merging imp branches, running gates, pushing
+the PR) acts on the session's own checkout. Two runs sharing one checkout share one HEAD,
+so one run's `git checkout -b` sends the other's merges onto the wrong branch. Separate
+worktrees make each run's cwd correct by construction. (The individual code imps were
+always isolated — the harness gives each its own worktree — so only the orchestrator
+needed one.)
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh" new [name]   # create a run worktree
+"${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh" list         # what is running where
+"${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh" remove <name>
+```
+
+`new` creates a detached worktree at `<repo>.imps/<name>`, beside the main checkout — not
+inside the repo (where gates and globs would see it) and not inside `.claude/worktrees/`
+(which Claude Code manages). `remove` refuses while that worktree still has a state file,
+since that file is the run's only resume handle.
+
+Two steps are yours, not the script's:
+
+1. **Install dependencies in the new worktree.** A fresh worktree has no `node_modules`
+   or venv, and gates run in the session's own tree.
+2. **Start the new session with that worktree as its cwd** — a command cannot relocate
+   the session it runs in.
+
+Runs in different worktrees share no state file, run branch or PR. Of what remains
+shared: the workflow script is content-addressed, `$TMPDIR` scratch files are
+slug-namespaced, and `~/.claude/imps/learnings.md` is appended under a lock. The one
+thing worth knowing about is git's auto-gc, which rewrites `packed-refs` and can race
+`git worktree add` — `imps-worktree.sh` prints the `gc.auto 0` advisory once a second
+worktree exists.
 
 The `learnings.md` `## Active rules` section is read at startup on every run and applied
 to model routing, task boundaries, and dependency detection. `/imps:imps` appends a new run
