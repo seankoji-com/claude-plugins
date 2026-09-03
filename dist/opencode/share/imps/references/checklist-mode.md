@@ -26,10 +26,9 @@ Do not proceed to step 3 without an explicit yes — this is the gate that preve
 arbitrary shell execution from an unexpected file match.
 
 **3. Build a query-only task table (Type=`query`).**
-Create `GOAL.md` at the run's `GOAL_PATH` — derive it with
-`eval "$("__PLUGIN_ROOT__/scripts/imps-paths.sh")"`, then `mkdir -p "$RUNS_DIR"`
-(see `commands/imps.md` -> **Run identity and the slug**; never re-derive the slug
-inline) — using the standard spine format (see `commands/imps.md` Phase 2), with:
+Create `GOAL.md` in this build's run-records directory, named for the run slug
+(`SLUG=$(basename "$(pwd)")`, creating the directory first) — using the standard
+spine format (see `commands/imps.md` Phase 2), with:
 - Task = each unchecked checklist item (label = first 60 chars of the claim)
 - Tier = `cheap` for shell/grep checks; `standard` for items marked `[JUDGMENT]`
 - Type = `query` for all (read-only; no code changes)

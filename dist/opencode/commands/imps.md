@@ -206,39 +206,20 @@ to police mechanically; the discipline is in what you type.
 
 ## Run identity and the slug
 
-Every imps run is keyed by a **slug**, which names its state file, its GOAL.md and its
-`.prs.json` under `~/.config/opencode/imps/runs/`. The slug is derived by one script — call it,
-never re-derive it inline:
+Every run is keyed by a **slug**, which names its run record, its `GOAL.md` and its
+`.prs.json`:
 
 ```bash
-eval "$("__PLUGIN_ROOT__/scripts/imps-paths.sh")"
+SLUG=$(basename "$(pwd)")
 ```
 
-That sets `REPO_ROOT`, `SLUG`, `RUNS_DIR`, `STATE_PATH`, `GOAL_PATH`, `PRS_PATH` and
-`TMP_PREFIX`.
+Derive it from the **working directory**, not from the repository. A run started in its
+own git worktree then gets its own slug with nothing further to configure, and that is
+exactly what stops two concurrent runs against one repo from sharing a record (see
+**Concurrent runs against one repo**).
 
-`scripts/imps-paths.sh` is the source of truth (this file used to inline the same
-derivation in five places, which drifted). It:
-
-- resolves the working tree with `git rev-parse --show-toplevel`, falling back to
-  `${CLAUDE_PROJECT_DIR:-$(pwd)}` only when git cannot answer;
-- disambiguates with the remote, so two repos sharing a directory name do not share a
-  state file — producing slugs like `seankoji_claude-plugins__claude-plugins`;
-- migrates any legacy basename-only state file to the new slug by **renaming only**,
-  never overwriting an existing file.
-
-`TMP_PREFIX` is a per-slug prefix for scratch files. Use it for anything you write under
-`$TMPDIR` during a run — fixed names like `$TMPDIR/imps-state.json` are shared by every
-run on the machine.
-
-**Why the working tree, not the repository.** `--show-toplevel` returns the *worktree*
-path, so two worktrees of one repo get two distinct slugs. That is what makes concurrent
-runs possible (below), and it is why the derivation must not be keyed to
-`CLAUDE_PROJECT_DIR`, which can point at the main checkout from inside a worktree and
-silently collapse every run onto one state file. In a main checkout `--show-toplevel`
-equals the repo root, so existing runs keep their slug and resume normally.
-
----
+Where two checkouts can share a directory name, disambiguate with the remote's
+owner/repository so same-named repositories never collide.
 
 ## Concurrent runs against one repo
 
