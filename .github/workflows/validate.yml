@@ -256,7 +256,15 @@ jobs:
               asset_re=$(printf '%s' "$asset" | sed 's/[.[\*^$()+?{|]/\\&/g')
               # Require a path boundary around the asset name so e.g. asset "imp" doesn't
               # false-positive on unrelated "~/.claude/imps/..." runtime-state paths.
-              hits=$(grep -rn --include="*.md" -E "~/\.claude/([^)\`[:space:]]*/)?${asset_re}(\.[A-Za-z0-9]+)?([^A-Za-z0-9_-]|\$)" "$cmd_dir" 2>/dev/null || true)
+              #
+              # The trailing boundary also excludes "/", so the asset name only counts as
+              # a leak in the *final* path component. Every bundled asset is a file (the
+              # set is built with `find -type f`), so a match in directory position is
+              # never a real reference to one — it is a runtime-state directory that
+              # happens to share a name, which is exactly the case for a plugin whose
+              # state dir "~/.claude/<plugin>/" matches its own "agents/<plugin>.md".
+              # Real leaks are unaffected: they name the shipped file last.
+              hits=$(grep -rn --include="*.md" -E "~/\.claude/([^)\`[:space:]]*/)?${asset_re}(\.[A-Za-z0-9]+)?([^A-Za-z0-9_/-]|\$)" "$cmd_dir" 2>/dev/null || true)
               if [ -n "$hits" ]; then
                 echo "ERROR: bundled-asset path leak in $plugin_name referencing '$asset' (use \${CLAUDE_PLUGIN_ROOT} instead):"
                 echo "$hits"

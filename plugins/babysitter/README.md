@@ -99,6 +99,10 @@ All three commands show you the full roster and wait for a yes before anything i
   never by overwriting.
 - The worktree checks out a local branch named `babysitter/pr-<N>`, not the PR's branch
   name, so a reflexive `git push origin <branch>` cannot target the wrong ref.
+- `push.default=upstream` is set on the clone, so even a bare `git push` can only reach
+  the ref the branch tracks. Under git's `current` default it would instead have created
+  a stray remote branch called `babysitter/pr-<N>` and reported success — which is how
+  that setting was found.
 
 ## Pre-push review
 
@@ -116,6 +120,23 @@ CLI, not a bundled dependency, and hard-failing would make the plugin unusable f
 who has not installed it. What is not soft is the reporting — a skipped review is
 reported as skipped, and the agent sets `"reviewed": false`, so no push is ever described
 as reviewed when nothing reviewed it.
+
+**If the review service is unreachable, the review still happens.** `ocr` talks to an
+LLM gateway over TLS, and that call can fail for reasons that have nothing to do with
+the diff — a sandbox proxy whose certificate its Go TLS stack rejects is the one seen in
+the wild, and it took the gate out on nearly every push of a 32-PR sweep. So the gate
+falls back to `ocr delegate`, which needs no LLM: it emits a review spec (the file list,
+the refs, and the resolved rules) and the agent performs the review itself, then comes
+back through the gate. Reported as `status=delegate`, exit 3.
+
+**And if even that fails, the push does not happen.** `status=error` means the agent
+returns `blocked` with its fix committed but unpushed, for the orchestrator to retry.
+This is the one place the plugin is strict, because it is the place where being lax is
+invisible: every agent facing a broken gate has the same reasonable-sounding argument
+available — *it's a TLS error, that's infrastructure, not my code* — and if each acts on
+it, a whole sweep of PRs goes out unreviewed with nothing in the record saying so. The
+only status that licenses an unreviewed push is `skipped`, where the gate has positively
+established there is no review tool to run.
 
 ## Model routing
 
@@ -159,11 +180,56 @@ Two PRs in the same repo get separate checkouts and never share an index.
 The orchestrator creates these serially, not the agents — two `git worktree add` calls
 racing on one clone corrupt its index.
 
+Each run also (re)applies three settings to the clone, so an existing one gets repaired
+rather than staying broken: `origin` forced to an HTTPS URL, `credential.helper` reset
+to just `gh`, and `push.default=upstream`. All three exist because of push failures that
+looked like three unrelated problems — an ssh-agent refusing to sign, "could not read
+Username ... Device not configured", a stray remote branch — and were one clone's config
+each time. Fixing it on the clone fixes every PR in that repository at once.
+
+The credential-helper reset is worth knowing about if you read the config: it writes an
+empty `credential.helper` before adding `gh`'s, because git accumulates helpers across
+config scopes and an empty value is what clears the inherited ones. Without it, a macOS
+`osxkeychain` helper inherited from system config runs first and hangs on a TTY that
+does not exist in an agent's environment. It is scoped to this plugin's own clones under
+`~/.claude/babysitter/repos/` and never touches your own checkouts.
+
 A worktree with uncommitted changes from a previous run is never reset over; the script
 exits 4 and tells you where to look. Worktrees are kept after a run as a warm cache, and
 removed with `pr-workspace.sh --repo <r> --pr <n> --remove`.
 
 Override the root with `BABYSITTER_HOME`.
+
+## What it remembers between runs
+
+A sweep teaches you things that a summary throws away — that a credential helper does
+not work headlessly, that one repository's remote only accepts HTTPS, that the pre-push
+gate failed open. The plugin writes these down, in one place, outside every repository
+it touches:
+
+| Path | What it holds |
+| --- | --- |
+| `~/.claude/babysitter/run-notes/<date>-<command>.md` | Raw ledger, appended as the run happens. Survives a crash or a stopped watch, which a final summary does not. |
+| `~/.claude/babysitter/learnings.md` | The digest kept from those ledgers — `## Active rules`, `## Per-repo notes`, `## Run log`. |
+| `~/.claude/audit.jsonl` | One structured line per run, shared across plugins in this marketplace (schema in the root [`AGENTS.md`](../../AGENTS.md)). |
+
+`## Active rules` (capped at 10) and `## Per-repo notes` are read back at the start of
+every run and applied silently; the per-repo lines are also passed into that PR's agent,
+which cannot read the file itself. Dispatched agents contribute through a `learnings`
+array in their return JSON, so a wall one agent hit does not cost the next one a turn to
+rediscover.
+
+Nothing here is written into the repository being babysat. A sweep spans an org and
+learns about the machine, the remote, and the runbook — none of which belong in someone
+else's repo, and a fix commit is not the place for a note to yourself.
+
+There is no confirmation gate on the write: a sweep runs long and often unattended, and
+these are plain markdown files you can edit or delete. Point `BABYSITTER_HOME` somewhere
+else to move them.
+
+Re-read them periodically, or run `/learn` from a claude-plugins checkout to turn
+recurring entries into a proposed change to the plugin itself. `process` and `policy`
+notes are usually the ones that should become plugin changes rather than run-time rules.
 
 ## Prerequisites
 
@@ -178,11 +244,12 @@ Override the root with `BABYSITTER_HOME`.
 
 | Script | Contract |
 | --- | --- |
-| `list-prs.sh` | The only GitHub reader. `--org X`, `--repo X`, or `--repo X --pr N`. One GraphQL call, one JSON object per line, open PRs only. Exit 2 bad arguments, 3 query failed. Warns on stderr when a sweep is truncated by `--limit` (GitHub caps a search page at 100 and it does not paginate). |
+| `list-prs.sh` | The only GitHub reader. `--org X`, `--repo X`, or `--repo X --pr N`. One GraphQL call (retried twice on failure — an org-wide query draws a 504 often enough to be routine), one JSON object per line, open PRs only. Exit 2 bad arguments, 3 query failed. Warns on stderr when a sweep is truncated by `--limit` (GitHub caps a search page at 100 and it does not paginate). |
 | `pr-events.sh` | Monitor event stream. Forwards unknown flags to `list-prs.sh` so the watch and the sweep can never disagree about scope. |
-| `pr-workspace.sh` | Cache clone + per-PR worktree. Prints the path on stdout, progress on stderr. Exit 3 git failure, 4 dirty worktree left alone. |
-| `ocr-gate.sh` | Pre-push review. Prints one summary line. Exit 0 clean/skipped, 1 findings, 2 could not review. |
+| `pr-workspace.sh` | Cache clone + per-PR worktree. Also makes the clone pushable on every run: `origin` forced to HTTPS, credential helper pinned to `gh`, `push.default=upstream`. Prints the path on stdout, progress on stderr. Exit 3 git failure, 4 dirty worktree left alone. |
+| `ocr-gate.sh` | Pre-push review, with a no-LLM `ocr delegate` fallback. Prints one summary line. Exit 0 clean/skipped, 1 findings, 2 could not review at all, 3 delegated to the agent. |
 | `audit-log.sh` | Shared appender for `~/.claude/audit.jsonl`; identical in every plugin that bundles it. |
+| `run-note.sh` | Appends one timestamped observation to the run's notes ledger. `--command`, `--kind env\|github\|process\|repo\|policy`, `--note`, optional `--scope`. Prints the ledger path. Fail-soft: an unwritable notes directory warns and exits 0. |
 
 ## Cross-platform
 
