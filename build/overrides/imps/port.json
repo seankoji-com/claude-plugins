@@ -31,6 +31,10 @@
       [
         "  write the state file and hand the run to the Workflow script (model-routed,",
         "  write the state file and hand the run to the dispatch loop (tier-routed,"
+      ],
+      [
+        "Create `GOAL.md` at the run's `GOAL_PATH` — derive it with\n`eval \"$(\"__PLUGIN_ROOT__/scripts/imps-paths.sh\")\"`, then `mkdir -p \"$RUNS_DIR\"`\n(see `commands/imps.md` -> **Run identity and the slug**; never re-derive the slug\ninline) — using the standard spine format",
+        "Create `GOAL.md` in this build's run-records directory, named for the run slug\n(`SLUG=$(basename \"$(pwd)\")`, creating the directory first) — using the standard\nspine format"
       ]
     ],
     "references/discussion-mode.md": [
@@ -54,6 +58,6 @@
     "description": "Swarm orchestration with serial tier-routed execution, deterministic gates, whole-repo audits, PR monitoring, and proof-led blast-radius analysis. (The Claude Code build drives the main run from a background Workflow script; here the skill drives it directly.)"
   },
   "source_hash_pins": {
-    "scripts/imps-run.workflow.js": "e7733a71d57ee3f1dc4fa66433e494b45cd0fa6b6a1d143323ec77ee8a52dd96"
+    "scripts/imps-run.workflow.js": "878dd4d7a63543663ab85262a8934a6c39d4aae3db6f00a23f8ffc71df2a5967"
   }
 }

@@ -42,17 +42,17 @@ WT_HOME="$(dirname "$MAIN_ROOT")/${REPO_NAME}.imps"
 RUNS_DIR="${IMPS_RUNS_DIR:-$HOME/.claude/imps/runs}"
 
 # A run worktree is "live" if a state file exists for the slug that worktree would derive.
-# Mirrors imps-paths.sh's own composition rather than re-deriving it independently.
+#
+# Delegates to imps-paths.sh rather than reimplementing the derivation. A second copy here
+# would be free to drift from the canonical one, and the failure that causes is silent and
+# bad in both directions: a liveness check that computes a different slug reports a live
+# run as idle and offers to remove its worktree. Duplicated slug logic is the exact problem
+# this plugin's concurrency work set out to remove, so it must not be reintroduced here.
+#
+# --no-migrate because this is a read-only query: listing worktrees should never rename a
+# state file as a side effect.
 slug_for() {
-  local wt="$1" owner_repo slug
-  slug=$(basename "$wt")
-  if owner_repo=$(git -C "$wt" remote get-url origin 2>/dev/null); then
-    owner_repo=$(printf '%s' "$owner_repo" \
-      | sed -E -e 's|^https?://[^/]+/||' -e 's|^git@[^:]+:||' \
-               -e 's|^ssh://[^/]+/[^/]+/||' -e 's|\.git$||' -e 's|/$||' | tr '/' '_')
-    [ -n "$owner_repo" ] && [ "$owner_repo" != "$slug" ] && slug="${owner_repo}__${slug}"
-  fi
-  printf '%s' "$slug"
+  (cd "$1" 2>/dev/null && "$PATHS_SH" --slug --no-migrate) || return 1
 }
 
 default_branch() {

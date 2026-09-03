@@ -66,6 +66,25 @@ It never edits; it returns findings. You act on them.
 the merged diff after deterministic gates.)
 <!-- END-SECTION -->
 
+<!-- REPLACE-SECTION: ## Run identity and the slug -->
+## Run identity and the slug
+
+Every run is keyed by a **slug**, which names its run record, its `GOAL.md` and its
+`.prs.json`:
+
+```bash
+SLUG=$(basename "$(pwd)")
+```
+
+Derive it from the **working directory**, not from the repository. A run started in its
+own git worktree then gets its own slug with nothing further to configure, and that is
+exactly what stops two concurrent runs against one repo from sharing a record (see
+**Concurrent runs against one repo**).
+
+Where two checkouts can share a directory name, disambiguate with the remote's
+owner/repository so same-named repositories never collide.
+<!-- END-SECTION -->
+
 <!-- REPLACE-SECTION: ## Concurrent runs against one repo -->
 ## Concurrent runs against one repo
 

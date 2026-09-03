@@ -766,7 +766,10 @@ echo the absolute paths here first, and pass those literal echoed values (never 
 eval "$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh")"
 mkdir -p ~/.claude/workflows "$RUNS_DIR"
 SRC="${CLAUDE_PLUGIN_ROOT}/scripts/imps-run.workflow.js"
-SHA=$(shasum -a 256 "$SRC" | cut -c1-8)
+SHA=$(shasum -a 256 "$SRC" 2>/dev/null || sha256sum "$SRC" 2>/dev/null \
+      || python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$SRC")
+SHA=$(printf '%s' "$SHA" | tr -d '\n' | cut -c1-8)
+[ ${#SHA} -eq 8 ] || { echo "could not hash $SRC" >&2; exit 1; }
 WORKFLOW_DEST="$HOME/.claude/workflows/imps-run-${SHA}.js"
 cp "$SRC" "$WORKFLOW_DEST"
 echo "$WORKFLOW_DEST"; echo "$STATE_PATH"; echo "$GOAL_PATH"

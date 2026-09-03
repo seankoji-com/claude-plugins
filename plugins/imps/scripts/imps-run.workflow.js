@@ -724,15 +724,23 @@ function discoverGates() {
 // overwriting run B's while B is still reading its tail. Derived here rather than passed
 // in, so a legacy caller that omits it cannot silently reintroduce the collision.
 function runSlug() {
-  return String(args.stateFilePath || 'imps')
+  return safeName(String(args.stateFilePath || 'imps')
     .replace(/^.*\//, '')
-    .replace(/\.json$/, '')
-    .replace(/[^A-Za-z0-9_.-]/g, '_') || 'imps'
+    .replace(/\.json$/, '')) || 'imps'
+}
+
+// Both halves of a gate log's filename must be path-safe. runSlug() derives from a path we
+// control, but gate.name comes back from discoverGates()'s agent and the schema does not
+// constrain its characters — a returned "lint/types" would silently redirect the redirect
+// into a subdirectory that does not exist, and the gate would fail on its own log write
+// rather than on the command under test.
+function safeName(value) {
+  return String(value).replace(/[^A-Za-z0-9_.-]/g, '_')
 }
 
 function runGate(gate, guidance) {
   return agent(
-    `Run this command, redirecting output to a file and reading only the tail (the log itself can be large): \`${gate.cmd} > "$TMPDIR/imps-gate-${runSlug()}-${gate.name}.log" 2>&1; echo "exit: $?"\`.${guidance ? ` Apply this guidance first if it suggests a fix: ${guidance}` : ''}
+    `Run this command, redirecting output to a file and reading only the tail (the log itself can be large): \`${gate.cmd} > "$TMPDIR/imps-gate-${runSlug()}-${safeName(gate.name)}.log" 2>&1; echo "exit: $?"\`.${guidance ? ` Apply this guidance first if it suggests a fix: ${guidance}` : ''}
 Return via the required schema: "gate": "${gate.name}", "cmd": "${gate.cmd}", "pass" (exit 0), "tail" (last 20 lines of the log).`,
     { label: `gate-${gate.name}`, phase: 'Integrate', model: 'sonnet', schema: GATE_RUN_SCHEMA }
   )
