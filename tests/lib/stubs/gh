@@ -22,6 +22,46 @@ case "$1" in
     echo '{"isArchived":false,"pushedAt":"2026-01-01T00:00:00Z","diskUsage":1234,"licenseInfo":{"key":"mit"},"description":"stub repo"}'
     ;;
   api)
+    if [ "${2:-}" = "graphql" ]; then
+      # babysitter list-prs.sh. Behavior is selected from the search query the
+      # script builds, the same way the search branch above uses a FAIL- prefix:
+      # an org named FAIL-* simulates a failed query.
+      if printf '%s\n' "$@" | grep -q 'org:FAIL-'; then
+        echo 'stub gh: GraphQL query failed (simulated error)' >&2
+        exit 1
+      fi
+      # One PullRequest per case the filter has to get right:
+      #   #1 viewer's, mixed checks — FAILURE + QUEUED + SKIPPED. Only the
+      #      FAILURE is a failing check; a queued run is pending, not failing.
+      #   #2 a bot's — kept by default.
+      #   #3 another human's — dropped unless --all-authors.
+      #   #4 viewer's but a draft — dropped unless --include-drafts.
+      #   #5 viewer's but from a fork — dropped unless --include-forks.
+      #   #6 viewer's, conflicting, StatusContext checks (FAILURE + PENDING) and
+      #      two unresolved review threads; a third thread is resolved and a
+      #      fourth outdated, so neither counts.
+      cat <<'GRAPHQL_FIXTURE'
+{"data":{"viewer":{"login":"stubuser"},"search":{"nodes":[
+{"number":1,"title":"mixed checks","url":"https://github.com/acme/app/pull/1","state":"OPEN","isDraft":false,"isCrossRepository":false,"mergeable":"MERGEABLE","author":{"login":"stubuser"},"headRefName":"feat/one","baseRefName":"main","baseRef":{"target":{"oid":"base1111111111111111111111111111111111111"}},"repository":{"nameWithOwner":"acme/app"},"comments":{"nodes":[{"databaseId":11}]},"reviews":{"nodes":[{"databaseId":21,"state":"CHANGES_REQUESTED"}]},"reviewThreads":{"nodes":[{"isResolved":false,"isOutdated":false,"comments":{"nodes":[{"databaseId":31}]}}]},"commits":{"nodes":[{"commit":{"oid":"head1111111111111111111111111111111111111","statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
+  {"__typename":"CheckRun","name":"test","conclusion":"FAILURE"},
+  {"__typename":"CheckRun","name":"build","conclusion":null},
+  {"__typename":"CheckRun","name":"lint","conclusion":"SKIPPED"}]}}}}]}},
+{"number":2,"title":"bump dep","url":"https://github.com/acme/app/pull/2","state":"OPEN","isDraft":false,"isCrossRepository":false,"mergeable":"MERGEABLE","author":{"login":"dependabot[bot]"},"headRefName":"dependabot/npm/x","baseRefName":"main","baseRef":{"target":{"oid":"base1111111111111111111111111111111111111"}},"repository":{"nameWithOwner":"acme/app"},"comments":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[{"commit":{"oid":"head2222222222222222222222222222222222222","statusCheckRollup":{"state":"SUCCESS","contexts":{"nodes":[
+  {"__typename":"CheckRun","name":"test","conclusion":"SUCCESS"}]}}}}]}},
+{"number":3,"title":"someone else","url":"https://github.com/acme/app/pull/3","state":"OPEN","isDraft":false,"isCrossRepository":false,"mergeable":"MERGEABLE","author":{"login":"otherhuman"},"headRefName":"feat/three","baseRefName":"main","baseRef":{"target":{"oid":"base1111111111111111111111111111111111111"}},"repository":{"nameWithOwner":"acme/app"},"comments":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[{"commit":{"oid":"head3333333333333333333333333333333333333","statusCheckRollup":null}}]}},
+{"number":4,"title":"still drafting","url":"https://github.com/acme/app/pull/4","state":"OPEN","isDraft":true,"isCrossRepository":false,"mergeable":"MERGEABLE","author":{"login":"stubuser"},"headRefName":"feat/four","baseRefName":"main","baseRef":{"target":{"oid":"base1111111111111111111111111111111111111"}},"repository":{"nameWithOwner":"acme/app"},"comments":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[{"commit":{"oid":"head4444444444444444444444444444444444444","statusCheckRollup":null}}]}},
+{"number":5,"title":"from a fork","url":"https://github.com/acme/lib/pull/5","state":"OPEN","isDraft":false,"isCrossRepository":true,"mergeable":"MERGEABLE","author":{"login":"stubuser"},"headRefName":"feat/five","baseRefName":"main","baseRef":{"target":{"oid":"base2222222222222222222222222222222222222"}},"repository":{"nameWithOwner":"acme/lib"},"comments":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[{"commit":{"oid":"head5555555555555555555555555555555555555","statusCheckRollup":null}}]}},
+{"number":6,"title":"conflicting","url":"https://github.com/acme/lib/pull/6","state":"OPEN","isDraft":false,"isCrossRepository":false,"mergeable":"CONFLICTING","author":{"login":"stubuser"},"headRefName":"feat/six","baseRefName":"main","baseRef":{"target":{"oid":"base2222222222222222222222222222222222222"}},"repository":{"nameWithOwner":"acme/lib"},"comments":{"nodes":[{"databaseId":61}]},"reviews":{"nodes":[{"databaseId":62,"state":"COMMENTED"}]},"reviewThreads":{"nodes":[
+  {"isResolved":false,"isOutdated":false,"comments":{"nodes":[{"databaseId":63}]}},
+  {"isResolved":false,"isOutdated":false,"comments":{"nodes":[{"databaseId":64}]}},
+  {"isResolved":true,"isOutdated":false,"comments":{"nodes":[{"databaseId":65}]}},
+  {"isResolved":false,"isOutdated":true,"comments":{"nodes":[{"databaseId":66}]}}]},"commits":{"nodes":[{"commit":{"oid":"head6666666666666666666666666666666666666","statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
+  {"__typename":"StatusContext","context":"ci/legacy","state":"FAILURE"},
+  {"__typename":"StatusContext","context":"ci/pending","state":"PENDING"}]}}}}]}}
+]}}}
+GRAPHQL_FIXTURE
+      exit 0
+    fi
     # readme-peek.sh: gh api repos/OWNER/REPO/readme -q .content
     printf 'Stub README\n\nHello from the stub gh command.\n' | base64
     ;;

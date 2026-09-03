@@ -1,0 +1,22 @@
+{
+  "name": "babysitter",
+  "version": "0.1.0",
+  "description": "Keeps open pull requests unblocked — enumerates every eligible open PR in a GitHub org, dispatches one worktree-isolated agent per PR to clear review comments, merge conflicts, failing checks and base-branch drift, and watches for new events so each one is answered as it lands.",
+  "author": {
+    "name": "seankoji",
+    "url": "https://github.com/seankoji"
+  },
+  "homepage": "https://github.com/seankoji/claude-plugins/tree/master/plugins/babysitter",
+  "repository": "https://github.com/seankoji/claude-plugins",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "pull-request",
+    "github",
+    "ci",
+    "code-review",
+    "automation",
+    "monitor",
+    "agents"
+  ]
+}
