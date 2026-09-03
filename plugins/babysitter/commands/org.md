@@ -3,8 +3,8 @@ name: babysitter:org
 description: >
   Use when every open pull request across a GitHub org should be driven to mergeable —
   review comments answered, conflicts resolved, failing checks fixed, base drift kept
-  down — and then watched so new events are handled as they land. Do not use for a
-  single known PR; use /babysitter:pr for that.
+  down — and then watched so new pull requests and new events are handled as they land.
+  Do not use for one repository (/babysitter:repo) or one known PR (/babysitter:pr).
 argument-hint: "[org] [--include-drafts] [--include-forks] [--all-authors] [--interval 60]"
 disable-model-invocation: true
 ---
@@ -25,6 +25,11 @@ disable-model-invocation: true
 
 This command runs a sweep and then a watch. The sweep dispatches one agent per PR; the
 watch keeps that going until you stop it.
+
+**The watch includes pull requests that do not exist yet.** A PR opened anywhere in the
+org while the watch is running surfaces as a `NEW` event on the next poll and is handled
+like any other. That is why the watch does not pass `--exit-when-empty` — an org with
+nothing open right now is quiet, not finished.
 
 **Push scope.** Fix commits go to PR head branches only, never to a base or default
 branch, never force-pushed. The roster gate in Step 3 is where you approve that — it is
@@ -63,7 +68,14 @@ it would produce work that cannot land.
 
 One JSON object per line. Exit 3 means the GitHub query failed: report it and stop.
 
-If there are zero lines, say so and stop. Do not arm the monitor for an empty roster.
+If there are zero lines, say so and ask whether to watch the org anyway for PRs opened
+later. Do not arm the monitor silently on an empty roster: across a whole org, zero open
+PRs is more often a mistyped org name than an empty one, and that is worth a look before
+committing to a long watch.
+
+A warning on stderr about a truncated result means the org has more open PRs than
+`--limit` fetched. Raise it (max 100) or narrow the scope with `/babysitter:repo` rather
+than proceeding with a partial roster.
 
 ## Step 3 — Roster gate
 
@@ -158,7 +170,7 @@ Each line is `<KIND> <repo>#<number> [detail] [url]`.
 
 | kind | what to do |
 | --- | --- |
-| `NEW` | Step 4 then Step 5 for that PR |
+| `NEW` | a PR was opened (or became eligible) — Step 4 then Step 5 for it |
 | `CONFLICT`, `BASE-MOVED` | re-dispatch that PR, blocker = conflict / behind base |
 | `CHECKS-FAILED` | re-dispatch, blocker = the named checks |
 | `REVIEW`, `COMMENT`, `THREADS` | re-fetch that PR's comments (Step 5's filter) and re-dispatch |
@@ -167,6 +179,10 @@ Each line is `<KIND> <repo>#<number> [detail] [url]`.
 | `GONE` | `pr-workspace.sh --repo <repo> --pr <n> --remove`, drop from the roster |
 | `ERROR` | report it; the monitor is still polling |
 | `END` | the watch has stopped — go to Step 9 |
+
+`NEW` goes through the roster gate the same way the initial sweep did: name the PR and
+its author and get a yes before pushing to it. Step 3 approved the PRs on the table at
+that moment, not every PR the org will ever have.
 
 Two rules that keep this from thrashing:
 

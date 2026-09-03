@@ -3,7 +3,8 @@ name: babysitter:pr
 description: >
   Use when one named pull request should be driven to mergeable and then watched until
   it merges — review comments answered, conflicts resolved, failing checks fixed, base
-  drift kept down. Do not use to sweep a whole org; use /babysitter:org for that.
+  drift kept down. Do not use to sweep a whole repository (/babysitter:repo) or a whole
+  org (/babysitter:org).
 argument-hint: "<pr-url | owner/repo#N | N> [--interval 60]"
 disable-model-invocation: true
 ---

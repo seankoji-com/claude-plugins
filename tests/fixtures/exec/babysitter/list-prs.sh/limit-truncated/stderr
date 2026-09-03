@@ -1,0 +1,1 @@
+list-prs.sh: org:acme has 6 open PRs but only the first 2 were fetched — narrow the scope or raise --limit (max 100)

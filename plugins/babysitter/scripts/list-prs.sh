@@ -14,15 +14,18 @@
 # loop over dozens of PRs costs one request, not one per PR per field.
 #
 # Usage:
-#   list-prs.sh --org <org> [options]           # every eligible open PR in the org
-#   list-prs.sh --repo <owner/name> --pr <N>    # one specific PR
+#   list-prs.sh --org <org> [options]            # every eligible open PR in the org
+#   list-prs.sh --repo <owner/name> [options]    # every eligible open PR in one repo
+#   list-prs.sh --repo <owner/name> --pr <N>     # one specific PR
 #
 # Options:
 #   --include-drafts   keep draft PRs (default: skipped — a draft is not ready)
 #   --include-forks    keep PRs whose head branch lives in a fork (default: skipped;
 #                      we usually cannot push to a fork's branch)
 #   --all-authors      keep PRs by anyone (default: only the authenticated user and bots)
-#   --limit <N>        max PRs to return in --org mode (default 100, GitHub caps at 100)
+#   --limit <N>        max PRs to return in --org / --repo sweep mode (default 100,
+#                      GitHub caps a search page at 100 and this does not paginate;
+#                      a truncated result warns on stderr)
 #
 # Exit codes:
 #   0 — snapshot written to stdout (possibly zero lines)
@@ -78,7 +81,7 @@ while [ $# -gt 0 ]; do
     shift 2
     ;;
   -h | --help)
-    sed -n '2,32p' "$0"
+    sed -n '2,36p' "$0"
     exit 0
     ;;
   *)
@@ -95,18 +98,30 @@ case "$LIMIT" in
 esac
 [ "$LIMIT" -ge 1 ] && [ "$LIMIT" -le 100 ] || die "--limit must be between 1 and 100"
 
-if [ -n "$REPO" ] || [ -n "$PR_NUMBER" ]; then
-  [ -n "$REPO" ] && [ -n "$PR_NUMBER" ] || die "--repo and --pr must be given together"
-  [ -z "$ORG" ] || die "--org cannot be combined with --repo/--pr"
+# Three targets, and exactly one of them:
+#   --org X            every open PR in the org        -> search
+#   --repo X           every open PR in one repository -> search
+#   --repo X --pr N    one specific PR                 -> repository.pullRequest
+# The two search forms differ only in the qualifier, so they share a code path and
+# cannot drift apart in paging, filtering, or output shape.
+if [ -n "$PR_NUMBER" ] && [ -z "$REPO" ]; then
+  die "--pr requires --repo <owner/name>"
+fi
+if [ -n "$ORG" ] && [ -n "$REPO" ]; then
+  die "--org cannot be combined with --repo"
+fi
+if [ -n "$REPO" ]; then
   case "$REPO" in
   */*) : ;;
   *) die "--repo must be owner/name, got: ${REPO}" ;;
   esac
-  case "$PR_NUMBER" in
-  '' | *[!0-9]*) die "--pr must be a number, got: ${PR_NUMBER}" ;;
-  esac
+  if [ -n "$PR_NUMBER" ]; then
+    case "$PR_NUMBER" in
+    *[!0-9]*) die "--pr must be a number, got: ${PR_NUMBER}" ;;
+    esac
+  fi
 elif [ -z "$ORG" ]; then
-  die "one of --org or --repo/--pr is required"
+  die "one of --org or --repo is required"
 fi
 
 # The PullRequest selection is written once and reused by both query shapes, so a
@@ -154,19 +169,37 @@ fragment PRState on PullRequest {
 }
 GRAPHQL
 
-if [ -n "$ORG" ]; then
+if [ -z "$PR_NUMBER" ]; then
+  if [ -n "$ORG" ]; then
+    SCOPE_QUALIFIER="org:${ORG}"
+  else
+    SCOPE_QUALIFIER="repo:${REPO}"
+  fi
   QUERY="query(\$q: String!, \$limit: Int!) {
     viewer { login }
     search(query: \$q, type: ISSUE, first: \$limit) {
+      issueCount
       nodes { ...PRState }
     }
   }
   ${PR_FRAGMENT}"
   RAW=$(gh api graphql \
     -f query="$QUERY" \
-    -f q="org:${ORG} is:pr is:open" \
+    -f q="${SCOPE_QUALIFIER} is:pr is:open" \
     -F limit="$LIMIT" 2>&1) || die "GitHub query failed: ${RAW}" 3
   NODES_PATH='.data.search.nodes'
+
+  # GitHub caps a search page at 100 and this script does not paginate. Silently
+  # returning the first page would make the sweep look complete while leaving PRs
+  # unbabysat, and the watch would then report each missing one as NEW only if it
+  # happened to surface later. Say so instead.
+  TOTAL=$(printf '%s' "$RAW" | jq -r '.data.search.issueCount // 0' 2>/dev/null || echo 0)
+  case "$TOTAL" in
+  '' | *[!0-9]*) TOTAL=0 ;;
+  esac
+  if [ "$TOTAL" -gt "$LIMIT" ]; then
+    echo "list-prs.sh: ${SCOPE_QUALIFIER} has ${TOTAL} open PRs but only the first ${LIMIT} were fetched — narrow the scope or raise --limit (max 100)" >&2
+  fi
 else
   OWNER="${REPO%%/*}"
   NAME="${REPO##*/}"
@@ -268,6 +301,12 @@ printf '%s' "$RAW" | jq -c \
           last_review_state: (.reviews.nodes[0].state // null)
         }
     )
+  # Open only. In --org mode the search query already says is:open, but the
+  # single-PR query has no such filter and happily returns a merged or closed PR.
+  # Two things depend on this: babysitting a merged PR is pointless work, and
+  # pr-events.sh --exit-when-empty terminates precisely because a merged PR drops
+  # out of the snapshot. Without this line that watch would never end.
+  | map(select(.state == "OPEN"))
   | map(select($all_authors == 1 or .mine or .bot))
   | map(select($include_drafts == 1 or (.draft | not)))
   | map(select($include_forks == 1 or (.fork | not)))

@@ -6,19 +6,35 @@ Open pull requests rot. A reviewer leaves a comment, the base branch moves, a ch
 red, and the PR sits there — not because the work is hard, but because nobody has picked
 it back up. This plugin picks it back up.
 
-`/babysitter:org` sweeps every open PR in a GitHub org. `/babysitter:pr` does one named
-PR and stops when it merges. Both give each PR its own git worktree and its own agent,
-clear what is blocking it, and then keep watching so the next comment or red check is
-handled when it lands rather than the next time you look.
+Pick a scope: a whole org, one repository, or one PR. Each one gives every PR its own git
+worktree and its own agent, clears what is blocking it, and then keeps watching so the
+next comment or red check is handled when it lands rather than the next time you look.
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `/babysitter:org [org] [flags]` | Every eligible open PR in the org: sweep, then watch until you stop it |
-| `/babysitter:pr <url \| owner/repo#N \| N>` | One PR: unblock it, then watch until it merges or closes |
+| Command | Scope | Ends when |
+| --- | --- | --- |
+| `/babysitter:org [org]` | Every eligible open PR in a GitHub org | You stop it |
+| `/babysitter:repo [owner/repo]` | Every eligible open PR in one repository | You stop it |
+| `/babysitter:pr <url \| owner/repo#N \| N>` | One named PR | That PR merges or closes |
 
-Flags on both: `--include-drafts`, `--include-forks`, `--all-authors`, `--interval <s>`.
+Flags on all three: `--include-drafts`, `--include-forks`, `--all-authors`,
+`--interval <s>`.
+
+## New pull requests are picked up too
+
+In `org` and `repo` mode the watch is not limited to the PRs that existed when you
+started it. A PR opened afterwards shows up as a `NEW` event on the next poll and gets
+the same treatment as the rest — worktree, agent, the lot. Both commands deliberately
+omit `--exit-when-empty` for this reason: a scope with nothing open right now is quiet,
+not finished.
+
+New PRs go through the roster gate the same way the first batch did. The initial
+confirmation approves the PRs on the table at that moment, not every PR the org or repo
+will ever have.
+
+`/babysitter:pr` is the exception, by design — it watches one PR and exits when that PR
+is done.
 
 ## What it actually does to a PR
 
@@ -53,9 +69,11 @@ this yet. Other people's PRs are excluded because pushing commits onto a colleag
 branch uninvited is rude; `--all-authors` opts in when you actually want it.
 
 `/babysitter:pr` implies `--all-authors` — naming a PR explicitly *is* the decision about
-whose branch to touch.
+whose branch to touch. `/babysitter:repo` is the scope where `--all-authors` is most
+often the right call: babysitting one repository on a team's behalf is plausible in a way
+that sweeping everyone's branches org-wide is not.
 
-Both commands show you the full roster and wait for a yes before anything is pushed.
+All three commands show you the full roster and wait for a yes before anything is pushed.
 
 ## Push safety
 
@@ -144,7 +162,7 @@ Override the root with `BABYSITTER_HOME`.
 
 | Script | Contract |
 | --- | --- |
-| `list-prs.sh` | The only GitHub reader. One GraphQL call, one JSON object per line. Exit 2 bad arguments, 3 query failed. |
+| `list-prs.sh` | The only GitHub reader. `--org X`, `--repo X`, or `--repo X --pr N`. One GraphQL call, one JSON object per line, open PRs only. Exit 2 bad arguments, 3 query failed. Warns on stderr when a sweep is truncated by `--limit` (GitHub caps a search page at 100 and it does not paginate). |
 | `pr-events.sh` | Monitor event stream. Forwards unknown flags to `list-prs.sh` so the watch and the sweep can never disagree about scope. |
 | `pr-workspace.sh` | Cache clone + per-PR worktree. Prints the path on stdout, progress on stderr. Exit 3 git failure, 4 dirty worktree left alone. |
 | `ocr-gate.sh` | Pre-push review. Prints one summary line. Exit 0 clean/skipped, 1 findings, 2 could not review. |

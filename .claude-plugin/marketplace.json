@@ -37,9 +37,9 @@
     },
     {
       "name": "babysitter",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "source": "./plugins/babysitter",
-      "description": "Keeps open pull requests unblocked — one worktree-isolated agent per PR clears review comments, merge conflicts, failing checks and base-branch drift, reviews its own diff before pushing, and a live event watch handles what lands next."
+      "description": "Keeps open pull requests unblocked — sweep a whole org, one repository, or one PR; each gets a worktree-isolated agent that clears review comments, merge conflicts, failing checks and base-branch drift, and a live watch picks up new pull requests and new events as they land."
     },
     {
       "name": "offload-sidecar",
