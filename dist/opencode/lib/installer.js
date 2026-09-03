@@ -466,8 +466,9 @@ function doctor(opts) {
     report.problems.push(`${report.missingFiles.length} manifest-tracked file(s) missing on disk`);
   }
   if (outOfPrefixFiles.length > 0) {
+    const pathList = outOfPrefixFiles.map((f) => JSON.stringify(f)).join("\n  ");
     report.problems.push(
-      `${outOfPrefixFiles.length} manifest-tracked file(s) outside install prefix: ${outOfPrefixFiles.map((f) => JSON.stringify(f)).join(', ')}`
+      `${outOfPrefixFiles.length} manifest-tracked file(s) outside install prefix (remove them by running uninstall then install):\n  ${pathList}`
     );
   }
   if (manifest.packageVersion !== report.packageVersion) {
