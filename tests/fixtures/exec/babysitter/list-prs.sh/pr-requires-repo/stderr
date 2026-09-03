@@ -1,0 +1,1 @@
+list-prs.sh: --pr requires --repo <owner/name>

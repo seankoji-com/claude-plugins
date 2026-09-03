@@ -36,6 +36,12 @@
       "description": "Forages broadly across open-source repositories or studies one named GitHub source in depth for transferable patterns."
     },
     {
+      "name": "babysitter",
+      "version": "0.2.1",
+      "source": "./plugins/babysitter",
+      "description": "Keeps open pull requests unblocked — sweep a whole org, one repository, or one PR; each gets a worktree-isolated agent that clears review comments, merge conflicts, failing checks and base-branch drift, and a live watch picks up new pull requests and new events as they land."
+    },
+    {
       "name": "offload-sidecar",
       "version": "0.3.6",
       "source": "./plugins/offload-sidecar",

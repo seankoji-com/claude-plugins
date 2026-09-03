@@ -15,6 +15,7 @@ A [Claude Code](https://code.claude.com/) plugin marketplace by [@seankoji](http
 | [prompt-builder](./plugins/prompt-builder/) | Iterative prompt engineering assistant |
 | [imps](./plugins/imps/) | Swarm orchestration, whole-repo audits, PR monitoring, and proof-led blast-radius analysis |
 | [ape](./plugins/ape/) | Forages broadly or studies one named OSS source for transferable techniques |
+| [babysitter](./plugins/babysitter/) | Keeps open PRs unblocked — one agent per PR clears comments, conflicts, failing checks and base drift, then watches for what lands next |
 | [offload-sidecar](./plugins/offload-sidecar/) | MCP tool that offloads file transforms, log triage, and vision tasks — paths in, paths out, no file content through Claude's context. Local Ollama tiers (private) plus budget-gated Gemini tiers via the agy CLI. Formerly ollama-sidecar |
 
 ---
