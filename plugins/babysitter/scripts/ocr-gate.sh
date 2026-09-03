@@ -36,6 +36,13 @@
 
 set -euo pipefail
 
+# Prints this file's header comment as the help text. Derived from the header
+# rather than a hardcoded line range: a `sed -n '2,NNp'` went stale the first time
+# this header grew, printing a truncated help message with no other symptom.
+usage() {
+  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"
+}
+
 BASE_REF=""
 OUT=""
 
@@ -56,7 +63,7 @@ while [ $# -gt 0 ]; do
     shift 2
     ;;
   -h | --help)
-    sed -n '2,36p' "$0"
+    usage
     exit 0
     ;;
   *)
@@ -134,8 +141,10 @@ if command -v ocr-pre-pr.sh >/dev/null 2>&1; then
     findings="unknown"
   fi
   echo "OCR status=${status} findings=${findings} result=${OUT} tool=ocr-pre-pr.sh"
-  [ "$status" = "clean" ]
-  exit $?
+  if [ "$status" = "clean" ]; then
+    exit 0
+  fi
+  exit 1
 fi
 
 # ---- upstream CLI ------------------------------------------------------------

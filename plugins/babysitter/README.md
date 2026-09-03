@@ -58,6 +58,22 @@ applies to:
 
 Then it reviews its own diff and pushes.
 
+### `[babysitter]` is a reserved comment prefix
+
+Every comment the plugin posts starts with `[babysitter]`, and it skips comments carrying
+that prefix in two places: when collecting threads for an agent to answer, and when
+deciding which comment is the newest for change detection. Without the second one, an
+agent's own reply would look like a new comment on the next poll and re-dispatch itself
+forever.
+
+The consequence is that **a comment you write starting with `[babysitter]` will be
+ignored.** Start it any other way.
+
+The filter is on the marker rather than on the comment's author on purpose. This plugin
+assumes one GitHub identity both opens the PR and reviews it — the normal case for a solo
+maintainer — so filtering by author would silently hide your own review comments from the
+babysitter. That is the same reasoning `imps/prs.md` records for its filter.
+
 ## Which PRs it will touch
 
 By default: **open**, **not a draft**, **head branch in the org** (not a fork), and
