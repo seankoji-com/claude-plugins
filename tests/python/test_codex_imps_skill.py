@@ -35,9 +35,10 @@ class CodexImpsSkillContractTest(unittest.TestCase):
             "references/diagnosis-loop.md",
             "references/checklist-mode.md",
             "references/discussion-mode.md",
-            "references/opencode-review.md",
+            "references/ocr-review.md",
+            "references/ocr-review-rule.json",
             "scripts/audit-log.sh",
-            "scripts/opencode-review.sh",
+            "scripts/run-ocr.sh",
         ):
             with self.subTest(relative=relative):
                 self.assertTrue((PLUGIN / relative).is_file())
