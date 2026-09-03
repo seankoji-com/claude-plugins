@@ -97,10 +97,16 @@ run_exec_case() {
   # user's home directory during a test run. OLLAMA_MODEL/GEMINI_MODEL are unset so a
   # maintainer's own shell config (real elephant-goldfish usage often exports these)
   # can't leak into the fixture and make goldfish-judge.sh call a real ollama/gemini
-  # with a non-stub model name.
+  # with a non-stub model name. BABYSITTER_HOME is unset for the same reason and with
+  # more at stake: it overrides the pinned HOME outright, so a maintainer who exports it
+  # would have run-note.sh fixtures writing into their real notes ledger.
+  # BABYSITTER_RETRY_BASE_SECS=0 collapses list-prs.sh's retry backoff: its
+  # query-failure fixture exists to prove three attempts then exit 3, and waiting the
+  # real 2s+4s to prove it made the suite a third slower for nothing.
   (
-    cd "$test_home" && unset OLLAMA_MODEL GEMINI_MODEL
-    HOME="$test_home" PATH="$STUBS:$PATH" bash "$target" "${args[@]+"${args[@]}"}" >"$out" 2>"$err"
+    cd "$test_home" && unset OLLAMA_MODEL GEMINI_MODEL BABYSITTER_HOME
+    HOME="$test_home" PATH="$STUBS:$PATH" BABYSITTER_RETRY_BASE_SECS=0 \
+      bash "$target" "${args[@]+"${args[@]}"}" >"$out" 2>"$err"
   )
   exit_code=$?
 

@@ -131,18 +131,76 @@ fi
 mkdir -p "${ROOT}/repos" "${ROOT}/worktrees" || die "cannot create ${ROOT}" 3
 
 # ---- cache clone -------------------------------------------------------------
+GH_READY=0
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  GH_READY=1
+fi
+
 if [ ! -d "$CLONE/.git" ]; then
   note "cloning ${REPO} (first PR seen in this repo)"
   # gh inherits the user's existing GitHub auth, which a bare `git clone` of a
   # private repo would not. Fall back to git for a host without gh configured.
-  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    gh repo clone "$REPO" "$CLONE" -- --quiet >/dev/null 2>&1 ||
-      die "clone of ${REPO} failed" 3
-  else
-    git clone --quiet "https://github.com/${REPO}.git" "$CLONE" ||
-      die "clone of ${REPO} failed (and gh is unavailable for authenticated clone)" 3
+  #
+  # Retried once, because a clone here fails transiently more often than it fails
+  # for real: a large repo has been observed stalling for minutes against an
+  # ESTABLISHED connection and then dying, where an immediate bare retry succeeded.
+  # A partial clone directory left by the first attempt would make the second one
+  # fail on a non-empty target, so it goes first.
+  clone_once() {
+    if [ "$GH_READY" = "1" ]; then
+      gh repo clone "$REPO" "$CLONE" -- --quiet >/dev/null 2>&1
+    else
+      git clone --quiet "https://github.com/${REPO}.git" "$CLONE"
+    fi
+  }
+  if ! clone_once; then
+    note "clone of ${REPO} failed — retrying once"
+    rm -rf "$CLONE"
+    clone_once || {
+      if [ "$GH_READY" = "1" ]; then
+        die "clone of ${REPO} failed twice" 3
+      fi
+      die "clone of ${REPO} failed twice (and gh is unavailable for authenticated clone)" 3
+    }
   fi
 fi
+
+# ---- make this clone pushable ------------------------------------------------
+# Applied on every run, not just on a fresh clone, so a clone made by an earlier
+# version of this script — or by a `gh` whose git_protocol was set differently at the
+# time — gets repaired rather than staying broken forever. Worktrees share the clone's
+# config, so fixing it here fixes every PR in the repo at once.
+#
+# Each of these three closes a push failure that has actually happened in a sweep, and
+# each one presented as a different, misleading error:
+#
+#   1. An SSH origin is a dead end wherever the ssh-agent cannot sign ("agent refused
+#      operation"). One repo in an org cloning over SSH while the rest come down over
+#      HTTPS is enough to strand every PR in it, and no retry helps.
+#   2. A global credential.helper that cannot run headlessly (macOS `osxkeychain` is
+#      the usual one) does not cleanly fall through to the next helper in the chain;
+#      git ends up trying to prompt on a TTY that is not there and reports "could not
+#      read Username ... Device not configured", or a SOCKS/proxy error, depending on
+#      which fallback it reached. The empty value first is what resets the inherited
+#      chain — `credential.helper` accumulates across config scopes, so adding the gh
+#      helper without clearing would leave the broken one still in front of it.
+#   3. `push.default=current` pushes the *local* branch name to a same-named remote
+#      ref. The local branch here is deliberately `babysitter/pr-<N>`, so under that
+#      setting a bare `git push` silently creates a stray remote branch instead of
+#      updating the PR — worse than an error, because nothing says it went wrong.
+#      `upstream` can only push to the ref the branch tracks, which is the PR head.
+git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null || true
+
+# Only when gh can actually serve credentials: clearing the chain and pointing it at a
+# gh that is not authenticated would replace a helper that might work with one that
+# certainly does not.
+if [ "$GH_READY" = "1" ]; then
+  git -C "$CLONE" config --local --unset-all credential.helper 2>/dev/null || true
+  git -C "$CLONE" config --local --add credential.helper "" 2>/dev/null || true
+  git -C "$CLONE" config --local --add credential.helper "!gh auth git-credential" 2>/dev/null || true
+fi
+
+git -C "$CLONE" config --local push.default upstream 2>/dev/null || true
 
 git -C "$CLONE" fetch --prune --quiet origin ||
   die "fetch failed in ${CLONE}" 3
