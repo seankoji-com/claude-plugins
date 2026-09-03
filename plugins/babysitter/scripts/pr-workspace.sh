@@ -41,7 +41,13 @@ REPO=""
 PR_NUMBER=""
 BRANCH=""
 REMOVE=0
-ROOT="${BABYSITTER_HOME:-${HOME}/.claude/babysitter}"
+# Left empty rather than defaulted to "${HOME}/..." directly: under `set -u` an unset
+# HOME aborts with a raw "unbound variable", and defaulting HOME to "" would silently
+# produce the absolute-looking /.claude/babysitter. Empty here, validated below.
+ROOT="${BABYSITTER_HOME:-}"
+if [ -z "$ROOT" ] && [ -n "${HOME:-}" ]; then
+  ROOT="${HOME}/.claude/babysitter"
+fi
 
 die() {
   echo "pr-workspace.sh: $1" >&2
@@ -83,6 +89,16 @@ while [ $# -gt 0 ]; do
 done
 
 command -v git >/dev/null 2>&1 || die "git not found on PATH"
+
+# Every path this script creates, and the one it `rm -rf`s, is derived from ROOT.
+# An empty ROOT — `--root ""`, or BABYSITTER_HOME set empty with HOME unset — would
+# put those paths at the filesystem root and point a recursive delete at
+# /worktrees/<slug>__pr-<N>. Validate before deriving anything from it.
+case "$ROOT" in
+'') die "root directory is empty — set --root or BABYSITTER_HOME to an absolute path" ;;
+/*) : ;;
+*) die "root directory must be an absolute path, got: ${ROOT}" ;;
+esac
 
 case "$REPO" in
 */*) : ;;
