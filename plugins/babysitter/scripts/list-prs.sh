@@ -69,6 +69,23 @@ die() {
 #
 # Bounded at three attempts, so a genuine failure (bad credentials, a repo that is
 # gone) still exits 3 promptly instead of hanging a sweep behind a retry loop.
+# Overridable so the test suite does not spend six real seconds asleep proving that a
+# permanently-failing query still exits 3. Nothing in normal use sets it.
+#
+# Validated rather than interpolated straight into the arithmetic below: this variable
+# exists to be overridden, and a non-integer value there is not a harmless typo. Under
+# `set -e` a fractional value aborts the script with "invalid arithmetic operator", and
+# under `set -u` an alphabetic one aborts with "unbound variable" — either way the sweep
+# dies mid-retry with no snapshot and the wrong exit code, instead of retrying. Fall
+# back to the default and say so.
+RETRY_BASE_SECS="${BABYSITTER_RETRY_BASE_SECS:-2}"
+case "$RETRY_BASE_SECS" in
+'' | *[!0-9]*)
+  echo "list-prs.sh: BABYSITTER_RETRY_BASE_SECS must be a non-negative integer, got '${RETRY_BASE_SECS}' — using 2" >&2
+  RETRY_BASE_SECS=2
+  ;;
+esac
+
 gh_graphql_retry() {
   local attempt=1 out=""
   while :; do
@@ -81,9 +98,7 @@ gh_graphql_retry() {
       return 1
     fi
     echo "list-prs.sh: GitHub query failed (attempt ${attempt}/3), retrying — ${out}" >&2
-    # Overridable so the test suite does not spend six real seconds asleep proving that
-    # a permanently-failing query still exits 3. Nothing in normal use sets it.
-    sleep "$((attempt * ${BABYSITTER_RETRY_BASE_SECS:-2}))"
+    sleep "$((attempt * RETRY_BASE_SECS))"
     attempt=$((attempt + 1))
   done
 }

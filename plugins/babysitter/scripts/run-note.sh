@@ -44,12 +44,20 @@ ${__SOURCED__:+false} : || return 0
 
 command_name="" kind="" note="" scope=""
 
+# `shift 2` on a flag that is the last argument fails without shifting, leaving $1
+# unchanged — and because this script deliberately runs without `set -e` (it is
+# fail-soft telemetry), that is an infinite loop rather than an abort: `run-note.sh
+# --kind env --note` would hang a sweep silently. Check for the value first.
+need_value() {
+  [ "$2" -ge 2 ] || { echo "run-note.sh: $1 requires a value" >&2; exit 1; }
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
-    --command) command_name="${2:-}"; shift 2 ;;
-    --kind) kind="${2:-}"; shift 2 ;;
-    --note) note="${2:-}"; shift 2 ;;
-    --scope) scope="${2:-}"; shift 2 ;;
+    --command) need_value "$1" $#; command_name="$2"; shift 2 ;;
+    --kind) need_value "$1" $#; kind="$2"; shift 2 ;;
+    --note) need_value "$1" $#; note="$2"; shift 2 ;;
+    --scope) need_value "$1" $#; scope="$2"; shift 2 ;;
     *) echo "run-note.sh: unknown argument: $1" >&2; exit 1 ;;
   esac
 done
