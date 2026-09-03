@@ -9,7 +9,7 @@
     "scripts/dispatch-banner.py": "Colour-codes the imp roster by Claude model name — `opus`/`sonnet`/`haiku` substring matches against a `model` field in the run state file. This build routes by tier (`cheap`/`standard`/`deep`) and its state file carries no `model` field, so the script would silently colour every imp the default green while re-introducing Claude model names as a runtime choice (contract item 23). Its only caller was the Workflow-driven Phase 3, which this directory's overrides replace with a foreground loop that has no roster to print.",
     "scripts/final-banner.py": "The end-of-run companion to dispatch-banner.py, excluded for the same reason: it colours by `opus`/`sonnet`/`haiku` and synthesizes a roster from a `model_counts` map that a tier-routed run never writes. Excluded with its caller, the Workflow `run_complete` checkpoint.",
     "scripts/imps-run.workflow.js": "The Claude Code Workflow runtime for the whole run — agent() dispatch, isolation: 'worktree', the Workflow resume model. Neither platform has a Workflow tool, so shipping it would present Claude mechanics as if they run there (contract item 16). The per-platform dispatch loop is prose, from this directory's overrides.",
-    "scripts/opencode-review.sh": "The Claude-host read-only OpenCode review harness. It copies a provider credential into a temporary XDG tree and uses Claude Workflow wrapper mechanics, neither of which belongs in generated runtimes that already review inside their own runtime."
+    "scripts/run-ocr.sh": "The Claude-host read-only OCR review harness. It uses Claude Workflow wrapper mechanics and temporary configuration overrides, neither of which belongs in generated runtimes that already review inside their own runtime."
   },
   "asset_replacements": {
     "references/checklist-mode.md": [
@@ -51,6 +51,6 @@
     "description": "Swarm orchestration with serial tier-routed execution, deterministic gates, whole-repo audits, PR monitoring, and proof-led blast-radius analysis. (The Claude Code build drives the main run from a background Workflow script; here the skill drives it directly.)"
   },
   "source_hash_pins": {
-    "scripts/imps-run.workflow.js": "4f40a238639583db98d3bfba23ccc94da8cf048d4e68c2c4f980f59cf875bbff"
+    "scripts/imps-run.workflow.js": "f0835c2987e7753819a927030e48b278741ce75988147ac6c518b41f0b8fa2c2"
   }
 }
