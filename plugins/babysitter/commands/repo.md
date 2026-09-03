@@ -83,7 +83,12 @@ Print one row per PR — number, author, title, and its blockers, from the snaps
 | `mergeable == "CONFLICTING"` | conflict |
 | `failing` non-empty | checks: names |
 | `unresolved_threads > 0` | comments: N |
-| `base_oid` differs from the base branch head | behind base |
+
+Base drift is deliberately **not** on this list. `base_oid` is the base branch head
+itself, so no comparison against it is possible from a snapshot alone — telling whether
+this PR already contains those commits needs a merge-base, which the agent computes in
+its worktree for free. Every dispatched agent checks and merges base drift as its first
+step, so a PR that is behind is handled whether or not the roster could see it.
 
 A PR with none of these is `clean` — it stays on the watch roster, but no agent is
 dispatched for it now.
@@ -160,7 +165,7 @@ Each line is `<KIND> <repo>#<number> [detail] [url]`.
 | kind | what to do |
 | --- | --- |
 | `NEW` | a PR was opened (or became eligible) — Step 4 then Step 5 for it |
-| `CONFLICT`, `BASE-MOVED` | re-dispatch, blocker = conflict / behind base |
+| `CONFLICT`, `BASE-MOVED` | re-dispatch that PR, blocker = conflict / base moved (the agent checks whether it is actually behind) |
 | `CHECKS-FAILED` | re-dispatch, blocker = the named checks |
 | `REVIEW`, `COMMENT`, `THREADS` | re-fetch that PR's comments (Step 5) and re-dispatch |
 | `CHECKS-GREEN` | report it; nothing to do |

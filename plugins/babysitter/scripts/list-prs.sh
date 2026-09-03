@@ -140,13 +140,17 @@ fragment PRState on PullRequest {
   baseRefName
   baseRef { target { oid } }
   repository { nameWithOwner }
-  comments(last: 1) { nodes { databaseId } }
+  # Several of the most recent comments, with bodies, not just the newest id: the
+  # ids below are computed from the newest comment that is NOT one of the plugin's
+  # own [babysitter] replies. Fetching only the last one would make an agent's own
+  # reply the newest id and re-trigger a COMMENT event on the following poll.
+  comments(last: 10) { nodes { databaseId body } }
   reviews(last: 1) { nodes { databaseId state } }
   reviewThreads(first: 100) {
     nodes {
       isResolved
       isOutdated
-      comments(last: 1) { nodes { databaseId } }
+      comments(last: 5) { nodes { databaseId body } }
     }
   }
   commits(last: 1) {
@@ -230,6 +234,19 @@ printf '%s' "$RAW" | jq -c \
   --argjson include_forks "$INCLUDE_FORKS" \
   --argjson all_authors "$ALL_AUTHORS" \
   --arg nodes_path "$NODES_PATH" '
+  # The plugin marks every comment it posts with a [babysitter] prefix. Comments
+  # carrying it are excluded from the "newest comment" ids below, so an agent
+  # replying on a thread does not raise the id and trigger a COMMENT event on the
+  # next poll — a re-dispatch that finds nothing to do and returns noop.
+  #
+  # Deliberately keyed on the marker rather than on the comment author. This plugin
+  # assumes one gh identity both opens the PR and leaves feedback on it, which is
+  # the normal case for a solo maintainer; filtering by author would silently hide
+  # their own review comments from the babysitter. Same reasoning imps/prs.md
+  # records for its own filter.
+  def is_own_reply:
+    ((.body // "") | startswith("[babysitter]"));
+
   def is_bot($login):
     $login != null and (
       ($login | endswith("[bot]"))
@@ -294,9 +311,12 @@ printf '%s' "$RAW" | jq -c \
             | length
           ),
           last_thread_comment_id: (
-            [.reviewThreads.nodes[]?.comments.nodes[]?.databaseId] | max // 0
+            [ .reviewThreads.nodes[]?.comments.nodes[]?
+              | select(is_own_reply | not) | .databaseId ] | max // 0
           ),
-          last_comment_id: (.comments.nodes[0].databaseId // 0),
+          last_comment_id: (
+            [ .comments.nodes[]? | select(is_own_reply | not) | .databaseId ] | max // 0
+          ),
           last_review_id: (.reviews.nodes[0].databaseId // 0),
           last_review_state: (.reviews.nodes[0].state // null)
         }

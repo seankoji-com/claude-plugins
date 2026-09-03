@@ -58,12 +58,24 @@ base drift first, because they change the code the other fixes apply to.
 
 ### 1. Base-branch drift
 
-The PR is behind its base. **Merge the base in; do not rebase.** Rebasing a published
-branch means force-pushing it, which rule 2 forbids. A merge commit on a PR branch is
-invisible after a squash or rebase merge, so it costs nothing.
+Establish whether the PR is actually behind before doing anything about it. A
+`BASE-MOVED` event means the base branch head changed, not that this PR lacks those
+commits — the merge-base is what settles it, and you are in a worktree where that is
+free:
 
 ```
 git fetch origin <base-ref>
+git rev-list --count HEAD..origin/<base-ref>
+```
+
+Zero means you are already up to date: record `base_drift: "n/a"` and move on. Anything
+else means you are behind by that many commits.
+
+When you are behind, **merge the base in; do not rebase.** Rebasing a published branch
+means force-pushing it, which rule 2 forbids. A merge commit on a PR branch is invisible
+after a squash or rebase merge, so it costs nothing.
+
+```
 git merge --no-edit origin/<base-ref>
 ```
 

@@ -15,7 +15,10 @@
 # Event vocabulary (first token is the kind, second is <repo>#<number>):
 #   NEW            a PR entered scope after the baseline
 #   CONFLICT       mergeable flipped to CONFLICTING
-#   BASE-MOVED     the PR's base branch advanced — the PR is now behind
+#   BASE-MOVED     the PR's base branch advanced — the PR may now be behind. This
+#                  signal is the base branch head changing, which is not the same
+#                  as the PR lacking those commits; the agent checks the real
+#                  relationship in the worktree, where it is exact and free.
 #   CHECKS-FAILED  the set of failing checks changed and is non-empty
 #   CHECKS-GREEN   a PR that had failing checks now has none
 #   REVIEW         a new review was submitted (state included)
@@ -84,8 +87,19 @@ esac
 [ "$INTERVAL" -ge 30 ] || die "--interval must be at least 30 seconds"
 [ "${#PASSTHROUGH[@]}" -gt 0 ] || die "no target given — pass --org <org> or --repo/--pr"
 
-PREV="$(mktemp)"
-CUR="$(mktemp)"
+# Explicit templates, and a checked failure. BSD/macOS mktemp is happiest with a
+# template, and under a restricted TMPDIR it can fail outright — in which case
+# `set -e` would end the watch here with nothing on stdout, which to a reader looks
+# exactly like a monitor that is running quietly. Say it on stdout so the failure
+# arrives as an event rather than as silence.
+PREV="$(mktemp "${TMPDIR:-/tmp}/babysitter-prev.XXXXXX" 2>/dev/null || true)"
+CUR="$(mktemp "${TMPDIR:-/tmp}/babysitter-cur.XXXXXX" 2>/dev/null || true)"
+if [ -z "$PREV" ] || [ -z "$CUR" ]; then
+  rm -f "$PREV" "$CUR" 2>/dev/null || true
+  echo "ERROR cannot create snapshot temp files in ${TMPDIR:-/tmp} — monitor not started"
+  echo "pr-events.sh: mktemp failed in ${TMPDIR:-/tmp}" >&2
+  exit 2
+fi
 trap 'rm -f "$PREV" "$CUR"' EXIT
 
 # jq program shared by every poll: joins the previous and current snapshots by
@@ -107,7 +121,7 @@ def csv: if length == 0 then "-" else join(",") end;
               (if $p.mergeable == "CONFLICTING" and $b.mergeable != "CONFLICTING"
                  then "CONFLICT \($k) base=\($p.base_ref) \($p.url)" else empty end),
               (if $p.base_oid != null and $b.base_oid != null and $p.base_oid != $b.base_oid
-                 then "BASE-MOVED \($k) base=\($p.base_ref) head=\($p.base_oid[0:12]) \($p.url)" else empty end),
+                 then "BASE-MOVED \($k) base=\($p.base_ref) base_head=\($p.base_oid[0:12]) \($p.url)" else empty end),
               (if ($p.failing | length) > 0 and $p.failing != $b.failing
                  then "CHECKS-FAILED \($k) \($p.failing | csv) \($p.url)" else empty end),
               (if ($p.failing | length) == 0 and ($b.failing | length) > 0

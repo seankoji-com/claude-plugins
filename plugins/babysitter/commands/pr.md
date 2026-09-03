@@ -64,7 +64,10 @@ No output means the PR is closed, merged, a draft, or on a fork. Say which — r
 ## Step 3 — Show what is blocking it, and confirm
 
 Print the PR title, author, base, and its blockers using the same mapping as
-`/babysitter:org` Step 3 (`mergeable`, `failing`, `unresolved_threads`, `base_oid`).
+`/babysitter:org` Step 3 — `mergeable == "CONFLICTING"`, `failing`, and
+`unresolved_threads`. Base drift is not among them for the reason given there: the
+snapshot cannot tell whether this PR already contains the base branch head, and the
+agent settles it from a merge-base in the worktree as its first step.
 
 Ask for confirmation before proceeding — this pushes commits to the branch. If the PR is
 already clean, say so and ask whether to watch it anyway.
@@ -119,7 +122,7 @@ Handle events with the same table as `/babysitter:org` Step 8:
 
 | kind | what to do |
 | --- | --- |
-| `CONFLICT`, `BASE-MOVED` | re-dispatch, blocker = conflict / behind base |
+| `CONFLICT`, `BASE-MOVED` | re-dispatch that PR, blocker = conflict / base moved (the agent checks whether it is actually behind) |
 | `CHECKS-FAILED` | re-dispatch, blocker = the named checks |
 | `REVIEW`, `COMMENT`, `THREADS` | re-fetch comments (Step 5) and re-dispatch |
 | `CHECKS-GREEN` | report it; nothing to do |
