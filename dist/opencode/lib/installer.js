@@ -457,7 +457,8 @@ function doctor(opts) {
   for (const file of files) {
     if (!fs.existsSync(file)) {
       report.missingFiles.push(file);
-    } else if (!withinPrefix(file, prefixResolved)) {
+    }
+    if (!withinPrefix(file, prefixResolved)) {
       outOfPrefixFiles.push(file);
     }
   }

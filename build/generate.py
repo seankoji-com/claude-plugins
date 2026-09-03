@@ -344,16 +344,24 @@ def find_subtree(body_lines: list[str], heading: str) -> tuple[int, int] | None:
     REPLACE-SUBTREE / DROP-SUBTREE, the opt-in directives for "replace/drop this section
     AND everything nested under it" -- see find_section()'s docstring for why the plain
     SECTION directives deliberately keep their shallower, any-level-ends-it behavior.
+    Headings inside fenced code blocks are ignored (do not terminate the span).
     """
     level = _heading_level(heading)
     for start, line in enumerate(body_lines):
         if line.strip() != heading:
             continue
         end = start + 1
+        in_fence = False
         while end < len(body_lines):
-            child_level = _heading_level(body_lines[end])
-            if child_level is not None and child_level <= level:
-                break
+            line_text = body_lines[end].strip()
+            # Track fenced code block state (``` or ~~~ toggle fence state)
+            if line_text.startswith("```") or line_text.startswith("~~~"):
+                in_fence = not in_fence
+            # Only treat a heading as a terminator if it's not inside a fence
+            elif not in_fence:
+                child_level = _heading_level(body_lines[end])
+                if child_level is not None and child_level <= level:
+                    break
             end += 1
         return start, end
     return None
@@ -722,7 +730,7 @@ def plugin_for_command_file(filename: str, plugins: list[str]) -> str | None:
     Determine which plugin owns a command file using longest-name-first matching.
     Mirrors the algorithm in build/npm/lib/installer.js pluginForCommandFile().
     """
-    base = filename.replace(".md", "")
+    base = filename.removesuffix(".md")
     # Sort plugins by length descending (longest first) so a shorter plugin name
     # doesn't shadow a longer one (e.g., "imps" shouldn't match "imps-lite-cmd.md")
     sorted_plugins = sorted(plugins, key=len, reverse=True)
