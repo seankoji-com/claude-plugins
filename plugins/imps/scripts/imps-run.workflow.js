@@ -719,9 +719,28 @@ function discoverGates() {
   )
 }
 
+// Gate logs land in $TMPDIR, which concurrent runs on one machine share. Namespacing by
+// the run's own slug (the state file's basename) keeps run A's `npm test` output from
+// overwriting run B's while B is still reading its tail. Derived here rather than passed
+// in, so a legacy caller that omits it cannot silently reintroduce the collision.
+function runSlug() {
+  return safeName(String(args.stateFilePath || 'imps')
+    .replace(/^.*\//, '')
+    .replace(/\.json$/, '')) || 'imps'
+}
+
+// Both halves of a gate log's filename must be path-safe. runSlug() derives from a path we
+// control, but gate.name comes back from discoverGates()'s agent and the schema does not
+// constrain its characters — a returned "lint/types" would silently redirect the redirect
+// into a subdirectory that does not exist, and the gate would fail on its own log write
+// rather than on the command under test.
+function safeName(value) {
+  return String(value).replace(/[^A-Za-z0-9_.-]/g, '_')
+}
+
 function runGate(gate, guidance) {
   return agent(
-    `Run this command, redirecting output to a file and reading only the tail (the log itself can be large): \`${gate.cmd} > "$TMPDIR/imps-gate-${gate.name}.log" 2>&1; echo "exit: $?"\`.${guidance ? ` Apply this guidance first if it suggests a fix: ${guidance}` : ''}
+    `Run this command, redirecting output to a file and reading only the tail (the log itself can be large): \`${gate.cmd} > "$TMPDIR/imps-gate-${runSlug()}-${safeName(gate.name)}.log" 2>&1; echo "exit: $?"\`.${guidance ? ` Apply this guidance first if it suggests a fix: ${guidance}` : ''}
 Return via the required schema: "gate": "${gate.name}", "cmd": "${gate.cmd}", "pass" (exit 0), "tail" (last 20 lines of the log).`,
     { label: `gate-${gate.name}`, phase: 'Integrate', model: 'sonnet', schema: GATE_RUN_SCHEMA }
   )
@@ -973,7 +992,13 @@ function appendLearnings(candidates) {
   // is false and re-appends — and deleting from inside this agent call would also mean a
   // subsequent patchState() targets a file that no longer exists.
   return agent(
-    `The operator confirmed these learnings should be saved: ${JSON.stringify(candidates)}. For each, classify its scope: project-specific (mentions this repo's stack, commands, file paths, conventions) -> append to .claude/imps/learnings.md in the repo root; generally applicable (model routing, task boundaries, dispatch patterns) -> append to ~/.claude/imps/learnings.md. Format: under a "## YYYY-MM-DD — <project> <task>" heading (create "## Active rules" section first if the file doesn't have one yet, ≤10 bullets, promote a repeated rule into it). Do NOT touch the run's state file or GOAL.md in this step — that happens separately, afterward.
+    `The operator confirmed these learnings should be saved: ${JSON.stringify(candidates)}. For each, classify its scope: project-specific (mentions this repo's stack, commands, file paths, conventions) -> scope "project"; generally applicable (model routing, task boundaries, dispatch patterns) -> scope "user".
+
+Write them with the bundled appender — do NOT edit either learnings.md yourself. The user-scoped file is shared by every run on this machine, so a read-modify-write from here silently drops a concurrent run's learnings; the script appends under a lock instead. Make one call per scope, passing every rule for that scope as repeated --rule flags:
+  \`${args.pluginRoot}/scripts/imps-learnings-append.sh --scope <user|project> --heading "YYYY-MM-DD — <project> <task>" --rule "<rule>" [--rule "<rule>" ...]\`
+Keep it to ≤10 rules per scope. Use single quotes inside a --rule value, never a literal double quote, backtick, dollar sign or backslash. The script is fail-soft on environment problems (it warns and exits 0), so report what it printed rather than retrying a scope that reported a lock failure.
+
+Do NOT touch the run's state file or GOAL.md in this step — that happens separately, afterward. Do NOT commit or stage the project-scoped learnings file: it lives in this run's own working tree, and committing it onto the run branch puts an unrelated file in the PR that every concurrent run's PR also touches.
 Return via the required schema: "saved": [{rule, scope}] for each learning actually written.`,
     { label: 'append-learnings', phase: 'Finalize', model: 'sonnet', schema: LEARNINGS_APPEND_SCHEMA }
   )

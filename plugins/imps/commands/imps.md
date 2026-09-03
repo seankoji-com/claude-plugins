@@ -228,50 +228,93 @@ to police mechanically; the discipline is in what you type.
 
 ---
 
-## Slug disambiguation
+## Run identity and the slug
 
-The project slug keys imps state files under `~/.claude/imps/runs/`. Historically
-the slug was derived from `basename "${CLAUDE_PROJECT_DIR:-$(pwd)}"` alone, which
-collides when two different repos share the same directory name (e.g.
-`~/work/proj-a/widgets` and `~/work/proj-b/widgets` both resolve to `widgets`
-and share one state file).
-
-The recommended pattern disambiguates with the remote origin:
+Every imps run is keyed by a **slug**, which names its state file, its GOAL.md and its
+`.prs.json` under `~/.claude/imps/runs/`. The slug is derived by one script — call it,
+never re-derive it inline:
 
 ```bash
-SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
-OLD_SLUG="$SLUG"
-if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
-  OWNER_REPO=$(echo "$REMOTE_URL" \
-    | sed -E \
-      -e 's|^https?://[^/]+/||' \
-      -e 's|^git@[^:]+:||' \
-      -e 's|^ssh://[^/]+/[^/]+/||' \
-      -e 's|\.git$||' -e 's|/$||' \
-    | tr '/' '_')
-  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then
-    SLUG="${OWNER_REPO}__${SLUG}"
-  fi
-fi
-# Migration: rename old basename-only state files if they exist
-if [ "$SLUG" != "$OLD_SLUG" ] \
-  && [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.json" ] \
-  && [ ! -f "$HOME/.claude/imps/runs/$SLUG.json" ]; then
-  for ext in json md; do
-    [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" ] && \
-      mv "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" \
-         "$HOME/.claude/imps/runs/$SLUG.$ext" 2>/dev/null || true
-  done
-fi
+eval "$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh")"
 ```
 
-This produces slugs like `seankoji__claude-plugins__claude-plugins` (owner + repo
-+ basename, double-underscore separated). The migration block preserves existing
-state by renaming old-format files to the new slug on first invocation.
+That sets `REPO_ROOT`, `SLUG`, `RUNS_DIR`, `STATE_PATH`, `GOAL_PATH`, `PRS_PATH` and
+`TMP_PREFIX`.
 
-Slug derivations throughout this file should follow this pattern. The snippet
-above is canonical — copy it whenever deriving `SLUG`.
+`scripts/imps-paths.sh` is the source of truth (this file used to inline the same
+derivation in five places, which drifted). It:
 
+- resolves the working tree with `git rev-parse --show-toplevel`, falling back to
+  `${CLAUDE_PROJECT_DIR:-$(pwd)}` only when git cannot answer;
+- disambiguates with the remote, so two repos sharing a directory name do not share a
+  state file — producing slugs like `seankoji_claude-plugins__claude-plugins`;
+- migrates any legacy basename-only state file to the new slug by **renaming only**,
+  never overwriting an existing file.
+
+`TMP_PREFIX` is a per-slug prefix for scratch files. Use it for anything you write under
+`$TMPDIR` during a run — fixed names like `$TMPDIR/imps-state.json` are shared by every
+run on the machine.
+
+**Why the working tree, not the repository.** `--show-toplevel` returns the *worktree*
+path, so two worktrees of one repo get two distinct slugs. That is what makes concurrent
+runs possible (below), and it is why the derivation must not be keyed to
+`CLAUDE_PROJECT_DIR`, which can point at the main checkout from inside a worktree and
+silently collapse every run onto one state file. In a main checkout `--show-toplevel`
+equals the repo root, so existing runs keep their slug and resume normally.
+
+---
+
+## Concurrent runs against one repo
+
+**Multiple `/imps:imps` runs against the same repo are supported — one run per git
+worktree, each with its own session.**
+
+The constraint is the working tree, not the state file. Every orchestration step (cutting
+the run branch, merging imp branches, running gates, syncing the default branch, pushing
+the PR, fix rounds) acts on the session's own checkout via a plain `git` command with no
+explicit path. Two runs sharing one checkout therefore share one HEAD, and run A's
+`git checkout -b` sends run B's merges onto the wrong branch. Giving each run its own
+worktree makes cwd correct by construction, with nothing for an agent to get wrong.
+
+Individual code imps are already isolated — they are dispatched with the harness's own
+`isolation: 'worktree'` — so it is only the orchestrator that needs a tree of its own.
+
+To start a second run while one is in flight:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh" new          # or: new <name>
+"${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh" list         # what is running where
+"${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh" remove <name>
+```
+
+`new` creates a detached worktree at `<repo>.imps/<name>` (a sibling of the main
+checkout, so it is never inside the repo where gates and globs would see it, and never
+inside `.claude/worktrees/`, which the harness manages). Phase 2 Step 6 then cuts the run
+branch there exactly as it always has. `remove` refuses while that worktree still has a
+state file, since removing it would strand the run's only resume handle.
+
+**Two things the operator must do, which the script cannot do for them:**
+
+1. **Install dependencies in the new worktree.** A fresh worktree has no `node_modules`,
+   no venv, no build cache — and gates run in the session's own tree. `new` prints this
+   reminder. Do not try to infer an install command during a run: a wrong guess surfaces
+   as a *gate failure*, which sends `fixGate` off editing source to "fix" a missing
+   dependency.
+2. **Start the new session with that worktree as its cwd.** A command cannot relocate the
+   session it is running in.
+
+**What is still shared, and how it is handled:**
+
+| Shared resource | Handling |
+| --- | --- |
+| The `.git` object store | Ref updates and `worktree add` are lock-protected. Auto-gc is the real hazard — it rewrites `packed-refs` under concurrent runs. `imps-worktree.sh` prints the `gc.auto 0` advisory once a second worktree exists. |
+| `~/.claude/workflows/imps-run.js` | Synced content-addressed (Phase 3 Step 1), so runs on different plugin versions cannot swap the script under each other mid-run. |
+| `$TMPDIR` scratch files | Namespaced by `TMP_PREFIX`. |
+| `~/.claude/imps/learnings.md` | Appended under a mutex (Phase 4). |
+| `.claude/imps/learnings.md` (in-repo) | Written in each run's own tree and left uncommitted; see the Phase 4 note before committing it. |
+
+Runs in *different* worktrees never share a state file, a run branch, or a PR, so nothing
+else needs coordinating.
 ---
 
 ## Guard: resume check
@@ -281,21 +324,26 @@ empty invocation does NOT mean "start fresh" — it means the user may have clea
 context mid-run. Always run the guard before Phase 0.
 
 Before anything else:
-1. Derive the project slug (see **Slug disambiguation** above — use the canonical
-   snippet with remote-origin disambiguation and migration).
-2. Check whether `~/.claude/imps/runs/<slug>.json` exists.
+1. Derive the slug and paths: `eval "$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh")"`
+   (see **Run identity and the slug** above).
+2. Check whether `$STATE_PATH` exists.
 
-State files from other projects are independent — only the current project's file
-matters, and archived files (`<slug>.archived-*.json`, see **New** below) don't count.
-If the file exists, read it and check `phase`. Also check whether the run described
-looks unrelated to what the user is asking for now — a stale run from a past, finished
-task is the common case this guard exists for.
+State files from other working trees are independent — only this one matters, and
+archived files (`<slug>.archived-*.json`, see **New** below) don't count. If the file
+exists, read it and check `phase`. Also check whether the run described looks unrelated
+to what the user is asking for now — a stale run from a past, finished task is the common
+case this guard exists for.
 
-A second concern this file alone can't catch: two `/imps` runs against the *same* repo
-collide beyond this state file — they can overwrite each other's synced Workflow
-script, race the shared `.git` object store, or push duplicate PRs. If you suspect
-another `/imps` session may already be active against this repo, confirm with the user
-before proceeding rather than assuming this state file is the only one in flight.
+**A state file here describes a run in *this* working tree only.** Another `/imps` run
+may be in flight against this repo from a different worktree; that is supported and needs
+no coordination (see **Concurrent runs against one repo**). Do not treat the absence of a
+state file as proof no run is active, and do not go looking for other runs' state files
+to reconcile against — they are none of this run's business. If the user asks what else
+is running, `scripts/imps-worktree.sh list` answers it.
+
+What you must **not** do is start a second run in *this* tree while `$STATE_PATH` exists.
+That is the collision this guard prevents, and the answer is a new worktree, not a new
+state file — offer `scripts/imps-worktree.sh new` rather than archiving the live run.
 
 Print a one-block summary either way:
 ```
@@ -398,7 +446,14 @@ IS the "decompose on opus" requirement, with no duplicate planning pass.
 **Step 0:** Load learnings from two sources (both optional). `Read` is a tool call, not
 Bash — it does not expand `~`, so resolve `$HOME` yourself and pass the absolute form:
 - **User-scoped:** `$HOME/.claude/imps/learnings.md` — stack-agnostic rules that apply across all projects
-- **Project-scoped:** `.claude/imps/learnings.md` in the repo root — rules specific to this project (already relative to cwd)
+- **Project-scoped:** `.claude/imps/learnings.md` in this working tree — rules specific to this project
+
+Reading either file is always safe. **Writing** them is not: the user-scoped file is
+shared by every run on the machine, so appends go through
+`scripts/imps-learnings-append.sh` (locked, append-only) and never through a
+read-modify-write of the file. The project-scoped file lives in this run's own working
+tree, so concurrent runs do not contend for it — but leave it uncommitted, or every
+concurrent run's PR ends up touching the same unrelated file.
 
 Read the `## Active rules` section from each file that exists. Merge both sets of rules and apply them to model assignment, task boundaries, and dependency detection throughout planning. Project-scoped rules take precedence over user-scoped rules on any conflict.
 
@@ -458,17 +513,8 @@ the repo root, so the write never prompts for project-directory access. Derive t
 ensure the directory exists, and resolve+echo the absolute path — `Write` is a tool call,
 not Bash, and does not expand `~`:
 ```sh
-mkdir -p ~/.claude/imps/runs
-SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
-OLD_SLUG="$SLUG"
-if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
-  OWNER_REPO=$(echo "$REMOTE_URL" | sed -E -e 's|^https?://[^/]+/||' -e 's|^git@[^:]+:||' -e 's|^ssh://[^/]+/[^/]+/||' -e 's|\.git$||' -e 's|/$||' | tr '/' '_')
-  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then SLUG="${OWNER_REPO}__${SLUG}"; fi
-fi
-if [ "$SLUG" != "$OLD_SLUG" ] && [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.json" ] && [ ! -f "$HOME/.claude/imps/runs/$SLUG.json" ]; then
-  for ext in json md; do [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" ] && mv "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" "$HOME/.claude/imps/runs/$SLUG.$ext" 2>/dev/null || true; done
-fi
-GOAL_PATH="$HOME/.claude/imps/runs/${SLUG}.md"
+eval "$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh")"
+mkdir -p "$RUNS_DIR"
 echo "$GOAL_PATH"
 ```
 Pass the echoed `$GOAL_PATH` value as `Write`'s `file_path` — never the `~/...` form.
@@ -584,21 +630,12 @@ task's work straight onto `master`. Always cut a fresh branch off a clean fetch 
 default branch, the same way `commands/issue-mode.md` Phase 1 cuts its holding branch:
 
 ```sh
-mkdir -p ~/.claude/imps/runs
-SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
-OLD_SLUG="$SLUG"
-if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
-  OWNER_REPO=$(echo "$REMOTE_URL" | sed -E -e 's|^https?://[^/]+/||' -e 's|^git@[^:]+:||' -e 's|^ssh://[^/]+/[^/]+/||' -e 's|\.git$||' -e 's|/$||' | tr '/' '_')
-  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then SLUG="${OWNER_REPO}__${SLUG}"; fi
-fi
-if [ "$SLUG" != "$OLD_SLUG" ] && [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.json" ] && [ ! -f "$HOME/.claude/imps/runs/$SLUG.json" ]; then
-  for ext in json md; do [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" ] && mv "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" "$HOME/.claude/imps/runs/$SLUG.$ext" 2>/dev/null || true; done
-fi
-STATE_PATH="$HOME/.claude/imps/runs/${SLUG}.json"
+eval "$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh")"
+mkdir -p "$RUNS_DIR"
 DEFAULT_BRANCH=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
 RUN_BRANCH="imps/${SLUG}-$(date -u +%Y%m%d-%H%M%S)"
 git fetch origin "$DEFAULT_BRANCH" && git checkout -b "$RUN_BRANCH" "origin/$DEFAULT_BRANCH"
-echo "$STATE_PATH"
+echo "$STATE_PATH"; echo "$RUN_BRANCH"
 ```
 
 `Write` the JSON below to the echoed `$STATE_PATH` (its `file_path`, not the `~/...`
@@ -710,26 +747,31 @@ subagent-dispatch protocol inline.
 
 **Step 1 — sync the canonical script.** Workflow scripts only load from a user's own
 `~/.claude/workflows/*.js` — a plugin cannot ship one that runs directly. Each run,
-re-sync the bundled copy over whatever is there so it always matches the installed
-plugin version (a plain overwrite, not a version/hash check). **The `Workflow` tool call
-below is not Bash — it does not expand `~`,** so resolve and echo the absolute paths here
-first, and pass those literal echoed values (never the `~/...` form) into Step 2:
+re-sync the bundled copy so it always matches the installed plugin version.
+
+The destination is **content-addressed** — `imps-run-<sha8>.js`, keyed to the bundled
+script's own hash — because that path is shared by every run on the machine. Under a
+single fixed name, a run starting after a plugin update overwrites the script that a
+run already in flight is about to resume into. Hashing means same version → same file
+(the copy is byte-identical, so it stays a no-op), different version → different file,
+and nothing is ever swapped underneath a live run. Copies are never garbage-collected:
+each is ~130KB, and deleting one that some other run still resumes into would break the
+only thing the state file is for.
+
+**The `Workflow` tool call below is not Bash — it does not expand `~`,** so resolve and
+echo the absolute paths here first, and pass those literal echoed values (never the
+`~/...` form) into Step 2:
 
 ```bash
-mkdir -p ~/.claude/workflows
-cp "${CLAUDE_PLUGIN_ROOT}/scripts/imps-run.workflow.js" ~/.claude/workflows/imps-run.js
-SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
-OLD_SLUG="$SLUG"
-if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
-  OWNER_REPO=$(echo "$REMOTE_URL" | sed -E -e 's|^https?://[^/]+/||' -e 's|^git@[^:]+:||' -e 's|^ssh://[^/]+/[^/]+/||' -e 's|\.git$||' -e 's|/$||' | tr '/' '_')
-  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then SLUG="${OWNER_REPO}__${SLUG}"; fi
-fi
-if [ "$SLUG" != "$OLD_SLUG" ] && [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.json" ] && [ ! -f "$HOME/.claude/imps/runs/$SLUG.json" ]; then
-  for ext in json md; do [ -f "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" ] && mv "$HOME/.claude/imps/runs/$OLD_SLUG.$ext" "$HOME/.claude/imps/runs/$SLUG.$ext" 2>/dev/null || true; done
-fi
-WORKFLOW_DEST="$HOME/.claude/workflows/imps-run.js"
-STATE_PATH="$HOME/.claude/imps/runs/${SLUG}.json"
-GOAL_PATH="$HOME/.claude/imps/runs/${SLUG}.md"
+eval "$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh")"
+mkdir -p ~/.claude/workflows "$RUNS_DIR"
+SRC="${CLAUDE_PLUGIN_ROOT}/scripts/imps-run.workflow.js"
+SHA=$(shasum -a 256 "$SRC" 2>/dev/null || sha256sum "$SRC" 2>/dev/null \
+      || python3 -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$SRC")
+SHA=$(printf '%s' "$SHA" | tr -d '\n' | cut -c1-8)
+[ ${#SHA} -eq 8 ] || { echo "could not hash $SRC" >&2; exit 1; }
+WORKFLOW_DEST="$HOME/.claude/workflows/imps-run-${SHA}.js"
+cp "$SRC" "$WORKFLOW_DEST"
 echo "$WORKFLOW_DEST"; echo "$STATE_PATH"; echo "$GOAL_PATH"
 ```
 
@@ -741,7 +783,7 @@ side effects the script itself must guard against instead.
 
 ```
 Workflow({
-  scriptPath: "<the echoed $WORKFLOW_DEST value, e.g. /Users/you/.claude/workflows/imps-run.js>",
+  scriptPath: "<the echoed $WORKFLOW_DEST value, e.g. /Users/you/.claude/workflows/imps-run-1a2b3c4d.js>",
   args: {
     pluginRoot: "${CLAUDE_PLUGIN_ROOT}",
     stateFilePath: "<the echoed $STATE_PATH value, e.g. /Users/you/.claude/imps/runs/<slug>.json>",
@@ -794,7 +836,7 @@ call only, not the fix-loop re-review pass.
 the background — this turn ends here, not after the run finishes.
 
 ```bash
-SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}") ; python3 "${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-banner.py" "$SLUG"
+SLUG=$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh" --slug) ; python3 "${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-banner.py" "$SLUG"
 ```
 
 Progress between results is visible in the state file — the script heartbeats
@@ -820,10 +862,16 @@ To persist a decision, patch the state file's `operator_decision` field before
 re-invoking (a single preapprovable command, not a hand-rolled multi-line edit):
 
 ```bash
+eval "$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh")"
 jq --arg d '<the decision string, same vocabulary as today — see below>' \
-  '.operator_decision = $d' ~/.claude/imps/runs/<slug>.json > "$TMPDIR/imps-state.json" \
-  && mv "$TMPDIR/imps-state.json" ~/.claude/imps/runs/<slug>.json
+  '.operator_decision = $d' "$STATE_PATH" > "${TMP_PREFIX}-state.json" \
+  && mv "${TMP_PREFIX}-state.json" "$STATE_PATH"
 ```
+
+The temporary file is `$TMP_PREFIX`-scoped, not a fixed `$TMPDIR/imps-state.json`: a
+fixed name is shared by every run on the machine, and this one is renamed *over* a state
+file — so a collision here does not corrupt a temp file, it writes one run's decision
+into another run's state.
 
 The decision vocabulary is almost unchanged from before: `resolved, continue` ·
 `retry <gate>: <guidance>` · `skip <gate>` · `reconciled, continue` ·
