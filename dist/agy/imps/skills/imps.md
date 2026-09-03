@@ -193,51 +193,70 @@ to police mechanically; the discipline is in what you type.
 
 ---
 
-## Slug disambiguation
+## Run identity and the slug
 
-The project slug keys imps state files under `~/.gemini/config/imps/runs/`. Historically
-the slug was derived from `basename "${CLAUDE_PROJECT_DIR:-$(pwd)}"` alone, which
-collides when two different repos share the same directory name (e.g.
-`~/work/proj-a/widgets` and `~/work/proj-b/widgets` both resolve to `widgets`
-and share one state file).
-
-The recommended pattern disambiguates with the remote origin:
+Every imps run is keyed by a **slug**, which names its state file, its GOAL.md and its
+`.prs.json` under `~/.gemini/config/imps/runs/`. The slug is derived by one script — call it,
+never re-derive it inline:
 
 ```bash
-SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
-OLD_SLUG="$SLUG"
-if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
-  OWNER_REPO=$(echo "$REMOTE_URL" \
-    | sed -E \
-      -e 's|^https?://[^/]+/||' \
-      -e 's|^git@[^:]+:||' \
-      -e 's|^ssh://[^/]+/[^/]+/||' \
-      -e 's|\.git$||' -e 's|/$||' \
-    | tr '/' '_')
-  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then
-    SLUG="${OWNER_REPO}__${SLUG}"
-  fi
-fi
-# Migration: rename old basename-only state files if they exist
-if [ "$SLUG" != "$OLD_SLUG" ] \
-  && [ -f "~/.gemini/config/imps/runs/$OLD_SLUG.json" ] \
-  && [ ! -f "~/.gemini/config/imps/runs/$SLUG.json" ]; then
-  for ext in json md; do
-    [ -f "~/.gemini/config/imps/runs/$OLD_SLUG.$ext" ] && \
-      mv "~/.gemini/config/imps/runs/$OLD_SLUG.$ext" \
-         "~/.gemini/config/imps/runs/$SLUG.$ext" 2>/dev/null || true
-  done
-fi
+eval "$("__PLUGIN_ROOT__/scripts/imps-paths.sh")"
 ```
 
-This produces slugs like `seankoji__claude-plugins__claude-plugins` (owner + repo
-+ basename, double-underscore separated). The migration block preserves existing
-state by renaming old-format files to the new slug on first invocation.
+That sets `REPO_ROOT`, `SLUG`, `RUNS_DIR`, `STATE_PATH`, `GOAL_PATH`, `PRS_PATH` and
+`TMP_PREFIX`.
 
-Slug derivations throughout this file should follow this pattern. The snippet
-above is canonical — copy it whenever deriving `SLUG`.
+`scripts/imps-paths.sh` is the source of truth (this file used to inline the same
+derivation in five places, which drifted). It:
+
+- resolves the working tree with `git rev-parse --show-toplevel`, falling back to
+  `${CLAUDE_PROJECT_DIR:-$(pwd)}` only when git cannot answer;
+- disambiguates with the remote, so two repos sharing a directory name do not share a
+  state file — producing slugs like `seankoji_claude-plugins__claude-plugins`;
+- migrates any legacy basename-only state file to the new slug by **renaming only**,
+  never overwriting an existing file.
+
+`TMP_PREFIX` is a per-slug prefix for scratch files. Use it for anything you write under
+`$TMPDIR` during a run — fixed names like `$TMPDIR/imps-state.json` are shared by every
+run on the machine.
+
+**Why the working tree, not the repository.** `--show-toplevel` returns the *worktree*
+path, so two worktrees of one repo get two distinct slugs. That is what makes concurrent
+runs possible (below), and it is why the derivation must not be keyed to
+`CLAUDE_PROJECT_DIR`, which can point at the main checkout from inside a worktree and
+silently collapse every run onto one state file. In a main checkout `--show-toplevel`
+equals the repo root, so existing runs keep their slug and resume normally.
 
 ---
+
+## Concurrent runs against one repo
+
+Several `/imps` runs can work on the same repo at once — **one run per git worktree,
+each in its own session.**
+
+The constraint is the working tree, not the state file. Every orchestration step (cutting
+the run branch, merging imp branches, running gates, syncing the default branch, pushing
+the PR) acts on the session's own checkout with a plain `git` command and no explicit
+path. Two runs sharing one checkout therefore share one HEAD, and the first run's
+`git checkout -b` sends the second's merges onto the wrong branch. A worktree per run
+makes each session's cwd correct by construction.
+
+The run slug is `basename "$(pwd)"`, so a run started from its own worktree already gets
+its own state file, GOAL.md and `.prs.json` with nothing further to configure.
+
+```bash
+git fetch origin "$DEFAULT_BRANCH"
+git worktree add --detach ../<repo>.imps/<name> "origin/$DEFAULT_BRANCH"
+```
+
+Then install the repo's dependencies in the new worktree — a fresh worktree has none, and
+gates run in the session's own tree — and start a new session with it as cwd.
+
+Two caveats worth knowing. Git's auto-gc rewrites `packed-refs` and can race a concurrent
+`git worktree add`; if you see "cannot lock ref" under several runs, pin it off with
+`git config gc.auto 0` and compact once no run is live. And the user-scoped
+`learnings.md` is shared by every run, so a run that rewrites it wholesale can drop
+another's entry — append to it, never read-modify-write.
 
 ## Guard: resume check
 
