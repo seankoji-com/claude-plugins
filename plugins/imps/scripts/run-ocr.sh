@@ -28,7 +28,7 @@ exec 1>&2
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 OCR_BIN="${IMPS_OCR_BIN:-ocr}"
-OCR_PIN_VERSION="${IMPS_OCR_VERSION:-1.10.1}"
+OCR_PIN_VERSION="${IMPS_OCR_VERSION:-1.11.3}"
 OPENCODE_CONFIG_PATH="${IMPS_OPENCODE_CONFIG_PATH:-$HOME/.config/opencode/opencode.json}"
 RULE_PATH="${IMPS_OCR_RULE:-$PLUGIN_ROOT/references/ocr-review-rule.json}"
 
@@ -158,13 +158,29 @@ esac
 # global install in place forever, and `command -v` alone can find a launcher whose
 # platform binary never finished downloading — that dies at the review call with exit
 # 127, after every setup step has already run.
+# Keep npm's cache and prefix inside the review's temporary directory. Local `/imps`
+# runs can inherit a root-owned `~/.npm` cache, and a system npm prefix can be
+# unwritable; neither should block a read-only review before it starts.
 export OCR_NO_UPDATE=1  # else bin/ocr.js detaches an updater that reinstalls mid-run
 if ! "$OCR_BIN" version 2>/dev/null | grep -qF "v${OCR_PIN_VERSION} "; then
   command -v npm >/dev/null 2>&1 || fail ocr_missing "npm is required to install @alibaba-group/open-code-review@${OCR_PIN_VERSION}"
-  npm install -g "@alibaba-group/open-code-review@${OCR_PIN_VERSION}" >/dev/null 2>&1 \
-    || fail ocr_install_failed "cannot install @alibaba-group/open-code-review@${OCR_PIN_VERSION}"
+  TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/imps-ocr-review.XXXXXX")" \
+    || fail tmpdir_failed 'cannot create temporary review directory'
+  NPM_PREFIX="$TMP_ROOT/npm-global"
+  NPM_CACHE="$TMP_ROOT/npm-cache"
+  if ! npm install --global --prefix "$NPM_PREFIX" --cache "$NPM_CACHE" \
+      --no-audit --no-fund "@alibaba-group/open-code-review@${OCR_PIN_VERSION}" >/dev/null 2>&1; then
+    fail ocr_install_failed "cannot install @alibaba-group/open-code-review@${OCR_PIN_VERSION}"
+  fi
+  OCR_BIN="$NPM_PREFIX/bin/ocr"
 fi
-command -v "$OCR_BIN" >/dev/null 2>&1 || fail ocr_missing 'ocr is not on PATH'
+if [ -z "$TMP_ROOT" ]; then
+  TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/imps-ocr-review.XXXXXX")" \
+    || fail tmpdir_failed 'cannot create temporary review directory'
+fi
+if [ ! -x "$OCR_BIN" ] && ! command -v "$OCR_BIN" >/dev/null 2>&1; then
+  fail ocr_missing 'ocr is not on PATH'
+fi
 "$OCR_BIN" version 2>/dev/null | grep -qF "v${OCR_PIN_VERSION} " \
   || fail ocr_version_mismatch "ocr is not pinned version ${OCR_PIN_VERSION}"
 "$OCR_BIN" review --help 2>&1 | grep -q -- '--format' || fail flags_unsupported 'ocr review lacks --format'
@@ -189,7 +205,6 @@ MERGE_BASE="$(git -C "$REPO" merge-base "$BASE" "$HEAD" 2>/dev/null)" || fail ba
 [ -n "$MERGE_BASE" ] || fail bad_arguments 'cannot compute merge-base'
 HEAD_SHA="$(git -C "$REPO" rev-parse "$HEAD")"
 
-TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/imps-ocr-review.XXXXXX")" || fail tmpdir_failed 'cannot create temporary review directory'
 mkdir -p "$TMP_ROOT/home" || fail tmpdir_failed 'cannot initialize temporary review directory'
 
 # ---- Background: the acceptance criteria the diff is judged against ---------------
@@ -218,6 +233,11 @@ export OCR_LLM_MODEL="$MODEL"
 export OCR_LLM_TIMEOUT="${IMPS_OCR_LLM_TIMEOUT:-180}"
 
 "$OCR_BIN" config set language English >/dev/null 2>&1 || true
+"$OCR_BIN" config set provider imps-litellm >/dev/null 2>&1 || fail provider_config_failed 'cannot configure OCR provider'
+"$OCR_BIN" config set model "$MODEL" >/dev/null 2>&1 || fail provider_config_failed 'cannot configure OCR model'
+"$OCR_BIN" config set custom_providers.imps-litellm.url "$OCR_URL" >/dev/null 2>&1 || fail provider_config_failed 'cannot configure OCR provider URL'
+"$OCR_BIN" config set custom_providers.imps-litellm.protocol openai >/dev/null 2>&1 || fail provider_config_failed 'cannot configure OCR provider protocol'
+"$OCR_BIN" config set custom_providers.imps-litellm.api_key "$OCR_TOKEN" >/dev/null 2>&1 || fail provider_config_failed 'cannot configure OCR provider credential'
 
 RESULT_PATH="$TMP_ROOT/result.json"
 run_with_timeout() {
@@ -234,6 +254,7 @@ run_with_timeout() {
 
 run_with_timeout "$OCR_BIN" review \
   --from "$MERGE_BASE" --to "$HEAD_SHA" \
+  --provider imps-litellm --model "$MODEL" \
   --format json \
   --concurrency "$CONCURRENCY" \
   --rule "$RULE_PATH" \

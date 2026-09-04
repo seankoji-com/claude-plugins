@@ -17,7 +17,7 @@ Override any of it:
 | `IMPS_OCR_MODEL` | `deepseek-v4-flash` | Model id sent to the endpoint |
 | `IMPS_OCR_URL` | from `opencode.json` | OpenAI-compatible base URL |
 | `IMPS_OCR_TOKEN` | from `opencode.json` | Credential |
-| `IMPS_OCR_VERSION` | `1.10.1` | Pinned `ocr` release |
+| `IMPS_OCR_VERSION` | `1.11.3` | Pinned `ocr` release |
 | `IMPS_OCR_CONCURRENCY` | `4` | Files reviewed in parallel |
 | `IMPS_OCR_TIMEOUT` | `900` | Wall-clock cap on the whole review |
 | `IMPS_OCR_LLM_TIMEOUT` | `180` | Per-request cap inside OCR |

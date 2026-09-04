@@ -45,6 +45,26 @@ esac
 STUB
 chmod +x "$ROOT/bin/ocr"
 
+# The installer stub creates a pinned binary in the requested isolated prefix. This
+# proves the harness does not depend on the operator's global npm prefix or cache.
+cat > "$ROOT/bin/npm" <<'STUB'
+#!/usr/bin/env bash
+set -uo pipefail
+if [ "${STUB_NPM_FAIL:-0}" = 1 ]; then exit 1; fi
+prefix=""
+previous=""
+for arg in "$@"; do
+  if [ "$previous" = --prefix ]; then prefix="$arg"; fi
+  previous="$arg"
+done
+[ -n "$prefix" ] || exit 2
+mkdir -p "$prefix/bin"
+printf '#!/usr/bin/env bash\nSTUB_VERSION=1.10.1 exec %q "$@"\n' "$STUB_OCR_SOURCE" > "$prefix/bin/ocr"
+chmod +x "$prefix/bin/ocr"
+STUB
+chmod +x "$ROOT/bin/npm"
+export STUB_OCR_SOURCE="$ROOT/bin/ocr"
+
 git init -q "$ROOT/repo"
 git -C "$ROOT/repo" config user.email test@example.invalid
 git -C "$ROOT/repo" config user.name test
@@ -65,9 +85,10 @@ write_config "$GOOD_CONFIG"
 
 run_review() {
   env STUB_CASE="${STUB_CASE:-approve}" STUB_VERSION="${STUB_VERSION:-1.10.1}" \
+    STUB_NPM_FAIL="${STUB_NPM_FAIL:-0}" \
     STUB_URL_SINK="$ROOT/url-sink" \
     HOME="$ROOT/realhome" TMPDIR="$ROOT/tmp" PATH="$ROOT/bin:$PATH" \
-    IMPS_OCR_BIN=ocr IMPS_OPENCODE_CONFIG_PATH="$CONFIG" \
+    IMPS_OCR_BIN=ocr IMPS_OCR_VERSION=1.10.1 IMPS_OPENCODE_CONFIG_PATH="$CONFIG" \
     "$REVIEW" --repo "$ROOT/repo" --base "$BASE" --goal "$ROOT/GOAL.md" --timeout 3 "$@"
 }
 
@@ -111,10 +132,13 @@ STUB_CASE=timeout run_review --timeout 1 >"$out" 2>"$err"; rc=$?
 if [ "$rc" != 0 ] && jq -e '.reason == "timeout"' "$out" >/dev/null; then ok 'timeout blocks'; else bad 'timeout blocks' "rc=$rc"; fi
 
 # Presence is not enough: a stale global install is exactly what a `command -v` check
-# would wave through, so the harness pins the version and must reject a mismatch. npm is
-# absent from the stub PATH, so the reinstall attempt fails rather than succeeding.
+# would wave through, so the harness pins the version and replaces it in an isolated
+# prefix. The npm stub also proves the install uses the requested prefix.
 STUB_VERSION=1.9.0 STUB_CASE=approve run_review >"$out" 2>"$err"; rc=$?
-if [ "$rc" != 0 ] && jq -e '.reason | test("ocr_version_mismatch|ocr_missing|ocr_install_failed")' "$out" >/dev/null; then ok 'version mismatch blocks'; else bad 'version mismatch blocks' "rc=$rc $(cat "$out")"; fi
+if [ "$rc" = 0 ] && jq -e '.status == "ok" and .verdict == "APPROVE"' "$out" >/dev/null; then ok 'version mismatch installs pinned OCR in an isolated prefix'; else bad 'version mismatch installs pinned OCR in an isolated prefix' "rc=$rc $(cat "$out")"; fi
+
+STUB_VERSION=1.9.0 STUB_NPM_FAIL=1 STUB_CASE=approve run_review >"$out" 2>"$err"; rc=$?
+if [ "$rc" != 0 ] && jq -e '.reason == "ocr_install_failed"' "$out" >/dev/null; then ok 'failed OCR install blocks'; else bad 'failed OCR install blocks' "rc=$rc $(cat "$out")"; fi
 
 write_config '{"provider":{}}'
 STUB_CASE=approve run_review >"$out" 2>"$err"; rc=$?
