@@ -214,6 +214,41 @@ change the remote, and do not try another protocol — the clone is shared with 
 other PR in this repository, and an agent-local guess at its config lands on all of
 them.
 
+### 5. Drive the merge
+
+Blockers cleared and the fix pushed — or the PR was already green with nothing to
+push — is **not** the end of your job. The merge itself is yours. Run it from the
+worktree:
+
+```
+${CLAUDE_PLUGIN_ROOT}/scripts/merge-pr.sh --repo <repo> --pr <number>
+```
+
+It syncs a branch that fell behind base again (server-side `update-branch`), resolves
+threads that carry a `[babysitter]` reply, and merges — the two live-state failures a
+worktree cannot see. Then:
+
+- `MERGED ...` — you are done: `status: "merged"`, `merge.result: "MERGED"`.
+- `BLOCKED ... reason=unanswered_threads` — answer the thread (step 4) and run the
+  merge again.
+- `BLOCKED ... reason=conflict` — merge `origin/<base-ref>` in your worktree, resolve
+  per step 2, re-run the gate, push, and run the merge again.
+- `BLOCKED ... reason=failing_checks` — re-run the failed job once if it looks like a
+  flake; otherwise diagnose per step 3, fix, gate, push, and run the merge again.
+- `BLOCKED ... automerge=armed` — GitHub will merge it the moment the blocker clears
+  on its own; no further push or merge call is needed. Report `status: "done"` with
+  `merge.automerge_armed: true` (if `merge.automerge_armed` is `false`, the blocker
+  needs an explicit merge later — say so in `notes`).
+- `BLOCKED ... reason=branch_protection` — a required human reviewer, a code-scanning
+  alert, or an org ruleset. **Do not retry and do not reach for `--admin`.** Return
+  `blocked` with `blocked_on: "merge:branch_protection"` and the script's detail in
+  `notes`.
+
+One retry per reason, not a loop: if the second attempt comes back blocked the same
+way, return `blocked` with the exact `blocked_on`. The orchestrator will not merge for
+you and will not override a protection rule — if this PR is going to land, this step is
+where it happens.
+
 ## Output
 
 Your final message is machine-read. Return this JSON and nothing else — no preamble,
@@ -223,9 +258,15 @@ no sign-off:
 {
   "repo": "owner/name",
   "number": 123,
-  "status": "done" | "partial" | "blocked" | "noop",
+  "status": "done" | "partial" | "blocked" | "noop" | "merged",
   "pushed": true,
   "reviewed": true,
+  "merge": {
+    "attempted": true,
+    "result": "MERGED" | "BLOCKED" | "n/a",
+    "automerge_armed": false,
+    "reason": "<merge-pr.sh reason, or null>"
+  },
   "handled": {
     "base_drift": "merged" | "n/a",
     "conflicts": "resolved" | "none" | "blocked",
@@ -240,8 +281,9 @@ no sign-off:
 
 `status` is `done` when nothing blocking remains, `partial` when you fixed some
 blockers and one needs a human or a stronger model, `blocked` when you fixed none,
-`noop` when there was nothing to do. `blocked_on` must be non-null unless `status` is
-`done` or `noop`.
+`noop` when there was nothing to do, `merged` when step 5's `merge-pr.sh` returned
+`MERGED`. `blocked_on` must be non-null unless `status` is `done`, `noop`, or
+`merged`.
 
 `learnings` is usually empty, and should be. It is for the things you had to discover
 by trial and error and that the next agent on the next PR would otherwise discover
