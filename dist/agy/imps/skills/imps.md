@@ -64,7 +64,7 @@ runs — the remaining text is what mode detection and every phase below operate
 flag anywhere in the argument string counts; order does not matter.
 
 - **`--personas`** — opt into the in-run five-persona review panel. **Default: OFF.**
-  Without it, the Head Imp reviews the plan and read-only OpenCode reviews the merged diff.
+  Without it, the Head Imp reviews the plan and read-only OCR reviews the merged diff.
   With it, the full panel + fix-loop + adjudication runs exactly as before.
 
 Derive a single boolean `PERSONA_PANEL` (`true` only if `--personas` was present) and
@@ -193,51 +193,51 @@ to police mechanically; the discipline is in what you type.
 
 ---
 
-## Slug disambiguation
+## Run identity and the slug
 
-The project slug keys imps state files under `~/.gemini/config/imps/runs/`. Historically
-the slug was derived from `basename "${CLAUDE_PROJECT_DIR:-$(pwd)}"` alone, which
-collides when two different repos share the same directory name (e.g.
-`~/work/proj-a/widgets` and `~/work/proj-b/widgets` both resolve to `widgets`
-and share one state file).
-
-The recommended pattern disambiguates with the remote origin:
+Every run is keyed by a **slug**, which names its run record, its `GOAL.md` and its
+`.prs.json`:
 
 ```bash
-SLUG=$(basename "${CLAUDE_PROJECT_DIR:-$(pwd)}")
-OLD_SLUG="$SLUG"
-if REMOTE_URL=$(git remote get-url origin 2>/dev/null); then
-  OWNER_REPO=$(echo "$REMOTE_URL" \
-    | sed -E \
-      -e 's|^https?://[^/]+/||' \
-      -e 's|^git@[^:]+:||' \
-      -e 's|^ssh://[^/]+/[^/]+/||' \
-      -e 's|\.git$||' -e 's|/$||' \
-    | tr '/' '_')
-  if [ -n "$OWNER_REPO" ] && [ "$OWNER_REPO" != "$SLUG" ]; then
-    SLUG="${OWNER_REPO}__${SLUG}"
-  fi
-fi
-# Migration: rename old basename-only state files if they exist
-if [ "$SLUG" != "$OLD_SLUG" ] \
-  && [ -f "~/.gemini/config/imps/runs/$OLD_SLUG.json" ] \
-  && [ ! -f "~/.gemini/config/imps/runs/$SLUG.json" ]; then
-  for ext in json md; do
-    [ -f "~/.gemini/config/imps/runs/$OLD_SLUG.$ext" ] && \
-      mv "~/.gemini/config/imps/runs/$OLD_SLUG.$ext" \
-         "~/.gemini/config/imps/runs/$SLUG.$ext" 2>/dev/null || true
-  done
-fi
+SLUG=$(basename "$(pwd)")
 ```
 
-This produces slugs like `seankoji__claude-plugins__claude-plugins` (owner + repo
-+ basename, double-underscore separated). The migration block preserves existing
-state by renaming old-format files to the new slug on first invocation.
+Derive it from the **working directory**, not from the repository. A run started in its
+own git worktree then gets its own slug with nothing further to configure, and that is
+exactly what stops two concurrent runs against one repo from sharing a record (see
+**Concurrent runs against one repo**).
 
-Slug derivations throughout this file should follow this pattern. The snippet
-above is canonical — copy it whenever deriving `SLUG`.
+Where two checkouts can share a directory name, disambiguate with the remote's
+owner/repository so same-named repositories never collide.
 
----
+## Concurrent runs against one repo
+
+Several `/imps` runs can work on the same repo at once — **one run per git worktree,
+each in its own session.**
+
+The constraint is the working tree, not the state file. Every orchestration step (cutting
+the run branch, merging imp branches, running gates, syncing the default branch, pushing
+the PR) acts on the session's own checkout with a plain `git` command and no explicit
+path. Two runs sharing one checkout therefore share one HEAD, and the first run's
+`git checkout -b` sends the second's merges onto the wrong branch. A worktree per run
+makes each session's cwd correct by construction.
+
+The run slug is `basename "$(pwd)"`, so a run started from its own worktree already gets
+its own state file, GOAL.md and `.prs.json` with nothing further to configure.
+
+```bash
+git fetch origin "$DEFAULT_BRANCH"
+git worktree add --detach ../<repo>.imps/<name> "origin/$DEFAULT_BRANCH"
+```
+
+Then install the repo's dependencies in the new worktree — a fresh worktree has none, and
+gates run in the session's own tree — and start a new session with it as cwd.
+
+Two caveats worth knowing. Git's auto-gc rewrites `packed-refs` and can race a concurrent
+`git worktree add`; if you see "cannot lock ref" under several runs, pin it off with
+`git config gc.auto 0` and compact once no run is live. And the user-scoped
+`learnings.md` is shared by every run, so a run that rewrites it wholesale can drop
+another's entry — append to it, never read-modify-write.
 
 ## Guard: resume check
 
@@ -393,7 +393,7 @@ this structure:
 - [ ] <acceptance criterion 1>
 - [ ] <acceptance criterion 2 — one line each from discovery>
 - [ ] Gates green (build · lint · test · type — per GATE_CMDS)
-- [ ] Head Imp reviewed the plan; OpenCode reviewed the merged diff; all blocker/major findings addressed
+- [ ] Head Imp reviewed the plan; OCR reviewed the merged diff; all blocker/major findings addressed
 - [ ] No merge conflicts with the default branch
 
 ## Global Constraints

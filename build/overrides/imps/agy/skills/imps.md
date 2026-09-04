@@ -66,6 +66,56 @@ It never edits; it returns findings. You act on them.
 the merged diff after deterministic gates.)
 <!-- END-SECTION -->
 
+<!-- REPLACE-SECTION: ## Run identity and the slug -->
+## Run identity and the slug
+
+Every run is keyed by a **slug**, which names its run record, its `GOAL.md` and its
+`.prs.json`:
+
+```bash
+SLUG=$(basename "$(pwd)")
+```
+
+Derive it from the **working directory**, not from the repository. A run started in its
+own git worktree then gets its own slug with nothing further to configure, and that is
+exactly what stops two concurrent runs against one repo from sharing a record (see
+**Concurrent runs against one repo**).
+
+Where two checkouts can share a directory name, disambiguate with the remote's
+owner/repository so same-named repositories never collide.
+<!-- END-SECTION -->
+
+<!-- REPLACE-SECTION: ## Concurrent runs against one repo -->
+## Concurrent runs against one repo
+
+Several `/imps` runs can work on the same repo at once — **one run per git worktree,
+each in its own session.**
+
+The constraint is the working tree, not the state file. Every orchestration step (cutting
+the run branch, merging imp branches, running gates, syncing the default branch, pushing
+the PR) acts on the session's own checkout with a plain `git` command and no explicit
+path. Two runs sharing one checkout therefore share one HEAD, and the first run's
+`git checkout -b` sends the second's merges onto the wrong branch. A worktree per run
+makes each session's cwd correct by construction.
+
+The run slug is `basename "$(pwd)"`, so a run started from its own worktree already gets
+its own state file, GOAL.md and `.prs.json` with nothing further to configure.
+
+```bash
+git fetch origin "$DEFAULT_BRANCH"
+git worktree add --detach ../<repo>.imps/<name> "origin/$DEFAULT_BRANCH"
+```
+
+Then install the repo's dependencies in the new worktree — a fresh worktree has none, and
+gates run in the session's own tree — and start a new session with it as cwd.
+
+Two caveats worth knowing. Git's auto-gc rewrites `packed-refs` and can race a concurrent
+`git worktree add`; if you see "cannot lock ref" under several runs, pin it off with
+`git config gc.auto 0` and compact once no run is live. And the user-scoped
+`learnings.md` is shared by every run, so a run that rewrites it wholesale can drop
+another's entry — append to it, never read-modify-write.
+<!-- END-SECTION -->
+
 <!-- REPLACE-SECTION: ## Guard: resume check -->
 ## Guard: resume check
 

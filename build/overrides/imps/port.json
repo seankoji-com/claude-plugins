@@ -8,8 +8,11 @@
   "asset_exclude": {
     "scripts/dispatch-banner.py": "Colour-codes the imp roster by Claude model name — `opus`/`sonnet`/`haiku` substring matches against a `model` field in the run state file. This build routes by tier (`cheap`/`standard`/`deep`) and its state file carries no `model` field, so the script would silently colour every imp the default green while re-introducing Claude model names as a runtime choice (contract item 23). Its only caller was the Workflow-driven Phase 3, which this directory's overrides replace with a foreground loop that has no roster to print.",
     "scripts/final-banner.py": "The end-of-run companion to dispatch-banner.py, excluded for the same reason: it colours by `opus`/`sonnet`/`haiku` and synthesizes a roster from a `model_counts` map that a tier-routed run never writes. Excluded with its caller, the Workflow `run_complete` checkpoint.",
+    "scripts/imps-learnings-append.sh": "Appends run learnings under a lock to ~/.claude/imps/learnings.md. This build writes its user-scoped learnings under its own platform directory, so the script would append to Claude's file instead. The overrides describe the append against the correct path.",
+    "scripts/imps-paths.sh": "Derives the Claude run slug and the paths keyed off it, all rooted at ~/.claude/imps/runs. This build keeps its run state under its own platform directory, so the script would resolve every path into Claude's tree. The equivalent derivation is inline in this directory's overrides, against the correct root.",
     "scripts/imps-run.workflow.js": "The Claude Code Workflow runtime for the whole run — agent() dispatch, isolation: 'worktree', the Workflow resume model. Neither platform has a Workflow tool, so shipping it would present Claude mechanics as if they run there (contract item 16). The per-platform dispatch loop is prose, from this directory's overrides.",
-    "scripts/opencode-review.sh": "The Claude-host read-only OpenCode review harness. It copies a provider credential into a temporary XDG tree and uses Claude Workflow wrapper mechanics, neither of which belongs in generated runtimes that already review inside their own runtime."
+    "scripts/imps-worktree.sh": "Manages the per-run git worktrees that make concurrent Claude runs safe. Its liveness check reads ~/.claude/imps/runs, so it would report every run on this platform as idle and offer to remove a live run's worktree. The underlying worktree-per-run technique is platform-neutral and would port, but it needs this build's own state root and a matching prose change in the overrides — not done here, so the script is excluded rather than shipped pointing at the wrong tree.",
+    "scripts/run-ocr.sh": "The Claude-host read-only OCR review harness. It uses Claude Workflow wrapper mechanics and temporary configuration overrides, neither of which belongs in generated runtimes that already review inside their own runtime."
   },
   "asset_replacements": {
     "references/checklist-mode.md": [
@@ -28,6 +31,10 @@
       [
         "  write the state file and hand the run to the Workflow script (model-routed,",
         "  write the state file and hand the run to the dispatch loop (tier-routed,"
+      ],
+      [
+        "Create `GOAL.md` at the run's `GOAL_PATH` — derive it with\n`eval \"$(\"__PLUGIN_ROOT__/scripts/imps-paths.sh\")\"`, then `mkdir -p \"$RUNS_DIR\"`\n(see `commands/imps.md` -> **Run identity and the slug**; never re-derive the slug\ninline) — using the standard spine format",
+        "Create `GOAL.md` in this build's run-records directory, named for the run slug\n(`SLUG=$(basename \"$(pwd)\")`, creating the directory first) — using the standard\nspine format"
       ]
     ],
     "references/discussion-mode.md": [
@@ -51,6 +58,6 @@
     "description": "Swarm orchestration with serial tier-routed execution, deterministic gates, whole-repo audits, PR monitoring, and proof-led blast-radius analysis. (The Claude Code build drives the main run from a background Workflow script; here the skill drives it directly.)"
   },
   "source_hash_pins": {
-    "scripts/imps-run.workflow.js": "4f40a238639583db98d3bfba23ccc94da8cf048d4e68c2c4f980f59cf875bbff"
+    "scripts/imps-run.workflow.js": "878dd4d7a63543663ab85262a8934a6c39d4aae3db6f00a23f8ffc71df2a5967"
   }
 }

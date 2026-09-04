@@ -42,7 +42,24 @@ GENERATION_MANIFEST_PATH = BUILD_DIR / "generation-manifest.json"
 # Sorted, so iteration order never depends on the table's key order.
 PLATFORMS = ("agy", "opencode")
 
+# Anchored at column 0, deliberately, even though CommonMark allows a heading up to 3
+# spaces in. Relaxing it to `^ {0,3}#` makes imps.md's task-table header row
+# " #  Task   Model   Type   Depends On" a heading, which truncates `## Task table`
+# right after its own heading line and leaks the Claude-side rows into dist/ — the
+# exact corruption class this module already guards against. Section starts are held
+# to the same column-0 rule (see find_section) so both ends of a span agree.
 HEADING_RE = re.compile(r"^#{1,6} ")
+# A fenced-code delimiter: ``` or ~~~ (3+), optionally indented, with an info string.
+# Needed because HEADING_RE happily matches a column-0 `# comment` inside a ```bash
+# block; anything deciding "is this line a heading?" must mask such regions first.
+FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
+# ...but only fences in a *non-markdown* language are masked. A fence with no info string,
+# or one tagged markdown/md, holds markdown whose headings are real: overrides across this
+# repo target headings inside ```markdown templates (imps.md's GOAL.md skeleton — `## Task
+# table`, `## Status`, `## Parked findings` — is stitched together by exactly that), and
+# masking those would break 20+ live directives. A `# ` line inside ```bash is a shell
+# comment and never a heading, which is the case that silently corrupted dist/.
+MARKDOWN_FENCE_INFO = frozenset({"", "markdown", "md"})
 FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_.-]+):")
 
 # The invariants dist/ must hold. Checked here so a porting mistake fails at generation
@@ -300,6 +317,41 @@ def load_overrides(plugin: str, platform: str, kind: str) -> dict[str, Override]
     return {path.stem: parse_override(path) for path in sorted(directory.glob("*.md"))}
 
 
+def heading_indices(lines: list[str]) -> set[int]:
+    """Indices of the lines that are real markdown headings.
+
+    HEADING_RE alone is not enough: it matches any line starting with `# `, and a shell
+    comment at column 0 inside a ```bash fence looks exactly like an h1. Treating one as a
+    heading ends the enclosing section early, so everything after it leaks into dist/
+    unreplaced — a silent corruption that only ever surfaced as an unrelated lint failure.
+    Fences tagged with a non-markdown language are masked out here (see
+    MARKDOWN_FENCE_INFO for why untagged and ```markdown fences stay transparent), so
+    every caller gets the same answer.
+    """
+    found: set[int] = set()
+    fence: str | None = None
+    opaque = False
+    for index, line in enumerate(lines):
+        match = FENCE_RE.match(line)
+        if match:
+            marker, info = match.group("marker"), match.group("info")
+            if fence is None:
+                # An opening fence's info string may not contain a backtick.
+                if marker[0] == "`" and "`" in info:
+                    continue
+                fence = marker
+                lang = (info.strip().split() or [""])[0].lower()
+                opaque = lang not in MARKDOWN_FENCE_INFO
+                continue
+            # A closing fence is the same character, at least as long, and bare.
+            if marker[0] == fence[0] and len(marker) >= len(fence) and not info.strip():
+                fence, opaque = None, False
+            continue
+        if not opaque and HEADING_RE.match(line):
+            found.add(index)
+    return found
+
+
 def find_section(body_lines: list[str], heading: str) -> tuple[int, int] | None:
     """Span of the section introduced by `heading`, as [start, end).
 
@@ -318,11 +370,15 @@ def find_section(body_lines: list[str], heading: str) -> tuple[int, int] | None:
     AND its subtree". The fix for that is a separate opt-in directive rather than a change
     here, so no existing directive's meaning moves.
     """
+    headings = heading_indices(body_lines)
     for start, line in enumerate(body_lines):
-        if line.strip() != heading:
+        # A section start must be a heading by the same rule that ends one (column 0, not
+        # inside an opaque fence), so a span can never begin somewhere it could not end.
+        # Without this, a `## X` line inside a ```bash fence would still match as a start.
+        if start not in headings or line.strip() != heading:
             continue
         end = start + 1
-        while end < len(body_lines) and not HEADING_RE.match(body_lines[end]):
+        while end < len(body_lines) and end not in headings:
             end += 1
         return start, end
     return None
@@ -370,7 +426,21 @@ def find_subtree(body_lines: list[str], heading: str) -> tuple[int, int] | None:
 def apply_override(body: str, override: Override, where: str) -> tuple[str, list[str]]:
     """Swap overridden sections for sentinels so the mapping cannot rewrite them."""
     held: list[str] = []
-    for heading, replacement, is_subtree in override.replacements:
+    source_lines = body.split("\n")
+
+    def source_position(item: tuple[str, str | None, bool]) -> int:
+        """Where this section starts in the *unmodified* body."""
+        heading = item[0]
+        is_subtree = item[2]
+        span = find_subtree(source_lines, heading) if is_subtree else find_section(source_lines, heading)
+        # A heading that is not there sorts last; the loop below raises on it either way.
+        return span[0] if span else len(source_lines)
+
+    # Applied in source order, not directive order. A sentinel is not a heading, so
+    # replacing section B before the section A that immediately precedes it makes A's
+    # span run past B's now-vanished heading and swallow B's sentinel — silently
+    # discarding B's replacement text. Sorting first makes the two orders agree.
+    for heading, replacement, is_subtree in sorted(override.replacements, key=source_position):
         lines = body.split("\n")
         span = find_subtree(lines, heading) if is_subtree else find_section(lines, heading)
         if span is None:
@@ -389,9 +459,17 @@ def apply_override(body: str, override: Override, where: str) -> tuple[str, list
     return body, held
 
 
-def restore_overrides(text: str, held: list[str]) -> str:
+def restore_overrides(text: str, held: list[str], where: str = "<unknown>") -> str:
     for index, replacement in enumerate(held):
-        text = text.replace(SENTINEL_OVERRIDE % index, replacement)
+        token = SENTINEL_OVERRIDE % index
+        if token not in text:
+            raise GenerateError(
+                f"{where}: a replaced section vanished from the generated output before "
+                f"its replacement could be restored. Its placeholder was swallowed by an "
+                f"adjacent section's span. Replacement text began:\n"
+                f"    {replacement.splitlines()[0] if replacement else '<empty>'!r}"
+            )
+        text = text.replace(token, replacement)
     return text
 
 
@@ -613,7 +691,7 @@ def render_markdown(
     body, held = apply_override(body, override, source_rel)
     text = render_frontmatter(blocks) + "\n" + body.lstrip("\n")
     text = apply_mapping(text, platform_conf, invocation_pairs, source_rel)
-    text = restore_overrides(text, held)
+    text = restore_overrides(text, held, source_rel)
     if not text.endswith("\n"):
         text += "\n"
     return text

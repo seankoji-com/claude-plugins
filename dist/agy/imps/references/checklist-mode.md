@@ -26,9 +26,9 @@ Do not proceed to step 3 without an explicit yes — this is the gate that preve
 arbitrary shell execution from an unexpected file match.
 
 **3. Build a query-only task table (Type=`query`).**
-Create `GOAL.md` at `~/.gemini/config/imps/runs/<slug>.md` (`slug` = `basename
-"${CLAUDE_PROJECT_DIR:-$(pwd)}"`, `mkdir -p ~/.gemini/config/imps/runs` first) using the
-standard spine format (see `commands/imps.md` Phase 2), with:
+Create `GOAL.md` in this build's run-records directory, named for the run slug
+(`SLUG=$(basename "$(pwd)")`, creating the directory first) — using the standard
+spine format (see `commands/imps.md` Phase 2), with:
 - Task = each unchecked checklist item (label = first 60 chars of the claim)
 - Tier = `cheap` for shell/grep checks; `standard` for items marked `[JUDGMENT]`
 - Type = `query` for all (read-only; no code changes)

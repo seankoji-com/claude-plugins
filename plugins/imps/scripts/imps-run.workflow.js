@@ -34,7 +34,7 @@
 //   personaPanel: boolean  // OPTIONAL, default false. The in-run five-persona panel is
 //                          // OPT-IN — only runs when this is exactly `true` (set by the
 //                          // `--personas` flag in commands/imps.md). Absent/false: the
-//                          // panel and its fix loop are skipped; OpenCode diff review is
+//                          // panel and its fix loop are skipped; OCR diff review is
 //                          // the gate. personaBriefPaths is still passed either
 //                          // way — it is only read when the panel actually runs.
 // }
@@ -159,7 +159,7 @@ const STATE_SCHEMA = {
     // Persisted so a findings resume — whose decision no longer starts with "PR:" —
     // does not silently degrade to posting_mode "none".
     posting_mode: { type: ['string', 'null'] },
-    // Schema 5: OpenCode review is additive so legacy state files remain valid.
+    // Schema 5: OCR review is additive so legacy state files remain valid.
     review_engine: { type: ['string', 'null'] },
     review_model: { type: ['string', 'null'] },
     code_review_rounds: { type: ['number', 'null'] },
@@ -681,27 +681,27 @@ Report "merged": [{id, label, files changed}] for each that merged cleanly (map 
   )
 }
 
-function openCodeReview(defaultBranch) {
+function ocrReview(defaultBranch) {
   return agent(
     `You are a mechanical wrapper. Do not read, summarize, review, edit, or otherwise inspect code or a diff. Run exactly this command from the current checkout, capture its final stdout JSON line, and return it unchanged through the required schema:
 REPO="$(git rev-parse --show-toplevel)"
-"${args.pluginRoot}/scripts/opencode-review.sh" --repo "$REPO" --base "origin/${defaultBranch}" --head HEAD --goal "${args.goalFilePath}"
+"${args.pluginRoot}/scripts/run-ocr.sh" --repo "$REPO" --base "origin/${defaultBranch}" --head HEAD --goal "${args.goalFilePath}"
 If the command exits non-zero, still return its final JSON contract. Never substitute a Claude review or alter the contract.`,
-    { label: 'opencode-review', phase: 'Integrate', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
+    { label: 'ocr-review', phase: 'Integrate', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
   )
 }
 
-function openCodePreflight() {
+function ocrPreflight() {
   return agent(
-    `You are a mechanical wrapper. Do not inspect code. Run exactly \`${args.pluginRoot}/scripts/opencode-review.sh --check\`, capture its final stdout JSON line, and return it unchanged through the required schema. A failure is a hard block; never replace it with a Claude review.`,
-    { label: 'opencode-review-preflight', phase: 'Preflight', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
+    `You are a mechanical wrapper. Do not inspect code. Run exactly \`${args.pluginRoot}/scripts/run-ocr.sh --check\`, capture its final stdout JSON line, and return it unchanged through the required schema. A failure is a hard block; never replace it with a Claude review.`,
+    { label: 'ocr-review-preflight', phase: 'Preflight', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
   )
 }
 
-function fixCodeReview(findings) {
+function fixOcrReview(findings) {
   return agent(
-    `OpenCode returned these blocker/major review findings on the merged diff: ${JSON.stringify(findings)}. Fix only those findings in the current checkout. ${constraintsPointer()} Do not push, open a PR, or claim review approval.`,
-    { label: 'fix-opencode-review', phase: 'Integrate', model: 'sonnet' }
+    `OCR returned these blocker/major review findings on the merged diff: ${JSON.stringify(findings)}. Fix only those findings in the current checkout. ${constraintsPointer()} Do not push, open a PR, or claim review approval.`,
+    { label: 'fix-ocr-review', phase: 'Integrate', model: 'sonnet' }
   )
 }
 
@@ -719,9 +719,28 @@ function discoverGates() {
   )
 }
 
+// Gate logs land in $TMPDIR, which concurrent runs on one machine share. Namespacing by
+// the run's own slug (the state file's basename) keeps run A's `npm test` output from
+// overwriting run B's while B is still reading its tail. Derived here rather than passed
+// in, so a legacy caller that omits it cannot silently reintroduce the collision.
+function runSlug() {
+  return safeName(String(args.stateFilePath || 'imps')
+    .replace(/^.*\//, '')
+    .replace(/\.json$/, '')) || 'imps'
+}
+
+// Both halves of a gate log's filename must be path-safe. runSlug() derives from a path we
+// control, but gate.name comes back from discoverGates()'s agent and the schema does not
+// constrain its characters — a returned "lint/types" would silently redirect the redirect
+// into a subdirectory that does not exist, and the gate would fail on its own log write
+// rather than on the command under test.
+function safeName(value) {
+  return String(value).replace(/[^A-Za-z0-9_.-]/g, '_')
+}
+
 function runGate(gate, guidance) {
   return agent(
-    `Run this command, redirecting output to a file and reading only the tail (the log itself can be large): \`${gate.cmd} > "$TMPDIR/imps-gate-${gate.name}.log" 2>&1; echo "exit: $?"\`.${guidance ? ` Apply this guidance first if it suggests a fix: ${guidance}` : ''}
+    `Run this command, redirecting output to a file and reading only the tail (the log itself can be large): \`${gate.cmd} > "$TMPDIR/imps-gate-${runSlug()}-${safeName(gate.name)}.log" 2>&1; echo "exit: $?"\`.${guidance ? ` Apply this guidance first if it suggests a fix: ${guidance}` : ''}
 Return via the required schema: "gate": "${gate.name}", "cmd": "${gate.cmd}", "pass" (exit 0), "tail" (last 20 lines of the log).`,
     { label: `gate-${gate.name}`, phase: 'Integrate', model: 'sonnet', schema: GATE_RUN_SCHEMA }
   )
@@ -973,7 +992,13 @@ function appendLearnings(candidates) {
   // is false and re-appends — and deleting from inside this agent call would also mean a
   // subsequent patchState() targets a file that no longer exists.
   return agent(
-    `The operator confirmed these learnings should be saved: ${JSON.stringify(candidates)}. For each, classify its scope: project-specific (mentions this repo's stack, commands, file paths, conventions) -> append to .claude/imps/learnings.md in the repo root; generally applicable (model routing, task boundaries, dispatch patterns) -> append to ~/.claude/imps/learnings.md. Format: under a "## YYYY-MM-DD — <project> <task>" heading (create "## Active rules" section first if the file doesn't have one yet, ≤10 bullets, promote a repeated rule into it). Do NOT touch the run's state file or GOAL.md in this step — that happens separately, afterward.
+    `The operator confirmed these learnings should be saved: ${JSON.stringify(candidates)}. For each, classify its scope: project-specific (mentions this repo's stack, commands, file paths, conventions) -> scope "project"; generally applicable (model routing, task boundaries, dispatch patterns) -> scope "user".
+
+Write them with the bundled appender — do NOT edit either learnings.md yourself. The user-scoped file is shared by every run on this machine, so a read-modify-write from here silently drops a concurrent run's learnings; the script appends under a lock instead. Make one call per scope, passing every rule for that scope as repeated --rule flags:
+  \`${args.pluginRoot}/scripts/imps-learnings-append.sh --scope <user|project> --heading "YYYY-MM-DD — <project> <task>" --rule "<rule>" [--rule "<rule>" ...]\`
+Keep it to ≤10 rules per scope. Use single quotes inside a --rule value, never a literal double quote, backtick, dollar sign or backslash. The script is fail-soft on environment problems (it warns and exits 0), so report what it printed rather than retrying a scope that reported a lock failure.
+
+Do NOT touch the run's state file or GOAL.md in this step — that happens separately, afterward. Do NOT commit or stage the project-scoped learnings file: it lives in this run's own working tree, and committing it onto the run branch puts an unrelated file in the PR that every concurrent run's PR also touches.
 Return via the required schema: "saved": [{rule, scope}] for each learning actually written.`,
     { label: 'append-learnings', phase: 'Finalize', model: 'sonnet', schema: LEARNINGS_APPEND_SCHEMA }
   )
@@ -1870,13 +1895,13 @@ if (decision === 'integrate partial') {
 
 phase('Dispatch')
 if (!state.dispatched_at) {
-  const reviewPreflight = await openCodePreflight()
+  const reviewPreflight = await ocrPreflight()
   if (reviewPreflight.status !== 'ok') {
     const result = { status: 'blocked', reason: 'code_review_unavailable', detail: reviewPreflight }
     await saveResult(result)
     return result
   }
-  await patchState({ review_engine: 'opencode', review_model: reviewPreflight.model, code_review_rounds: 0, code_review_findings: [], code_review_sessions: [], code_review_override: null }, 'save-review-preflight')
+  await patchState({ review_engine: 'ocr', review_model: reviewPreflight.model, code_review_rounds: 0, code_review_findings: [], code_review_sessions: [], code_review_override: null }, 'save-review-preflight')
 }
 if (!state.dispatched_at) {
   const pre = await preflight(state)
@@ -1972,8 +1997,8 @@ if (gateOutcome.blockedOn) {
 }
 
 // Gates are deliberately before review. A review-driven fix reruns every gate and is then
-// sent to a fresh OpenCode session; no Claude review fallback exists on any failure path.
-let codeReview = hasDiff ? await openCodeReview(defaultBranch) : { status: 'ok', verdict: 'APPROVE', findings: [], model: state.review_model || 'openai/gpt-5.4', provider: 'openai', session_id: null, duration_ms: 0, cost_usd: null, reason: null }
+// sent to a fresh OCR run; no Claude review fallback exists on any failure path.
+let codeReview = hasDiff ? await ocrReview(defaultBranch) : { status: 'ok', verdict: 'APPROVE', findings: [], model: state.review_model || 'openai/gpt-5.4', provider: 'openai', session_id: null, duration_ms: 0, cost_usd: null, reason: null }
 let codeReviewRounds = 0
 let codeReviewSessions = codeReview.session_id ? [codeReview.session_id] : []
 if (codeReview.status !== 'ok') {
@@ -1984,7 +2009,7 @@ if (codeReview.status !== 'ok') {
 }
 while (codeReview.verdict === 'CHANGES_REQUESTED' && codeReviewRounds < 3) {
   codeReviewRounds += 1
-  await fixCodeReview(codeReview.findings)
+  await fixOcrReview(codeReview.findings)
   const repairedGates = await runGatesWithRetry(gateCommands, null)
   if (repairedGates.blockedOn) {
     const failedResult = repairedGates.results[repairedGates.results.length - 1]
@@ -1992,7 +2017,7 @@ while (codeReview.verdict === 'CHANGES_REQUESTED' && codeReviewRounds < 3) {
     await saveResult(result)
     return result
   }
-  codeReview = await openCodeReview(defaultBranch)
+  codeReview = await ocrReview(defaultBranch)
   if (codeReview.session_id) codeReviewSessions.push(codeReview.session_id)
   if (codeReview.status !== 'ok') {
     const result = { status: 'blocked', reason: 'code_review_unavailable', detail: codeReview }
@@ -2068,7 +2093,7 @@ const result = {
   status: 'awaiting_authorization',
   merged: mergeResult.merged,
   failed_tasks: dispatchOutcome.failed,
-  code_review: { engine: 'opencode', provider: codeReview.provider, model: codeReview.model, verdict: codeReview.verdict, rounds: codeReviewRounds, findings: codeReview.findings },
+  code_review: { engine: 'ocr', provider: codeReview.provider, model: codeReview.model, verdict: codeReview.verdict, rounds: codeReviewRounds, findings: codeReview.findings },
   code_review_override: state.operator_decision && state.operator_decision.startsWith('override code review:') ? state.operator_decision.slice('override code review:'.length).trim() : null,
   gates: gateOutcome.results,
   diff_stat: diffStatInfo.diff_stat,

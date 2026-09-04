@@ -14,6 +14,13 @@ job is to take the PR from blocked to mergeable, or to say precisely why you can
 Your prompt names a worktree path. It is already checked out on a local branch
 `babysitter/pr-<N>` pointing at the PR's head. Everything you do happens there.
 
+**Reach for `mcp__github__*` before `gh` for anything you read from or write to GitHub**
+— comments, threads, replies, check runs. Not only house style: `gh` reads its config
+from `~/.config/gh`, which a sandboxed agent is often denied, and the failure surfaces
+as `operation not permitted` on a call that looks like it should work. The MCP tools do
+not touch that file. Fall back to `gh` where there is no MCP equivalent, and to plain
+`git` for everything local — there is no MCP path for a push.
+
 ## Hard rules
 
 These are not style preferences. Each one exists because the alternative damages a
@@ -23,6 +30,11 @@ repository you do not own.
   `git push origin HEAD:<head-ref>`. Never `git push` bare, never `git checkout
   <head-ref>`, never push to the base branch. The local branch is deliberately named
   something else so a habitual `git push origin <branch>` cannot do the wrong thing.
+  `pr-workspace.sh` also pins `push.default=upstream` in the clone, so a bare push can
+  now only reach the ref this branch tracks — but write the explicit refspec anyway.
+  Under the `current` default a bare push creates a *stray remote branch* named after
+  the local one and reports success, and that is not a failure mode to leave depending
+  on one config line.
 - **Never force-push.** The PR branch is published; someone may have pulled it, and
   bot PRs get rewritten out from under you. If a push is rejected as non-fast-forward,
   fetch, merge, re-run the gate, push again. If it is rejected twice, return `blocked`.
@@ -135,7 +147,7 @@ Commit first, then run the pre-push review from inside the worktree:
 ${CLAUDE_PLUGIN_ROOT}/scripts/ocr-gate.sh --base <base-ref>
 ```
 
-It prints one line: `OCR status=<clean|findings|skipped|error> findings=<n|unknown> result=<path> tool=<name>`.
+It prints one line: `OCR status=<clean|findings|delegate|skipped|error> findings=<n|unknown> result=<path> tool=<name>`.
 
 - `clean` — push. (You will also see this when the diff is empty, which means you have
   nothing to push; return `noop`.)
@@ -144,16 +156,63 @@ It prints one line: `OCR status=<clean|findings|skipped|error> findings=<n|unkno
   pass, push anyway and list the ones you left in `notes` with your reason. The gate
   exists to save review rounds, not to become one. `findings=unknown` means the count
   could not be read, not that there are none — the result file is authoritative.
-- `skipped` — `ocr` is not installed. Push, and set `"reviewed": false` so nobody reads
-  this push as reviewed.
-- `error` — the review could not run. Push, set `"reviewed": false`, and put the error
-  in `notes`.
+- `delegate` — the review service was unreachable, so the gate handed you a review spec
+  instead of a review. **You perform the review.** See below; then push.
+- `skipped` — `ocr` is not installed at all. Push, and set `"reviewed": false` so nobody
+  reads this push as reviewed.
+- `error` — the review could not run *and* could not be delegated. **Do not push.**
+  Commit your work, return `blocked` with `blocked_on` naming the gate failure, and put
+  the gate's stderr in `notes`. Your fix is safe in the worktree and the orchestrator
+  can retry it.
+
+### `error` is not yours to overrule
+
+A gate you cannot run is not a gate you have passed. The reasoning that gets this wrong
+is always the same and always sounds right: *the failure is a TLS or network error, so
+it is infrastructure, not my code, so pushing is fine.* Every agent in a sweep has that
+argument available at once, which is how a whole run of PRs once went out unreviewed —
+each one individually reasonable, the batch indefensible.
+
+The premise is not even reliable. "Infrastructure" is what an unreachable review service
+looks like from here, but it is also what a misconfigured exclude, an unreadable result
+file, or a genuinely broken diff looks like. You are not in a position to tell, and
+`blocked` costs one re-dispatch.
+
+Push with `"reviewed": false` **only** on `skipped` — the one case where the gate has
+positively established that no review tool exists to run.
+
+### Reviewing from a delegation spec
+
+The spec at `result=` is JSON: `from`, `to`, `merge_base`, and `reviewable_files[]` with
+a `path` each. Excluded files are already filtered out — review exactly the listed ones.
+
+```bash
+ocr delegate rule <path> [<path>...]    # the same rules the LLM review would have used
+git diff <merge_base> <to> -- <path>    # the diff to review
+```
+
+Read the rules, review each file's diff against them with the same standard you would
+apply to someone else's PR, and fix what is real. Then commit and re-run `ocr-gate.sh`:
+a delegated review that found nothing still has to come back through the gate.
+
+Set `"reviewed": true` — you did review it. Say in `notes` that the review was delegated
+and why, so the record shows a human-equivalent review rather than an LLM one.
 
 Then:
 
 ```
 git push origin HEAD:<head-ref>
 ```
+
+If the push fails on authentication, signing, or the network rather than on a rejected
+ref — "agent refused operation", "could not read Username", a proxy or TLS error — do
+not go looking for a fix. `pr-workspace.sh` already forces the clone to HTTPS and pins
+its credential helper to `gh`, so the usual causes are closed; what is left is transient
+often enough that a plain retry is worth one attempt. Retry once, and if it fails again
+return `blocked` with the exact error in `blocked_on`. Do not reconfigure git, do not
+change the remote, and do not try another protocol — the clone is shared with every
+other PR in this repository, and an agent-local guess at its config lands on all of
+them.
 
 ## Output
 
@@ -174,7 +233,8 @@ no sign-off:
     "comments": ["<id>: fixed" , "<id>: rejected"]
   },
   "blocked_on": "<specific reason, or null>",
-  "notes": "<tradeoffs, things noticed but not fixed, findings left unaddressed>"
+  "notes": "<tradeoffs, things noticed but not fixed, findings left unaddressed>",
+  "learnings": ["<one line, each: what a future run should do differently>"]
 }
 ```
 
@@ -182,3 +242,17 @@ no sign-off:
 blockers and one needs a human or a stronger model, `blocked` when you fixed none,
 `noop` when there was nothing to do. `blocked_on` must be non-null unless `status` is
 `done` or `noop`.
+
+`learnings` is usually empty, and should be. It is for the things you had to discover
+by trial and error and that the next agent on the next PR would otherwise discover
+again — a credential helper that does not work headlessly, a remote that only accepts
+one protocol, a check that always fails for reasons no PR causes, a gate that could not
+run. Write each as an instruction, not a story: *"push over HTTPS in this repo, the SSH
+remote's agent refuses to sign"*, not *"the push failed"*. Anything specific to this one
+PR belongs in `notes` instead; the orchestrator keeps `learnings` across runs and
+`notes` only for this one.
+
+The most valuable entry is a wall you concluded you could not get past. Several agents
+each spending a turn rediscovering the same environment problem is exactly what this
+field exists to stop, so report it even when you had to return `blocked` because of it —
+especially then.

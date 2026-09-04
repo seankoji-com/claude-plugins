@@ -57,6 +57,52 @@ die() {
   exit "${2:-2}"
 }
 
+# Runs a GraphQL query, retrying a failed one twice with a widening pause.
+#
+# An org-wide sweep asks GitHub for every open PR across every repository in one
+# query, which sits close enough to GitHub's response-time budget that a 504 ("we
+# couldn't respond to your request in time") on the first attempt is ordinary rather
+# than exceptional — observed twice in a row on a ~40-PR org, then succeeding on the
+# third try with no change. Retrying here rather than in the caller matters because
+# pr-events.sh polls through this script: without it, one transient 504 surfaces as an
+# ERROR event in the middle of a watch that was otherwise fine.
+#
+# Bounded at three attempts, so a genuine failure (bad credentials, a repo that is
+# gone) still exits 3 promptly instead of hanging a sweep behind a retry loop.
+# Overridable so the test suite does not spend six real seconds asleep proving that a
+# permanently-failing query still exits 3. Nothing in normal use sets it.
+#
+# Validated rather than interpolated straight into the arithmetic below: this variable
+# exists to be overridden, and a non-integer value there is not a harmless typo. Under
+# `set -e` a fractional value aborts the script with "invalid arithmetic operator", and
+# under `set -u` an alphabetic one aborts with "unbound variable" — either way the sweep
+# dies mid-retry with no snapshot and the wrong exit code, instead of retrying. Fall
+# back to the default and say so.
+RETRY_BASE_SECS="${BABYSITTER_RETRY_BASE_SECS:-2}"
+case "$RETRY_BASE_SECS" in
+'' | *[!0-9]*)
+  echo "list-prs.sh: BABYSITTER_RETRY_BASE_SECS must be a non-negative integer, got '${RETRY_BASE_SECS}' — using 2" >&2
+  RETRY_BASE_SECS=2
+  ;;
+esac
+
+gh_graphql_retry() {
+  local attempt=1 out=""
+  while :; do
+    if out="$(gh api graphql "$@" 2>&1)"; then
+      printf '%s' "$out"
+      return 0
+    fi
+    if [ "$attempt" -ge 3 ]; then
+      printf '%s' "$out"
+      return 1
+    fi
+    echo "list-prs.sh: GitHub query failed (attempt ${attempt}/3), retrying — ${out}" >&2
+    sleep "$((attempt * RETRY_BASE_SECS))"
+    attempt=$((attempt + 1))
+  done
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
   --org)
@@ -194,22 +240,28 @@ if [ -z "$PR_NUMBER" ]; then
     }
   }
   ${PR_FRAGMENT}"
-  RAW=$(gh api graphql \
+  RAW=$(gh_graphql_retry \
     -f query="$QUERY" \
     -f q="${SCOPE_QUALIFIER} is:pr is:open" \
-    -F limit="$LIMIT" 2>&1) || die "GitHub query failed: ${RAW}" 3
+    -F limit="$LIMIT") || die "GitHub query failed after 3 attempts: ${RAW}" 3
   NODES_PATH='.data.search.nodes'
 
   # GitHub caps a search page at 100 and this script does not paginate. Silently
   # returning the first page would make the sweep look complete while leaving PRs
   # unbabysat, and the watch would then report each missing one as NEW only if it
   # happened to surface later. Say so instead.
+  #
+  # issueCount is GitHub's count *before* this script's author/draft/fork filters run,
+  # so it is always >= the number of lines emitted below and usually much larger. An
+  # earlier phrasing ("has N open PRs") was read as the size of the roster about to be
+  # worked, which made a correct 42-PR roster look like it had lost 33 PRs. The wording
+  # below names the population explicitly for that reason — do not shorten it back.
   TOTAL=$(printf '%s' "$RAW" | jq -r '.data.search.issueCount // 0' 2>/dev/null || echo 0)
   case "$TOTAL" in
   '' | *[!0-9]*) TOTAL=0 ;;
   esac
   if [ "$TOTAL" -gt "$LIMIT" ]; then
-    echo "list-prs.sh: ${SCOPE_QUALIFIER} has ${TOTAL} open PRs but only the first ${LIMIT} were fetched — narrow the scope or raise --limit (max 100)" >&2
+    echo "list-prs.sh: ${SCOPE_QUALIFIER} has ${TOTAL} open PRs before this script's author/draft/fork filters, and only the first ${LIMIT} were fetched — the snapshot below is drawn from a partial page. Raise --limit (max 100) or narrow the scope. ${TOTAL} is not the size of the eligible roster; the line count below is." >&2
   fi
 else
   OWNER="${REPO%%/*}"
@@ -221,11 +273,11 @@ else
     }
   }
   ${PR_FRAGMENT}"
-  RAW=$(gh api graphql \
+  RAW=$(gh_graphql_retry \
     -f query="$QUERY" \
     -f owner="$OWNER" \
     -f name="$NAME" \
-    -F number="$PR_NUMBER" 2>&1) || die "GitHub query failed: ${RAW}" 3
+    -F number="$PR_NUMBER") || die "GitHub query failed after 3 attempts: ${RAW}" 3
   NODES_PATH='[.data.repository.pullRequest]'
 fi
 

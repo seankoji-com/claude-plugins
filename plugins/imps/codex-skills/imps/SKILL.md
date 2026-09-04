@@ -4,7 +4,7 @@ description: Explicit Codex command for substantial implementation work that sho
 metadata:
   version: "0.1.0"
   source-command: "plugins/imps/commands/imps.md"
-  source-version: "0.3.51"
+  source-version: "0.3.53"
 ---
 
 # Imps for Codex
@@ -27,9 +27,9 @@ Use these maintained resources when relevant:
 - Bugs, regressions, flakes, and failing gates: `IMPS_PLUGIN_ROOT/references/diagnosis-loop.md`
 - Checklist audits: `IMPS_PLUGIN_ROOT/references/checklist-mode.md`
 - Discussion parsing and reply shape: `IMPS_PLUGIN_ROOT/references/discussion-mode.md`
-- Independent diff review: `IMPS_PLUGIN_ROOT/references/opencode-review.md`
+- Independent diff review: `IMPS_PLUGIN_ROOT/references/ocr-review.md`
 - Review roles: `IMPS_PLUGIN_ROOT/personas/`
-- Read-only review helper: `IMPS_PLUGIN_ROOT/scripts/opencode-review.sh`
+- Read-only review helper: `IMPS_PLUGIN_ROOT/scripts/run-ocr.sh`
 - Shared structured audit appender: `IMPS_PLUGIN_ROOT/scripts/audit-log.sh`
 
 ## Invocation
@@ -190,17 +190,17 @@ failure, dispatch one bounded repair task from the current integration `HEAD`, m
 and rerun the failing gate followed by the full relevant suite. Record pre-existing
 failures separately; do not relabel them as success.
 
-After gates pass, run the existing OpenCode helper with the integration worktree, immutable
+After gates pass, run the OCR helper with the integration worktree, immutable
 base commit, and run record as the goal file:
 
 ```text
-IMPS_PLUGIN_ROOT/scripts/opencode-review.sh \
+IMPS_PLUGIN_ROOT/scripts/run-ocr.sh \
   --repo <integration-worktree> \
   --base <base-commit> \
   --goal <run-record>
 ```
 
-Read the OpenCode review reference first. The helper is read-only and fail-closed. Missing
+Read the OCR review reference first. The helper is read-only and fail-closed. Missing
 authentication, an unavailable model, timeout, malformed output, or unresolved findings
 blocks publication. For `CHANGES_REQUESTED`, dispatch a repair worker, rerun deterministic
 gates, and start a fresh review. Stop after three failed review rounds unless the user
