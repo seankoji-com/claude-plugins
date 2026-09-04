@@ -1,0 +1,22 @@
+# Static Analysis — synced from seankoji-com/.github (panel/call-reusable-static-analysis.yml)
+# Runs Semgrep and zizmor against every PR via the reusable workflow. Both
+# scanners are non-blocking (continue-on-error) on first release — see
+# .github/workflows/reusable-static-analysis.yml in seankoji-com/.github.
+
+name: Static Analysis
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Every push to a PR queues a fresh scan; without this, rapid successive
+# pushes (force-push loops, auto-rebase branches) stack up several full runs
+# of the same diff on the shared self-hosted pool. Cancel in favor of the
+# latest push — an in-flight scan of a superseded commit has no value.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  static-analysis:
+    uses: seankoji-com/.github/.github/workflows/reusable-static-analysis.yml@main
