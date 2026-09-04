@@ -150,9 +150,15 @@ curl_graphql_retry() {
 }
 
 # A REST call over curl for the same TLS reason as the GraphQL helper above.
-# Prints "<http_code>\n<body>"; caller splits on the first newline.
+# Prints "<http_code>\n<body>"; caller splits on the first newline. Returns 1 on a
+# transport failure (curl itself could not complete the request — DNS, TLS, a
+# dropped connection) rather than folding it into a fake "000" HTTP code with
+# exit 0: a caller that only compares `code` against expected values would
+# otherwise treat "the request never happened" the same as "GitHub answered with
+# some code I did not expect", and could misreport a network blip as a real
+# branch-protection block.
 curl_rest() {
-  local method="$1" path="$2" data="${3:-}" token code tmp
+  local method="$1" path="$2" data="${3:-}" token code tmp curl_rc=0
   token="$(gh_token)" || return 1
   tmp="$(mktemp "${TMPDIR:-/tmp}/babysitter-rest.XXXXXX")" || return 1
   if [ -n "$data" ]; then
@@ -161,13 +167,18 @@ curl_rest() {
       -H "Accept: application/vnd.github+json" \
       -H "Content-Type: application/json" \
       -X "$method" --data "$data" \
-      "https://api.github.com${path}")" || code="000"
+      "https://api.github.com${path}")" || curl_rc=$?
   else
     code="$(curl -sS -o "$tmp" -w '%{http_code}' \
       -H "Authorization: bearer ${token}" \
       -H "Accept: application/vnd.github+json" \
       -X "$method" \
-      "https://api.github.com${path}")" || code="000"
+      "https://api.github.com${path}")" || curl_rc=$?
+  fi
+  if [ "$curl_rc" -ne 0 ]; then
+    echo "merge-pr.sh: curl transport failure (exit ${curl_rc}) calling ${method} ${path}: $(cat "$tmp" 2>/dev/null)" >&2
+    rm -f "$tmp"
+    return 1
   fi
   printf '%s\n' "$code"
   cat "$tmp"
@@ -180,7 +191,7 @@ curl_rest() {
 fetch_state() {
   local query resp
   query=$(jq -n --arg owner "$OWNER" --arg name "$NAME" --argjson number "$PR_NUMBER" '{
-    query: "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ mergeable mergeStateStatus baseRefName headRefName reviewThreads(first:100){ nodes{ id isResolved isOutdated comments(last:10){ nodes{ body } } } } commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } } } } }",
+    query: "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ mergeable mergeStateStatus baseRefName headRefName reviewThreads(first:100){ nodes{ id isResolved isOutdated comments(last:100){ nodes{ body } } } } commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } } } } }",
     variables: { owner: $owner, name: $name, number: $number }
   }')
   resp="$(curl_graphql_retry "$query")" || { echo "merge-pr.sh: state query failed: $resp" >&2; return 1; }
