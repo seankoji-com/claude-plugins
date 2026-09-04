@@ -53,9 +53,9 @@ sentence is the whole defence; each one is locally plausible and globally wrong.
 | The thought | What actually happens | Instead |
 | --- | --- | --- |
 | "No arguments were passed, so this is a fresh start." | An empty invocation is the *signature* of a cleared context mid-run. Skipping the guard starts a second run against a live state file. | Run the **Guard: resume check** on every invocation, empty or not. |
-| "The plan was approved while I was on this branch — I'll write it into the state file." | If that branch is the default branch, every task's work is dispatched, merged and gated straight onto production, and the PR step lands unreviewed or fails `head==base`. | Cut a fresh `imps/<slug>-<ts>` branch off a clean fetch of the default branch in Phase 2 Step 6, and write *that*. Never `git rev-parse --abbrev-ref HEAD`. |
+| "The plan was approved while I was on this branch — I'll write it into the state file." | If that branch is the default branch, every task's work is dispatched, merged and gated straight onto production, and the PR step lands unreviewed or fails `head==base`. | Cut a fresh `imps/<slug>-<ts>` branch off a clean fetch of the default branch in Phase 2 Step 7, and write *that*. Never `git rev-parse --abbrev-ref HEAD`. |
 | "The imps ran in isolated worktrees, so the shared checkout is untouched." | Isolation is not airtight — imps have repeatedly committed to the shared main checkout's local default branch instead of their assigned worktree. | Check `git status --short` and `git log --oneline -3` in the *actual* main checkout after every worktree-isolated wave — every time, not only when something looks off. |
-| "I'll push the branch so this work isn't lost." | Pushing is the operator's gate, not a safety net. A publish imp that pushed and opened a PR on its own initiative bypassed the Push & PR gate entirely. | Nothing pushes before a `PR: yes` / `PR: yes, no-post` decision is persisted. Local commits are already durable. |
+| "I'll push the branch so this work isn't lost." | Pushing is the operator's gate, not a safety net. A publish imp that pushed and opened a PR on its own initiative bypassed the Push & PR gate entirely. | Nothing pushes before a `PR: yes` decision is persisted. Local commits are already durable. |
 | "While I'm here, this extra issue is obviously worth filing." | The auto-mode classifier denies GitHub writes beyond the operator's explicit selection — and it denies the *whole* imp, not just the extra artifact, forcing a re-dispatch. | Create and close exactly the artifacts the operator named. If another one is worth filing, ask; don't add it. |
 | "The audit/forage recommendation is minutes old, so the gap it names is real." | Fingerprints go stale immediately, and twice now a "missing capability" already existed in full in the target repo — the plan dispatched imps to rebuild it. | Grep or read the actual files for each claimed gap before writing a task around it. |
 | "The Head Imp approved after I applied its fixes — one review pass is enough." | Round-1 fixes introduce round-2 bugs; a "make this executable" fix once turned out to be platform-unsound on the actual dev machine. | After substantial fixes, budget a second adversarial pass. An approval of the *unfixed* plan is not an approval of the fixed one. |
@@ -126,7 +126,7 @@ Use `$STRIPPED_ARGS` wherever the sections below say `$ARGUMENTS`.
   than Issues (GraphQL only, no REST) — this is why a discussion reference needs its
   own detection branch instead of falling into issue-driven mode.
   **→ Read `${CLAUDE_PLUGIN_ROOT}/references/discussion-mode.md` and follow it** — it
-  fetches the discussion, seeds it as the free-text task (Phase 0 onward), and defines
+  fetches the discussion, seeds it as the free-text task (Phase 1 onward), and defines
   the reply obligation the Workflow script fulfills at finalize.
 
 - **Free-text mode** — `$ARGUMENTS` is a task description (anything that is not purely
@@ -199,7 +199,7 @@ about — one consultation per blocking question, not a rubber-stamp.
 
 ### Never pre-judge a reviewer's findings inside its own prompt
 
-You hand-compose the Head Imp's plan-review prompt in Phase 2 Step 3. **Nothing in that
+You hand-compose the Head Imp's plan-review prompt in Phase 2 Step 4. **Nothing in that
 prompt may tell the reviewer what to conclude.** Before sending it, read the composed
 string back and delete any sentence that:
 
@@ -289,7 +289,7 @@ To start a second run while one is in flight:
 
 `new` creates a detached worktree at `<repo>.imps/<name>` (a sibling of the main
 checkout, so it is never inside the repo where gates and globs would see it, and never
-inside `.claude/worktrees/`, which the harness manages). Phase 2 Step 6 then cuts the run
+inside `.claude/worktrees/`, which the harness manages). Phase 2 Step 7 then cuts the run
 branch there exactly as it always has. `remove` refuses while that worktree still has a
 state file, since removing it would strand the run's only resume handle.
 
@@ -321,7 +321,7 @@ else needs coordinating.
 
 **This check fires on every invocation — including when `$ARGUMENTS` is empty.** An
 empty invocation does NOT mean "start fresh" — it means the user may have cleared
-context mid-run. Always run the guard before Phase 0.
+context mid-run. Always run the guard before Phase 1.
 
 Before anything else:
 1. Derive the slug and paths: `eval "$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh")"`
@@ -350,15 +350,31 @@ Print a one-block summary either way:
   <"Plan ready — not yet dispatched" | "Run in progress — Workflow script was running">
   Task: <task (first 80 chars)>
   Branch: <branch>  ·  <"Dispatched: <dispatched_at>" if set>  ·  Segment: <segment or "—">
+  Heartbeat: <age of last_heartbeat, e.g. "4m ago"> | "—"
   Tasks:  #1 <label>  [<model short> · <type>]
           ...
 ```
+
+**Check the heartbeat's age before offering Resume.** The script writes `last_heartbeat`
+every cycle and nothing has ever read it back. If it is **fresh** — within roughly two
+`poll_interval_seconds` — a prior invocation is most likely **still running**, and
+resuming starts a second one against the same working tree. Say so plainly and make the
+operator confirm; do not present Resume as the routine choice. A stale or absent
+heartbeat is the ordinary case this guard was built for.
+
+This matters because the two instances are not isolated from each other: worktrees
+separate concurrent *runs*, not two invocations of the same run. Both would merge, run
+gates, and commit into one checkout. It has happened — a second orchestrator was resumed
+on the belief the first was dead, the first was alive, and its commits were already on the
+shared branch before the conflict was noticed. Note also that a stale heartbeat is not
+proof of death: it can mean a live invocation that simply has not checkpointed recently,
+which is why this is a confirmation prompt rather than an automatic refusal.
 
 **Case A — `phase: "dispatch_pending"` (plan approved, never handed over):**
 
 - **Resume** — verify `git rev-parse --abbrev-ref HEAD` matches state `branch` (warn
   and wait for confirmation if not), then jump straight to **Phase 3 — Sync and run the
-  Workflow script**. Skip Phases 0/1/2 entirely; the script's own opening step sees
+  Workflow script**. Skip Phases 1/2 entirely; the script's own opening step sees
   `phase: "dispatch_pending"` and starts dispatch fresh.
 - **New** — start the task the user is asking for now, and leave the existing run
   completely alone: do NOT delete, edit, or touch `~/.claude/imps/runs/<slug>.json` in
@@ -366,7 +382,7 @@ Print a one-block summary either way:
   new run: `mv ~/.claude/imps/runs/<slug>.json ~/.claude/imps/runs/<slug>.archived-$(date +%Y%m%dT%H%M%S).json`.
   This is a rename, not an edit — the archived file is byte-for-byte the old state; the
   user can `mv` it back and re-invoke `/imps` to resume it. Then proceed through
-  Phases 0–2 normally for the new task.
+  Phases 1–2 normally for the new task.
 - **Abandon** — delete `~/.claude/imps/runs/<slug>.json` and start fresh.
 
 **Case B — `phase: "wrangler_running"` (kept as the phase-string value for continuity
@@ -385,68 +401,251 @@ Do not proceed past this check without an answer.
 
 ---
 
-## Phase 0 — Brief refinement
+## 🎯 Phase 1 — Define
 
-Before asking discovery questions, invoke the `prompt-builder` skill to sharpen the task brief (if installed). A well-refined brief reduces decomposition ambiguity and often pre-answers several Phase 1 questions. If `prompt-builder` is not available, refine the brief inline to 1–2 sharp sentences and continue.
+One phase, two paths. A brief that already carries enough to decompose goes
+straight to the four discovery questions; a thinner one earns an interrogation
+instead, which covers the same ground adaptively. **Exactly one of the two runs** —
+asking a batched checklist immediately after an interrogation is how an operator ends
+up answering the same question twice.
 
-**Discussion-seed mode:** skip the "What's the task?" prompt entirely — use
-`<DISCUSSION_TASK_SEED>` (built per `references/discussion-mode.md`) as the raw
-material below instead of `$ARGUMENTS`.
+What follows the fork — the endstate question, the preflight, and production
+flagging — runs on **both** paths, every time.
 
-If `$ARGUMENTS` is empty AND the guard check (above) found no pending state file AND
-this is not discussion-seed mode, ask "What's the task?" and wait — collect it here
-before invoking prompt-builder.
 
-Use the **Skill tool**:
-- `skill`: `prompt-builder:prompt-builder`
-- `args`: `MODE: brief-only` as the first line, then a blank line, then the raw task
-  description alone (no framing preamble) — `<DISCUSSION_TASK_SEED>` in
-  discussion-seed mode, otherwise `$ARGUMENTS` or the collected answer. This sentinel
-  opts into prompt-builder's own embedded/brief-only mode (defined in its command
-  file), which skips the intro banner, the one-off-vs-reusable reframe, framework
-  selection, and the full deliverable template — no steering needed on our side, and
-  no diagnosis logic duplicated here. If the installed `prompt-builder` predates this
-  mode (ignores the sentinel and runs its full standalone flow), steer once after its
-  first response: "Skip model selection, test cases, and save-path guidance — I just
-  need 1–2 sharp sentences I can decompose into parallel agents."
+**Usually this phase does nothing.** It exists for one case: a brief too thin to
+decompose. When it fires it is an interrogation, and it replaces Phase 2 entirely — the
+two never both run.
 
-Take prompt-builder's `Refined brief: ...` line as `<REFINED_TASK>` directly. If it
-instead ran an interactive session (see fallback above), wait for the user to confirm a
-refined description before storing it as `<REFINED_TASK>`. Use `<REFINED_TASK>` in
-place of `$ARGUMENTS` for all subsequent phases.
+**📚 Step 1 — Recall.** Read the `## Active rules` section of each file that exists
+(both optional; `Read` is a tool call and does not expand `~`, so resolve `$HOME`
+yourself):
 
----
+- **User-scoped:** `$HOME/.claude/imps/learnings.md` — rules that apply across projects
+- **Project-scoped:** `.claude/imps/learnings.md` in this working tree
 
-## Phase 1 — Discovery
+Project-scoped rules win on any conflict. They are loaded *here*, before the brief is
+settled, because several of them exist to stop a false premise being baked into it — a
+stale audit fingerprint claiming a gap that already exists in full, for instance. Phase 2
+Step 0 reuses what this step loaded rather than re-reading. Reading is always safe;
+**writing** is not — see Phase 2 Step 1 for the append rules.
+
+**🔍 Step 2 — Triage.** Discussion-seed mode never interrogates: the discussion body is
+already the brief, so set `<REFINED_TASK>` from `<DISCUSSION_TASK_SEED>` (built per
+`references/discussion-mode.md`) and go to Phase 2.
+
+Otherwise the brief is **sufficient** when it names both:
+
+1. a **concrete deliverable** — what will exist or change once this is done, and
+2. at least one **repo anchor** — a file, path, command, component, or a reproducible
+   symptom.
+
+Both present → set `<REFINED_TASK>` to the operator's text **verbatim** and go to
+Phase 2. Do not paraphrase a sufficient brief: it is the most authoritative input the run
+has, and a summary of it is strictly less information for planning, the Head Imp, and the
+adjudicator to work from.
+
+Either missing, or the task text is empty → interrogate. (Empty is common: an empty
+invocation is also the signature of a cleared context, which is why the **Guard: resume
+check** runs first regardless.)
+
+**📣 Step 3 — Announce.** Before the first question, say how this works in plain
+language — no internal vocabulary, no "phase", no "artifact":
+
+> "Before I break this up, I want to push on it a bit — for the next few minutes my job
+> is asking questions rather than answering them, because once this gets split across
+> parallel agents they can't see each other or ask you anything. You decide when we've
+> got enough; I'll check in as we go.
+>
+> If I start just agreeing with everything, say 'you're not helping' and I'll get back to
+> pushing."
+
+**❓ Step 4 — Interrogate.** Read `${CLAUDE_PLUGIN_ROOT}/references/brief-probes.md` and
+draw from it. It is a bank, not a script. These rules are structural because
+self-monitoring for agreeableness does not work:
+
+- **A few questions at a time**, never a giant checklist.
+- **Work the decision frontier** — ask only decisions whose prerequisites are settled.
+  Discoverable facts are your job, not the operator's: dispatch a `scout` (haiku) or
+  `Explore` subagent for "where does X live", "what's the test command", "what's the
+  default branch". Never spend an operator's turn on something a grep answers.
+- **Never open a reply with praise.** Open with substance.
+- When asked "what do you think?", **take a position with reasoning**. "It depends"
+  without a lean is a non-answer.
+- **At least once per theme, argue the opposite** of the operator's stated preference and
+  make them defend it.
+- On the "you're not helping" callout, drop the thread and immediately challenge the most
+  load-bearing assumption still standing.
+- **Ask about prior art late, not first.** Front-loading what they already know narrows
+  the interrogation to ground they have covered.
+
+**🔄 Step 5 — Check in.** After each round, ask with
+**AskUserQuestion** whether to continue. Never a bare "keep going?" — each option must
+name the **specific** thing the next questions would settle and what happens without it,
+so the decision is informed rather than a politeness reflex:
+
+- **header**: `"Continue?"`
+- **options**:
+  1. `Keep going — <the concrete gap, e.g. "which of the three parsers owns validation">`
+     — describe what stays unsettled otherwise and what it costs (contradictory
+     implementations across agents, an unverifiable acceptance criterion, a constraint no
+     reviewer can check).
+  2. `Plan with what we have` — describe exactly what will be assumed, and note that the
+     Head Imp's plan review in Phase 2 is the backstop for what the brief still leaves
+     open.
+
+Continue until they choose to stop. When they do, proceed with what is settled — do not
+re-ask, and do not treat the remaining gaps as blockers.
+
+**✍️ Step 6 — Synthesise.** Carry the interrogation's results forward, then skip Path B
+and go straight to Step 6:
+
+- `<REFINED_TASK>` — one or two sharp sentences naming the deliverable.
+- The **repo**, resolved from `git remote get-url origin` rather than asked.
+- **Acceptance criteria**, each phrased so a reviewer could confirm it from the diff or
+  a named command → Phase 2's Definition of Done.
+- **Cross-task invariants**, with exact values written out → Phase 2's
+  `## Global Constraints`.
+- The operator's **own words, verbatim** → GOAL.md's `## Original request`.
+
+That last one is not ceremony. Everything downstream is derived from the refined
+brief; keeping the original in the durable record is what lets the Head Imp, the
+adjudicator, and a human reading GOAL.md after the state file is gone check the
+derivation against what was actually asked for.
+
+### 📋 Path B — Ask
+
+**Taken only when Step 1's triage found the brief sufficient.**
+
 
 Task description: `<REFINED_TASK>`
 
-Ask the following in a **single AskUserQuestion call** (batch all five), **skipping any questions prompt-builder already answered** during Phase 0:
+**Resolve, don't ask: the repo.** `imps-paths.sh` already derives the working tree from
+`git rev-parse --show-toplevel` and disambiguates it by remote. Take the repo from
+`git remote get-url origin` and surface it for correction only if `<REFINED_TASK>` implies
+a different target. A hand-typed answer here is what lands in the state file's `repo`, so
+asking creates a value that can silently disagree with the checkout every other step acts
+on. Don't ask which branch either: Phase 2 Step 7 always cuts a fresh dedicated branch off
+the default branch — never the branch the operator happens to be standing on.
 
-1. Which repo is this work in? (free text) — in discussion-seed mode, default
-   to the discussion's own repo and skip asking unless the discussion implies a
-   different target repo. Don't ask which branch: Phase 2 Step 6 always cuts a
-   fresh dedicated branch off the default branch itself — never the branch the
-   operator happens to be on when they run this command.
-2. What concrete output artifacts are expected? Be specific — e.g. Bash scripts, GitHub Discussion post, PR, code changes. In discussion-seed mode, a reply comment on the source discussion is posted automatically by the Workflow script at finalize regardless of the answer here — this question is only for artifacts *beyond* that reply.
-3. What data sources, APIs, or external access will agents need?
-4. How will you know this is done? (acceptance criteria)
-5. Any constraints? (e.g. don't touch prod, don't create PRs without review, specific files off-limits)
+That leaves **exactly four questions, which is `AskUserQuestion`'s hard cap** — ask them in
+a single call. Do not add a fifth; if something else needs settling, it belongs in Phase 1's
+interrogation or in a prose follow-up after this call returns.
+
+**Offer positions, not blanks.** `AskUserQuestion` is a multiple-choice tool with no
+free-text field — an open prompt forces every operator through "Other". Derive 2–4 concrete
+options per question from the scout recon and the brief, and let them correct one. Proposing
+a wrong option is cheap and informative; a blank prompt is neither.
+
+1. **What concrete output artifacts are expected?** Options drawn from what the brief
+   implies — code changes on a branch, a Bash script, a GitHub Discussion post, docs. In
+   discussion-seed mode the Workflow script posts a reply comment on the source discussion
+   at finalize regardless of the answer here; this question is only for artifacts *beyond*
+   that reply.
+2. **What access will agents need — and does any task have to change live state?** Data
+   sources, APIs, credentials, plus the mutation question explicitly. A "yes" is not
+   cosmetic: the script's dispatch appends `Read-only. No file changes.` to every `query`
+   task whose spec does not contain `MUTATIONS_ALLOWED`, so an unmarked live-ops task
+   returns a confident diagnosis and no mutation, with every acceptance criterion unmet and
+   the state file reporting success. Carry a "yes" into that task's spec verbatim.
+3. **What must be true of the diff for this to be done — and which command proves it?**
+   Not "how will you know this is done". Every answer becomes a Definition-of-Done line, and
+   each line is later graded against the merged diff: a criterion no diff could confirm comes
+   back `unverifiable` and proves nothing. Reject vague answers and show the upgrade — the
+   pattern is in `${CLAUDE_PLUGIN_ROOT}/references/brief-probes.md` under "Done, checkably".
+4. **What constrains this?** Present both classes as distinct options, because they fail
+   differently and only one of them is intuitive:
+   - **Safety** — off-limits files or systems, no prod changes, no PR creation. These
+     protect the operator from the run.
+   - **Consistency** — what must hold identically across tasks written independently: exact
+     field names, a shared function signature, an API or schema shape more than one task
+     touches. These protect the run from itself, and they are the reason
+     `## Global Constraints` exists — worktree-isolated imps cannot see each other, so an
+     unstated invariant surfaces as two internally-consistent, mutually contradictory
+     implementations that each pass their own gates.
+
+   When a consistency answer names an invariant, **follow up in prose for its exact values**
+   before writing GOAL.md. "Match the schema" is not a constraint; the spelled-out field
+   names are. See Phase 2's authoring rules.
 
 Wait for all answers before proceeding.
 
 ---
 
-## Phase 2 — Plan (native plan mode)
+### 🔒 Step 7 — Settle (both paths)
+
+Everything here runs whether Step 4 interrogated or Path B asked its four questions.
+
+**This is the run's autonomy contract, and it is the whole reason the later phases can run
+unattended.** Every routine gate that used to interrupt a run mid-flight is answered here
+instead: how far the run goes, whether you review the plan, how personas publish, and what
+happens to the learnings. After this step, the only things that can stop the run are
+*failures* — a red gate, a conflict, a review that will not pass — never a request for
+permission you could have granted up front.
+
+Ask in **one `AskUserQuestion` call** (the cap is per call, so these do not compete with
+Path B's four).
+
+1. **Endstate** — `"Where should this run stop?"`
+   - `Stop at a green PR` — raise it, drive it to green, hand it over. The conservative
+     default and the only endstate needing no merge authorization.
+   - `Merge the green PR` — same, then merge once checks pass and conflicts are clear.
+   - `Merge and release` — same, then cut a release per this repo's own convention.
+     Confirm the repo actually has one first; if not, say so and treat merge as the ceiling.
+
+2. **Plan review** — `"Review the plan before the imps start?"`
+   - `Show me the plan first` — `ExitPlanMode` runs as the approval gate.
+   - `Only stop if the Head Imp objects` — dispatch on an APPROVE; stop and show you the
+     plan on CHANGES_REQUESTED. The Head Imp reviews every plan either way, so this
+     trades *your* review for *its* review, not for no review at all.
+
+3. **Learnings** — `"What should happen to what this run learns?"`
+   - `Save what it finds` — append every candidate; scope is auto-classified.
+   - `Ask me at the end` — the old behaviour, one question at `final`.
+   - `Save nothing` — close out silently.
+
+Persist all three into the state file at Phase 2 Step 7 as `endstate`
+(`"pr" | "merge" | "release"`), `plan_review` (`"ask" | "on_objection"`), and
+`learnings_policy` (`"auto" | "ask" | "none"`). **Each defaults to its most conservative
+value** when absent or unrecognized — `"pr"`, `"ask"`, `"ask"` — so a legacy or
+hand-edited state file can never be read as consent to merge or to skip plan review.
+
+**Merging is not implied by any other authorization in this run.** The Push & PR gate
+authorizes pushing and opening; this answer, and only this answer, authorizes closing.
+Even with it, merging a PR this session authored is self-approval and can be refused by
+the permission classifier or by a standing deny rule on the merge tool — when that
+happens, stop and hand over. Do not retry, and do not route around it with a raw ref push.
+
+**Then check the tree can actually run its gates.** A lockfile with no installed
+dependencies, a declared venv that isn't there — stop and tell the operator, and do not
+guess an install command. This is cheap here and expensive later: an uninstalled dependency
+surfaces downstream as a *red gate*, which sends `fixGate` off editing source to "fix" it.
+The failure is already documented under **Concurrent runs against one repo** (a fresh
+worktree has no `node_modules`, no venv, no build cache); this is the guard.
+
+**Mark production-touching work now, while there is still a gate to fire on.** If any
+answer above puts a task against a live production system, say so in that task's row and
+spec in Phase 2, and surface it explicitly at the `ExitPlanMode` approval gate — that gate
+is the last point this session controls before the Workflow script owns dispatch. The
+Constraints section's "pause and confirm before that task runs" has no script-side
+enforcement behind it, so plan approval is where the confirmation has to actually happen.
+
+---
+
+## 🗺️ Phase 2 — Plan
 
 Using `<REFINED_TASK>` and the discovery answers, invoke native plan mode to produce
 the authoritative decomposition. Under `opusplan`, plan mode routes to opus — so this
 IS the "decompose on opus" requirement, with no duplicate planning pass.
 
-**Step 0:** Load learnings from two sources (both optional). `Read` is a tool call, not
-Bash — it does not expand `~`, so resolve `$HOME` yourself and pass the absolute form:
+**📚 Step 1 — Recall.** Learnings are already loaded — Phase 1 Step 1 read them from two sources
+(both optional), and this step reuses what it found rather than re-reading:
 - **User-scoped:** `$HOME/.claude/imps/learnings.md` — stack-agnostic rules that apply across all projects
 - **Project-scoped:** `.claude/imps/learnings.md` in this working tree — rules specific to this project
+
+Re-read them here only if Phase 1 was bypassed entirely (a resume that re-enters mid-run,
+say). `Read` is a tool call, not Bash — it does not expand `~`, so resolve `$HOME`
+yourself and pass the absolute form.
 
 Reading either file is always safe. **Writing** them is not: the user-scoped file is
 shared by every run on the machine, so appends go through
@@ -457,7 +656,7 @@ concurrent run's PR ends up touching the same unrelated file.
 
 Read the `## Active rules` section from each file that exists. Merge both sets of rules and apply them to model assignment, task boundaries, and dependency detection throughout planning. Project-scoped rules take precedence over user-scoped rules on any conflict.
 
-**Step 1:** Call **`EnterPlanMode`**. You are now the opus planner. Ground the plan in
+**✂️ Step 2 — Decompose.** Call **`EnterPlanMode`**. You are now the opus planner. Ground the plan in
 reality — but **delegate the exploration instead of doing it in this context**: dispatch
 `scout` (haiku) subagents for mechanical recon (default branch, gate/lint commands,
 file/symbol enumeration, "where is X" lookups) and an `Explore` subagent for broad
@@ -485,13 +684,29 @@ quote or reason about its contents. Then:
 - For each task assign:
   - **Spec** — the operative instructions the imp needs to act without improvising:
     concrete inputs (repo/owner, file paths, exact commands), the expected output
-    artifact, and any constraints. **Specs must travel with tasks** — an imp receives
-    ONLY its state-file entry, never this plan context or GOAL.md; a plan file
-    referenced in the run-level `task` string is never read by individual imps. Either
-    embed the full spec or open it with an explicit pointer ("Read <GOAL_PATH>,
-    section T<N>, before acting"). Label-only imps improvise: observed failures
-    include "couldn't find repo owner", "concluded nothing to publish", and
-    unauthorized GitHub issues filed as the deliverable.
+    artifact, and any constraints. An imp receives ONLY its state-file entry, never this
+    plan context; a plan file referenced in the run-level `task` string is never read by
+    individual imps. Label-only imps improvise, and the observed failures are concrete:
+    "couldn't find repo owner", "concluded nothing to publish", unauthorized GitHub
+    issues filed as the deliverable.
+
+    **Write the full spec into GOAL.md's `## Task specs` section and put a pointer in the
+    state file** — not the spec itself:
+
+    ```
+    MANDATORY FIRST ACTION: Read <GOAL_PATH> section "### T3"; if unreadable, return failed.
+    ```
+
+    Substitute the resolved absolute `$GOAL_PATH` — an imp's `Read` tool will not expand
+    `~` or `${CLAUDE_PLUGIN_ROOT}` later. The pointer is the rule, not one of two options:
+    the state file does not reach the script as a file read. `readState()` is an *agent*
+    asked to re-emit the JSON through a schema, so a long embedded spec can arrive
+    truncated — observed as an imp receiving only the first line of a multi-KB spec and
+    improvising the rest — while the integrity guard, which checks task count and phase,
+    passes. GOAL.md is read by each imp with its own tools, losslessly, outside that path.
+
+    A spec short enough to be obviously intact at a glance (a sentence or two) may travel
+    inline. Anything longer goes in GOAL.md with a pointer.
     For a bug, regression, flake, performance problem, or unexplained failing gate, the spec
     must also point to `references/diagnosis-loop.md` using the current resolved absolute
     `${CLAUDE_PLUGIN_ROOT}` value — substitute it before writing the durable task spec; an
@@ -508,7 +723,7 @@ quote or reason about its contents. Then:
     changes, say so explicitly in the spec (e.g. "assume task #N is already merged" or
     instruct a `git merge origin/<default>` first).
 
-**Step 2:** Write **`GOAL.md`** to an absolute path under `~/.claude/imps/runs/` — not
+**📝 Step 3 — Draft.** Write **`GOAL.md`** to an absolute path under `~/.claude/imps/runs/` — not
 the repo root, so the write never prompts for project-directory access. Derive the slug,
 ensure the directory exists, and resolve+echo the absolute path — `Write` is a tool call,
 not Bash, and does not expand `~`:
@@ -523,6 +738,10 @@ one-liner) — shell state doesn't carry across tool calls. Write with this stru
 
 ```markdown
 # GOAL — <REFINED_TASK (one line)>
+
+## Original request
+<the operator's own words, verbatim — the raw $ARGUMENTS, the collected answer, or the
+discussion body. Never a paraphrase; this section exists to be checked against.>
 
 ## Definition of Done
 - [ ] <acceptance criterion 1>
@@ -540,8 +759,18 @@ one-liner) — shell state doesn't carry across tool calls. Write with this stru
  #  Task                                      Model   Type     Depends On
  1  <label>                                   haiku   query    —
  2  ...
-(a solo run legitimately stops at row 1 — see Phase 2 Step 1's solo-task check; don't pad
+(a solo run legitimately stops at row 1 — see Phase 2 Step 2's solo-task check; don't pad
 with synthetic tasks to make the table look bigger)
+
+## Task specs
+
+### T1 — <label>
+<the full operative spec: concrete inputs, repo/owner, absolute file paths, exact
+commands, the expected output artifact, and any task-local constraints. This is what the
+imp actually executes; the state file only points here.>
+
+### T2 — <label>
+...
 
 ## Status
 Planned — handing to the Workflow script.
@@ -553,8 +782,13 @@ _None._
 _None._
 ```
 
-**`- [ ]` checkboxes appear ONLY under `## Definition of Done`.** Global Constraints,
-Decision trail, and Parked findings are checkbox-free — a stray checkbox anywhere else
+`## Task specs` holds one `### T<N>` subsection per task, in task-table order, and is what
+every task's state-file pointer resolves to. It is written at plan time and not touched
+afterwards — the script's own GOAL.md writes target Status, the DoD boxes, Decision trail,
+and Parked findings only.
+
+**`- [ ]` checkboxes appear ONLY under `## Definition of Done`.** Original request,
+Global Constraints, Task specs, Decision trail, and Parked findings are checkbox-free — a stray checkbox anywhere else
 in GOAL.md is read as a phantom task. Each renders the literal `_None._` when it has no
 content, so an empty section is distinguishable from a section that was never written.
 
@@ -570,6 +804,14 @@ pasted text, so it must be readable standalone.
 - **Write exact values verbatim, never summarized.** "Use the field names in the schema"
   is not a constraint; "the state fields are `parked_findings`, `wontfix_rulings`,
   `verdicts_pending` — spelled exactly, in all three files" is.
+- **Except where a gate command already enforces the rule — then name the command, never
+  its threshold.** "No change under `dist/` beyond what `bash build/dist-lint.sh
+  --check-frozen-sources` accepts" is durable; "exactly two exceptions are permitted under
+  `dist/`" is a copy of the gate's logic that will drift from it. When it drifts, no imp
+  can close the finding: the divergence is in the governing text, not in the code, so
+  every fix round correctly re-flags it and correctly fails to fix it. One run's only
+  surviving blocker was exactly this — a constraint saying "two" against a gate correctly
+  enforcing three.
 - **Only constraints a reviewer could return a verdict against from a diff.** If nothing
   in a diff could ever falsify it, it is background, not a constraint. Aspirations
   ("keep it clean", "be careful with the merge logic") belong nowhere.
@@ -580,7 +822,8 @@ pasted text, so it must be readable standalone.
 
 **`## Decision trail`** is a durable summary owned by the Workflow finalizer. Leave its
 body as `_None._` during planning. At the end of a run, the finalizer replaces it with
-plain bullets for nontrivial pivots only: Head Imp amendments, conflicts resolved,
+plain bullets for nontrivial pivots only: Head Imp plan amendments, code-review fix
+rounds and any overridden or skipped review, conflicts resolved,
 skipped gates or tasks, and advisory-check failures. It is not a chronological activity
 log and must not duplicate routine task completions or the audit JSONL event.
 
@@ -608,7 +851,7 @@ table after approval, mirror the change into the state file (or re-run planning)
 will not take effect. After handover, GOAL.md belongs to the script — it ticks the boxes
 and keeps Status current.
 
-**Step 3 — Head Imp review (mandatory):**
+**😈 Step 4 — Critique (mandatory).**
 Before calling `ExitPlanMode`, summon the Head Imp (see the Head Imp section above).
 Pass the **absolute path** of `GOAL.md` — the `$GOAL_PATH` value echoed in Step 2, e.g.
 `/Users/you/.claude/imps/runs/${SLUG}.md`, never the `~/...` form — as the
@@ -616,13 +859,42 @@ artifact — the Head Imp Reads it itself. The Head Imp argues AGAINST the plan 
 boundaries, mis-routed models, missing deps, gaps in the DoD. Fix what the critique
 exposes before proceeding.
 
-**Step 4:** Call **`ExitPlanMode`** — this IS the approval gate. If the user requests
-changes, stay in plan mode and revise `GOAL.md`, then resume the same Head Imp with the
-delta (see the Head Imp section) rather than re-dispatching fresh; when approved, proceed.
+Before sending, read the composed prompt back against
+[Never pre-judge a reviewer's findings inside its own prompt](#never-pre-judge-a-reviewers-findings-inside-its-own-prompt)
+and delete anything that pre-clears a finding, narrows the mandate, or supplies the
+verdict. There is no script-side enforcement of this — the check happens here, at the
+moment you write the string, or not at all.
 
-**Step 5:** Set `poll_interval_seconds: 300` (5-minute default — no user prompt needed).
+**Then get a second verdict on what you changed.** If you fixed any blocker or major
+finding, `SendMessage` the same Head Imp `agentId` with the delta and wait for a fresh
+VERDICT before Step 4. An approval of the *unfixed* plan is not an approval of the fixed
+one, and round-1 fixes have twice introduced round-2 bugs — once a "make this executable"
+fix that turned out to be platform-unsound on the actual dev machine. Resuming is cheap:
+the Head Imp already holds its own findings and needs only what changed. Minor and nit
+findings do not require a re-verdict.
 
-**Step 6:** Cut the run's dedicated working branch, then write the durable state file
+**✅ Step 5 — Approve.** What happens here is the `plan_review` answer from Phase 1 Step 7:
+
+- **`"ask"` (the default)** — call **`ExitPlanMode`**. This IS the approval gate.
+- **`"on_objection"`** — the operator delegated plan review to the Head Imp. On a Step 4
+  verdict of `APPROVE`, skip `ExitPlanMode` and proceed to Step 6; on
+  `CHANGES_REQUESTED`, call `ExitPlanMode` anyway and show them the findings. Every plan
+  is still adversarially reviewed — this trades *their* review for the Head Imp's, not
+  for none.
+
+**Two things override `"on_objection"` and always stop for the operator:** a
+production-touching task (see Phase 1 Step 7), and a plan whose Head Imp verdict was
+reached only after you applied fixes and re-verdicted. In both cases call `ExitPlanMode`
+regardless of the policy, and say which of the two triggered it. This is the last point
+this session controls before the Workflow script owns dispatch.
+
+If the user requests changes, stay in plan mode and revise `GOAL.md`, then resume the same
+Head Imp with the delta (see the Head Imp section) rather than re-dispatching fresh; when
+approved, proceed.
+
+**⏱️ Step 6 — Pace.** Set `poll_interval_seconds: 300` (5-minute default — no user prompt needed).
+
+**🌿 Step 7 — Cut.** Cut the run's dedicated working branch, then write the durable state file
 **now** — this is your last write to it; from Phase 3 onward it belongs to the
 Workflow script. **Never write the branch you happen to be on into the state file** — that
 includes the default branch, and doing so is exactly how a run ends up committing every
@@ -632,11 +904,19 @@ default branch, the same way `commands/issue-mode.md` Phase 1 cuts its holding b
 ```sh
 eval "$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh")"
 mkdir -p "$RUNS_DIR"
+[ -z "$(git status --porcelain)" ] || { echo "working tree not clean — stopping" >&2; git status --short; exit 1; }
 DEFAULT_BRANCH=$(git remote show origin | sed -n '/HEAD branch/s/.*: //p')
 RUN_BRANCH="imps/${SLUG}-$(date -u +%Y%m%d-%H%M%S)"
 git fetch origin "$DEFAULT_BRANCH" && git checkout -b "$RUN_BRANCH" "origin/$DEFAULT_BRANCH"
 echo "$STATE_PATH"; echo "$RUN_BRANCH"
 ```
+
+**The clean-tree check is not a formality.** Uncommitted changes here are either carried
+onto the run branch and attributed to imps that never wrote them, or they belong to
+someone else: a shared checkout can be in active use by an unrelated concurrent session,
+which has been observed mid-run with HEAD on a foreign branch carrying a fresh commit. If
+it trips, show the operator `git status --short` and let them decide — never stash (the
+stash stack is shared across every worktree) and never discard.
 
 `Write` the JSON below to the echoed `$STATE_PATH` (its `file_path`, not the `~/...`
 form — `Write` doesn't expand `~`). Write `$RUN_BRANCH` into `branch` below — never the
@@ -652,13 +932,15 @@ current branch.
   "repo": "<repo from discovery>",
   "branch": "<RUN_BRANCH>",
   "tasks": [
-    { "id": 1, "label": "...", "spec": "<operative instructions from Step 1 — required for every task; the label is a title, the spec is what the imp actually executes>", "model": "haiku", "type": "query", "deps": [] }
+    { "id": 1, "label": "...", "spec": "MANDATORY FIRST ACTION: Read <absolute $GOAL_PATH> section \"### T1\"; if unreadable, return failed.", "model": "haiku", "type": "query", "deps": [] }
   ],
   "phase": "dispatch_pending",
   "segment": null,
   "dispatched_at": null,
   "poll_interval_seconds": 300,
-  "max_dispatch_hours": 6,
+  "endstate": "pr",
+  "plan_review": "ask",
+  "learnings_policy": "ask",
   "last_heartbeat": null,
   "tasks_done": [],
   "worktrees": {},
@@ -670,7 +952,6 @@ current branch.
   "wontfix_rulings": [],
   "fix_rounds_done": 0,
   "fix_cycles": 0,
-  "posting_mode": null,
   "discussion_comment_url": null,
   "source_discussion": null,
   "gate_commands": null,
@@ -681,7 +962,7 @@ current branch.
 ```
 
 `verdicts_pending`, `parked_findings`, `wontfix_rulings`, `fix_rounds_done`,
-`fix_cycles`, and `posting_mode` are new in **schema 4** (persona-panel adjudication) —
+and `fix_cycles` are new in **schema 4** (persona-panel adjudication) —
 additive only, in the same style as schema 3 below: nothing existing removed or
 repurposed, none of them required, so a hand-written schema-3 file still loads. (Schema 4
 also added four fail-soft breadcrumb fields not listed above — `heartbeat_clock_error`,
@@ -702,10 +983,20 @@ carry the adjudicator's rulings and each fix round's declined findings. `fix_cyc
 bounds the `retry findings` verb (refused past two granted cycles); `fix_rounds_done` is
 a record of how many fix rounds the most recently completed cycle ran (surfaced in the
 result, not itself a bound) — each cycle's own fix loop always restarts counting from
-round 0, it does not resume a prior cycle's round count. `posting_mode` persists the
-operator's posting choice so a resume that no longer carries a `PR:` decision string does
-not silently fall back to "post nothing". See Phase 4's `unresolved_findings` entry for
+round 0, it does not resume a prior cycle's round count. See Phase 4's `unresolved_findings` entry for
 what an operator does with them.
+
+`endstate`, `plan_review` and `learnings_policy` are the Phase 1 Step 7 autonomy contract,
+and each falls back to its most conservative value when absent or unrecognized — a policy
+that cannot be read is never consent.
+
+- `endstate` — `"pr"` (stop at a green PR), `"merge"`, or `"release"`. The **only** thing
+  authorizing Phase 5 to close the PR; defaults to `"pr"`.
+- `plan_review` — `"ask"` (default) or `"on_objection"`. Read by Phase 2 Step 5, in this
+  session, not by the script.
+- `learnings_policy` — `"ask"` (default), `"auto"`, or `"none"`. Read by the script at
+  finalize: `auto` appends every candidate and closes the run out in the same invocation,
+  `none` discards them and does the same, `ask` returns `final` for the Phase 5 gate.
 
 `gate_commands`, `learnings_saved`, `operator_decision`, and `last_result` are new in
 schema 3 (the Workflow-script rewrite) — additive only, nothing existing was removed or
@@ -735,17 +1026,37 @@ inherits this planning window regardless.
 
 ---
 
-## Phase 3 — Sync and run the Workflow script
+## 🔨 Phase 3 — Build
 
-Everything from here to run completion is real control flow inside one Workflow script
-(`scripts/imps-run.workflow.js`): git preflight, dispatching the task DAG as staged
-`agent()` calls, merging, gates, read-only OCR diff review, the endstate PR, the persona
-panel, and finalize. **This command has a hard dependency on the `Workflow` tool — there
-is no prose fallback.** If `Workflow` is unavailable in this session, tell the user
-plainly (`/imps:imps` requires it) and stop; do not attempt to execute the old
-subagent-dispatch protocol inline.
+The imps do the work. Phase 3 hands the approved plan to the Workflow script, which
+dispatches the task DAG as staged `agent()` calls — each code task in its own isolated
+worktree — and returns when it needs a decision. Phases 3, 4 and 5 are all the *same*
+script: one body of real control flow spanning git preflight, dispatch, merge, gates, the
+OCR diff review, the PR, the persona panel and finalize. They are separate phases here
+because they are separate things happening, not separate programs.
 
-**Step 1 — sync the canonical script.** Workflow scripts only load from a user's own
+**These phase names are not the script's `phase()` labels, and the two are not meant to
+match.** The script declares `Preflight · Dispatch · Integrate · Publish · Finalize` in its
+`meta` — those are the harness's own progress groupings, rendered by `/workflows`, and they
+group `agent()` calls rather than operator-facing stages. Read across:
+
+| This command | Script `phase()` | Why they differ |
+| --- | --- | --- |
+| Guard, Phases 1–2 | — | Runs in this session; the script has not started |
+| 🔨 3 Build | `Preflight`, `Dispatch` | Preflight also covers the state read, its integrity check, and the OCR preflight |
+| 🔗 4 Consolidate | `Integrate` | One-to-one: merge, gates, review, coverage |
+| 🚢 5 PR | `Publish`, `Finalize` | Publish covers open/panel/green/close; Finalize is Step 5, Land |
+
+Do not "fix" the mismatch by renaming either side. The script's labels describe where an
+`agent()` call runs; these phases describe what the run is doing and where the operator
+fits. Collapsing them would make one of the two wrong.
+
+**This command has a hard dependency on the `Workflow` tool — there is no prose
+fallback.** If `Workflow` is unavailable in this session, tell the user plainly
+(`/imps:imps` requires it) and stop; do not attempt to execute the old subagent-dispatch
+protocol inline.
+
+**📦 Step 1 — Sync.** Workflow scripts only load from a user's own
 `~/.claude/workflows/*.js` — a plugin cannot ship one that runs directly. Each run,
 re-sync the bundled copy so it always matches the installed plugin version.
 
@@ -771,11 +1082,36 @@ SHA=$(shasum -a 256 "$SRC" 2>/dev/null || sha256sum "$SRC" 2>/dev/null \
 SHA=$(printf '%s' "$SHA" | tr -d '\n' | cut -c1-8)
 [ ${#SHA} -eq 8 ] || { echo "could not hash $SRC" >&2; exit 1; }
 WORKFLOW_DEST="$HOME/.claude/workflows/imps-run-${SHA}.js"
-cp "$SRC" "$WORKFLOW_DEST"
+cp "$SRC" "$WORKFLOW_DEST" || { echo "could not sync $SRC -> $WORKFLOW_DEST" >&2; exit 1; }
+cmp -s "$SRC" "$WORKFLOW_DEST" || { echo "synced copy differs from $SRC" >&2; exit 1; }
 echo "$WORKFLOW_DEST"; echo "$STATE_PATH"; echo "$GOAL_PATH"
 ```
 
-**Step 2 — invoke it.** Every invocation is a **fresh** `Workflow` call — never
+The copy is guarded as tightly as the hash: an unguarded `cp` failure still prints a
+perfectly plausible destination path, and Step 2 then invokes a script that isn't there.
+
+**`~/.claude/workflows/imps-run.js` — the old fixed name — is dead.** Content-addressing
+moved the destination to `imps-run-<sha8>.js`, so nothing loads the unsuffixed file or any
+`.bak` beside it, and edits made there have no effect on any run. Older notes that say to
+patch environment fixes into that path are stale; those fixes belong upstream in
+`scripts/imps-run.workflow.js`. Unlike the content-addressed copies — which are never
+collected, because deleting one that a paused run resumes into destroys the only thing its
+state file is for — the legacy fixed-name files are safe to delete.
+
+Record which copy this run invoked, so a later resume can tell the operator the plugin
+version moved under them (content-addressing stops the script being swapped mid-run, but
+leaves no trace that a different one is now in play):
+
+```bash
+eval "$("${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh")"
+jq --arg p "$WORKFLOW_DEST" '.workflow_script = $p' "$STATE_PATH" > "${TMP_PREFIX}-state.json" \
+  && mv "${TMP_PREFIX}-state.json" "$STATE_PATH"
+```
+
+`workflow_script` is additive and unread by the script — the state schema is
+`additionalProperties: true`, so an older file without it loads unchanged.
+
+**🦇 Step 2 — Dispatch.** Every invocation is a **fresh** `Workflow` call — never
 `resumeFromRunId` (see the design note at the end of this file for why). The script's own
 first step reads the state file and decides what's already done; there is nothing for the
 harness's own resume mechanism to add, and relying on it would risk silently re-triggering
@@ -788,7 +1124,6 @@ Workflow({
     pluginRoot: "${CLAUDE_PLUGIN_ROOT}",
     stateFilePath: "<the echoed $STATE_PATH value, e.g. /Users/you/.claude/imps/runs/<slug>.json>",
     goalFilePath: "<the echoed $GOAL_PATH value, e.g. /Users/you/.claude/imps/runs/<slug>.md>",
-    personaPostingProtocolPath: "${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md",
     personaPanel: <PERSONA_PANEL — the boolean derived in "Runtime flags"; true only if --personas was passed, else false>,
     personaBriefPaths: {
       "solution-architect": { path: "${CLAUDE_PLUGIN_ROOT}/personas/solution-architect.md", model: "opus" },
@@ -826,13 +1161,12 @@ the panel is filtered to the slugs whose roster entry does NOT list `"browser-su
 future persona (browser or non-browser) is handled by its own roster entry instead of by
 editing this filter — and the run's findings record exactly `"ux-designer skipped — no
 browser-renderable surface: <reason>"` with a `"SKIPPED"` verdict (a third value alongside
-`APPROVE`/`CHANGES_REQUESTED` — it carries no `(posted)`/`(inline)` tag since nothing was
-reviewed to post, and the dissenter fix-loop never re-reviews it). Any classification
+`APPROVE`/`CHANGES_REQUESTED`, and the dissenter fix-loop never re-reviews it). Any classification
 error, or a detected surface, runs all five personas — the script fails open toward
 running ux-designer rather than silently dropping it, and the skip applies to this initial
 call only, not the fix-loop re-review pass.
 
-**Step 3 — print the dispatch banner and stop; you'll be notified.** `Workflow` runs in
+**📡 Step 3 — Hand off.** Print the dispatch banner and stop; you'll be notified. `Workflow` runs in
 the background — this turn ends here, not after the run finishes.
 
 ```bash
@@ -848,7 +1182,27 @@ detector for this case, only a human-visible heartbeat staleness signal).
 
 ---
 
-## Phase 4 — Result relay loop
+## 🔗 Phase 4 — Consolidate
+
+The imps' branches become one reviewed, green branch. It ends at
+`awaiting_authorization` — everything after that belongs to Phase 5.
+
+The script runs these in order; you see them only through the `status` it returns, so they
+are named here to make a blocked result legible rather than because you drive them:
+
+| Step | What happens | Blocks as |
+| --- | --- | --- |
+| 🔀 **1 — Merge** | imp branches onto the run branch, default branch synced in | `merge_conflict`, `branch_mismatch` |
+| 🚦 **2 — Gate** | build · lint · test · type, with a fix round per failure | `gate_red` |
+| 🔬 **3 — Review** | OCR on the merged diff, up to 3 fix rounds | `code_review_red`, `code_review_unavailable`, `uncommitted_changes` |
+| 📊 **4 — Cover** | each functional DoD criterion graded against the diff | never blocks; degrades to a warning |
+| 🔑 **5 — Authorize** | publish decision, derived from `endstate` | returns `awaiting_authorization` |
+
+Gates run **before** review deliberately: a review-driven fix re-runs every gate and is
+then sent to a fresh OCR run, so the review never sees a tree the gates would reject.
+
+The relay mechanism described here is shared with Phase 5; it is documented once, in this
+phase, because this is where the first result arrives.
 
 Each phase of the script ends in exactly one returned `status`, arriving as a
 `<task-notification>` when the background `Workflow` run reaches that point. There is no
@@ -877,7 +1231,8 @@ The decision vocabulary is almost unchanged from before: `resolved, continue` ·
 `retry <gate>: <guidance>` · `skip <gate>` · `reconciled, continue` ·
 `retry tasks #N,#M: <guidance>` · `skip tasks #N,#M` · `integrate partial` ·
 `retry findings` · `override findings: <rationale>` ·
-`PR: yes` · `PR: yes, no-post` · `PR: no` · `learnings: <json|none>` · `abort` — the
+`override code review: <rationale>` · `skip code review: <rationale>` ·
+`PR: yes` · `PR: no` · `learnings: <json|none>` · `abort` — the
 delivery mechanism changed (from a `SendMessage` to a spawned subagent, to a state-file
 field read by a fresh script invocation), and one verb is dropped: `wait <hours>` existed
 to extend `max_dispatch_hours`'s manual poll-loop timeout, which no longer exists (see
@@ -940,6 +1295,31 @@ the decision, re-invoke:
   files; let the user resolve (or resolve trivial conflicts yourself), then persist
   `resolved, continue`.
 - `gate_red` — surface the gate name + log tail; agree retry guidance, skip, or abort.
+- `uncommitted_changes` — the working tree had uncommitted work at a point where
+  everything downstream reads commits: the code review reads `MERGE_BASE..HEAD`,
+  `diff_stat` and `dod_coverage` read `origin/<default>..HEAD`, and `git push` sends
+  commits. Proceeding would review around the change and then drop it, with every gate
+  still green. `detail.porcelain` names the files and `detail.where` says which point
+  tripped. Establish whose the changes are first — a shared checkout can be in use by an
+  unrelated concurrent session — then either commit them or, if they are not this run's,
+  hand them back to their owner. Never stash: the stash stack is shared across every
+  worktree on the machine. Persist `resolved, continue` once the tree is clean.
+- `code_review_red` — OCR reviewed the merged diff, returned CHANGES_REQUESTED, and three
+  fix rounds did not clear it. `detail.findings` carries what survived, with the model and
+  provider that produced them. Agree a path: fix the findings and persist
+  `resolved, continue`, or accept them on the record with
+  `override code review: <rationale>`. Treat a *clean* pass on a large diff with less
+  confidence than it invites — repeated OCR runs over one large diff have produced
+  different finding sets each time, so absence of a finding on one pass is not evidence it
+  was addressed, only that it wasn't sampled.
+- `code_review_unavailable` — the review could not run *at all*: a setup/endpoint failure,
+  or a diff too large for the pinned model to finish. This is not a red verdict, it is no
+  verdict, and it can arrive from the pre-dispatch preflight as well as from the review
+  itself. Fix the cause and persist `resolved, continue`, or — when the review genuinely
+  cannot complete for this diff — persist `skip code review: <rationale>`. That verb
+  records the review as *never run*, distinct from `override code review:`, which accepts
+  one that ran and returned findings. Both reach the PR body and the audit trail; neither
+  is ever rendered as an approval.
 - `branch_mismatch` — reconcile branch state with the user, then persist
   `reconciled, continue`. Don't take an agent's self-reported `id` or `branch` at face
   value here — agents can collide on the same self-reported id or report the base
@@ -994,7 +1374,8 @@ any Discussion abort notice itself before returning, leaves the tree as-is, and 
 a later resume decision).
 
 **`awaiting_authorization`** — print a one-block summary from the result's fields (merged
-tasks, failed tasks, Head Imp verdict + amendments, gate results, diff stat, and the
+tasks, failed tasks, the `code_review` block (verdict, rounds, surviving findings) plus
+any `code_review_override`/`code_review_skipped`, gate results, diff stat, and the
 `dispatch` block: model counts and published artifacts — `tokens_spent` is usually
 `null`, the script has no documented way to read an `agent()` call's own token usage;
 omit that line rather than printing an empty one).
@@ -1038,41 +1419,127 @@ e.g. `N criterion/criteria not verifiable from the diff alone` — don't fold it
 question below, never after — the operator must see them before authorizing the PR, not
 after it's already open.
 
-Then the operator gate:
+Then the publish decision:
 
-**Push & PR decision.** The persona panel posts its findings as comments on a PR
-thread, so the PR must exist first. This is the correct moment: branches are merged,
-the Head Imp reviewed the diff, gates are green — and nothing has been pushed yet.
+**Push & PR.** This is the right moment: branches are merged, OCR reviewed the merged
+diff, gates are green — and nothing has been pushed yet. (The Head Imp reviews the *plan*,
+in Phase 2, and never the code; the diff review is OCR's, on the consolidated imp commits
+on the run branch.)
 
-**Self-review disclosure.** If the `awaiting_authorization` result's `head_imp.amendments`
-is non-zero, this session wrote code directly into the diff during the Head Imp fix-loop —
-say so before asking below. Persona posting through each's dedicated GitHub App identity
-(`${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md`) is attribution/audit-trail
-only; it is not an independent review of content this same session authored, and
-pushing/PR-creation is a separate authorization from letting personas post live GitHub
-reviews — one does not imply the other.
+**Self-review disclosure.** Print this whenever it applies. It is no longer attached to a
+question, so it is the only thing standing between a self-reviewed diff and a published
+one. Read it off the result's `code_review` block, not a `head_imp` field — there isn't
+one:
 
-Ask with **AskUserQuestion**:
-- **question**: `"Push this branch and open the endstate PR for review?"`
-- **header**: `"Push & PR?"`
-- **options**:
-  1. `Push & open PR, personas post live reviews` — the script pushes the branch,
-     opens a draft PR (flipped to ready at finalize), and personas post real GitHub
-     reviews on that thread under their own identities. Activates the handoff for the
-     `/imps:prs` monitor.
-  2. `Push & open PR, findings only (no persona posts)` — same push/PR as above, but no
-     persona calls `persona-post.sh`; every verdict returns in
-     `run_complete.findings_inline` for you to read or post yourself. Use this when the
-     disclosure above applies and you'd rather a human than a bot identity be the first
-     to put a verdict on the record.
-  3. `Not yet` — no push, no PR. The persona panel returns its findings in
-     `run_complete.findings_inline`; the branch stays local and no PR monitor starts.
+- `code_review.rounds > 0` — this session's own fix agents wrote code directly into the
+  diff in response to review findings. Say so before asking below.
+- `code_review_override` non-null — a review completed with findings still standing and
+  they were accepted on the record. Name the rationale.
+- `code_review_skipped` non-null — **this diff was never reviewed at all.** Lead with
+  that: nothing downstream will catch what a review would have.
 
-Opening the endstate PR is the default for free-text runs that produced code changes —
-only `Not yet` skips it. Option 2 exists specifically for the self-review case named in
-the disclosure above — offer it deliberately, not as a throwaway third choice. Persist
-exactly `PR: yes`, `PR: yes, no-post`, or `PR: no` and re-invoke. The script then runs the
-PR + persona panel + fix loop + finalize steps in the same invocation.
+**Do not ask — derive it.** `endstate` already answered this in Phase 1 Step 7; asking
+again is the interruption that contract exists to remove. Print the summary above so the
+operator *sees* what is about to be published, then persist the decision yourself and
+re-invoke:
+
+- **there is a diff** (`diff_stat` is non-empty) **and `endstate` is `"pr"`, `"merge"` or
+  `"release"`** → persist `PR: yes`.
+- **no diff** — a query- or publish-only run, or every branch already merged by a prior
+  invocation → persist `PR: no`. There is nothing to open a PR against, and an empty PR
+  is worse than none.
+
+`PR: no` remains in the vocabulary for the operator to persist by hand when they want the
+branch kept local despite a diff. It is no longer a question the run asks.
+
+**Print before you persist, not after.** The DoD callouts and the self-review disclosure
+above are the operator's only chance to catch a bad publish before it happens — they are
+now a *report* rather than a gate, which makes printing them faithfully more important,
+not less. If any DoD criterion is `unsatisfied`, say so prominently; if
+`code_review_skipped` is set, lead with it.
+
+**The persona panel never posts.** Its verdicts return in
+`run_complete.findings_inline` for you to read. Personas used to publish real GitHub
+reviews under their own App identities, which made posting a separate authorization; that
+is gone. The OCR rounds are this run's on-the-record code review, and five bot-authored
+approvals of a diff this same session wrote read as independent sign-off without being it.
+
+Pushing and opening is all this decision covers. Whether the run then *merges* is
+`endstate` — a run whose endstate is `"pr"` stops at a green PR either way.
+
+Consolidation ends here. The next invocation is Phase 5.
+
+---
+
+## 🚢 Phase 5 — PR
+
+**PR, Merge, or Release — whichever the operator chose in Phase 1 Step 7.** The phase is
+the same work either way; `endstate` decides only how far it goes.
+
+| Step | What happens | Blocks as |
+| --- | --- | --- |
+| 🚀 **1 — Open** | push the branch, open the draft PR | — |
+| 🎭 **2 — Panel** | five personas + fix loop, `--personas` only | `unresolved_findings` |
+| 🟢 **3 — Green** | review comments, failing checks, base-branch conflicts — bounded rounds | hands off at the cap |
+| 🏁 **4 — Close** | merge, then release, as far as `endstate` allows | hands off if refused |
+| 🛬 **5 — Land** | final banner, monitor handoff, learnings | returns `final` or `done` |
+
+The PR exists and now has to be driven to a state someone would merge: the persona panel
+(when `--personas` was passed) and its fix loop, then review comments, failing checks, and
+base-branch conflicts, each repaired and re-pushed for a **bounded** number of rounds.
+Where it stops is `endstate`:
+
+| `endstate` | Phase 5 ends when |
+| --- | --- |
+| `"pr"` | the PR is green. The merge is a human's. |
+| `"merge"` | the PR is green **and merged**. |
+| `"release"` | merged, then a release cut per the repo's own convention. |
+
+**The bound is not optional.** A PR whose checks never go green, or whose comments keep
+arriving, is a loop with no natural end — so it is capped at **three rounds**, the same as
+the gate and persona fix loops, and exhausting them is a hand-off, not a failure.
+
+Each round reads the PR's real state (checks, mergeability, unresolved review threads —
+waiting for in-flight CI rather than burning a round on a pending result), fixes what is
+blocking in that order, commits and pushes, then re-reads. A review comment is addressed by
+changing the code when the comment is right; when it isn't, it is left with a stated reason
+— never force a change to silence a reviewer, and never resolve a thread you did not
+address.
+
+**Merging can be refused, and a refusal is final.** Merging a PR this session authored is
+self-approval; the permission classifier blocks it, and there may also be a standing deny
+rule on the merge tool itself — the denial text says which. Neither is worked around:
+don't retry, don't substitute a raw ref push, and don't ask a subagent to do it instead.
+Surface the PR URL and let the operator merge. An `endstate` of `"merge"` that ends in a
+green unmerged PR is a complete run with one step left to a human, and should be reported
+that way rather than as a failure.
+
+**A release follows the repo's own convention or does not happen.** The release step reads
+what the repo already does — existing tags, prior releases, any release workflow, any
+documented process — and follows it. If there is no discernible convention, or a workflow
+already releases on merge, it does nothing and says why. A guessed tag format is worse than
+no release.
+
+The result carries `pr_outcome` — `{rounds, green, merged, released, release_url, refused,
+detail}` — plus the resolved `endstate`. Read the run's ending off that rather than
+inferring it: `green: false` means the cap was hit, `refused: true` means the merge was
+denied, and `merged: false` with `green: true` on a `"merge"` endstate means the PR is
+sitting ready for a human.
+
+Both irreversible steps are guarded by their own persisted marker (`merged_at`,
+`release_url`), written **independently**. A resumed invocation re-reads the PR state and
+re-does neither — but an already-merged PR skips only the merge, so a run that merged and
+then died can still cut the release it never reached. Writing the two together would leave
+that release unmarked forever and re-cut it on every resume.
+
+**Green means mergeability reported `clean`, not merely "not conflicting".** GitHub
+computes it asynchronously and reports unknown while it does; that is the host declining to
+answer, not an all-clear, so it is treated as not-green. The status read waits and re-reads
+rather than reporting unknown early, and a residual unknown hands off.
+
+Relay works exactly as in Phase 4 — the same `operator_decision` patch, the same fresh
+re-invocation. `unresolved_findings` (documented above) is a Phase 5 block: it is the only
+blocked reason that arrives after the PR exists.
 
 **`final`** — the run's substantive work is done (PR ready, panel + fix loop finished,
 Discussion comment posted) but the state file is **not yet deleted** — the script never
@@ -1092,16 +1559,23 @@ order:
    ```
      merged:    #6 <label>    (3 files)
      published: #3 Discussion → https://github.com/...
-     verdicts:  solution-architect APPROVE (posted) · grumpy-engineer APPROVE (inline) · ...
+     verdicts:  solution-architect APPROVE · grumpy-engineer APPROVE · ...
      PR:        <url, "ready for review"> | "no PR — branch is local"
+     endstate:  merge → merged · release → merged, released <url>
    ```
-   Tag each verdict with how it was delivered — `(posted)` for a real GitHub review
-   under that persona's own App identity, `(inline — <reason>)` when it fell back (no
-   App identity installed for this org, or the post was denied) — a partial panel
-   should never read as full independent sign-off. `ux-designer SKIPPED` (no
-   `(posted)`/`(inline)` tag — it never reviewed) means the surface-detection classifier
-   found no browser-renderable surface in the diff; print its one-line reason from
-   `findings`, don't render it as a bare unqualified word.
+   Render the `endstate`/`pr_outcome` line as what actually happened, never as what was
+   authorized — they differ precisely in the cases the operator most needs to see:
+   - `green: false` → `not green after <rounds> round(s) — <detail>; handed over`
+   - `refused: true` → `green, merge refused — <detail>; merge it yourself`
+   - `merged: true, released: false` on a `"release"` endstate → say the merge landed and
+     why no release followed.
+   A `"merge"` endstate that ends unmerged is a complete run with one step left to a
+   human. Report it that way — not as a failure, and not as a success.
+   Every verdict is delivered inline — nothing is posted to GitHub — so no delivery tag
+   is needed. `ux-designer SKIPPED` means the surface-detection classifier found no
+   browser-renderable surface in the diff; print its one-line reason from `findings`
+   rather than rendering it as a bare unqualified word. A SKIPPED persona is an
+   unreviewed lens, not an approval.
 
    Render `run_stats` as a short stats block (Achieved / Decision points / Timing /
    Imps — omit empty sections; `tokens_spent` is typically `null`, per the note above,
@@ -1109,14 +1583,26 @@ order:
    populated (`PR: no`)
    or `unresolved` lists blockers/majors that survived 3 rounds, surface them verbatim —
    they are the review record.
-2. If `prs_monitor` is non-null: invoke the `/imps:prs` skill (no args — it reads the
-   `.prs.json` the script already wrote), then print:
-   `PR monitor active — watching PR #<N>. I'll address comments, fix CI failures, and
-   resolve merge conflicts automatically.`
-   If `pr` is null, print instead: "Branch is local only and no PR was opened — push
-   and open a PR, then invoke `/imps:prs` to activate the monitor."
+2. If `prs_monitor` is non-null, **tell the operator to start the monitor themselves —
+   you cannot.** `/imps:prs` sets `disable-model-invocation: true`, so a `Skill` call
+   fails; the handoff file exists either way, which is exactly why this must be said
+   plainly rather than reported as done. Print:
+   `PR #<N> is ready for monitoring, but nothing is watching it yet — run /imps:prs
+   yourself to start. It reads the handoff file this run already wrote and needs no
+   arguments; until then, comments, CI failures, and conflicts go unattended.`
+   Phase 5 Step 3 already drove this PR to green within its round cap; the monitor is for
+   what arrives *after* the run ends — a late review, a flaky check on a re-run, base-branch
+   drift. Say that, so the offer doesn't read as the run having left the PR unfinished.
+   Never claim an active monitor because `.prs.json` was written.
+   If `pr` is null, print instead: "Branch is local only and no PR was opened — push and
+   open a PR, then run `/imps:prs` yourself to start the monitor."
 3. **Learnings gate — its own explicit step, not folded into printing the summary
-   above.** If `learnings_candidates` is non-empty, present them with **AskUserQuestion**
+   above.** This step only exists on a `final` result, and a `final` result only happens
+   when `learnings_policy` is `"ask"` — under `"auto"` or `"none"` the script appends (or
+   discards) and closes the run out itself, returning `done` directly with no gate. The
+   result's own `learnings_policy` field says which applied.
+
+   If `learnings_candidates` is non-empty, present them with **AskUserQuestion**
    (`multiSelect: true`):
    - **question**: `"Any of these worth saving as a learning?"`
    - **header**: `"Learnings"`
@@ -1158,14 +1644,14 @@ longest-unchanged-*prefix* match, not independent per-call content addressing �
 one call (e.g. a retried gate) causes every subsequent call to re-execute with a fresh
 cache key even when its own inputs are unchanged, which would silently defeat any
 duplicate-post guard that assumed the cache would just skip an unaffected downstream call
-(persona posting, PR creation, the learnings append).
+(PR creation, the learnings append).
 
 So `imps-run.workflow.js` does not use `resumeFromRunId` at all. Every invocation
 described above is a fresh `Workflow` call; the script's first step reads the state file
 and reconciles against it and git ground truth (worktree branches, GOAL.md checkboxes,
 published artifacts) exactly as the old `resume`-mode wrangler did. Idempotency for
 side-effecting steps has two distinct sources: **merge** relies on `git merge` of an
-already-merged branch being a no-op (no marker needed); **PR creation, persona posting,
+already-merged branch being a no-op (no marker needed); **PR creation, the persona panel,
 and the learnings append** each check an explicit persisted marker in the state file
 (`pr`, `verdicts`, `discussion_comment_url`, `learnings_saved`) before acting — the same
 correctness mechanism the old design used, ported in effect rather than replaced by
@@ -1200,14 +1686,16 @@ in the prompts above stand for those current IDs.
   branch autonomously once activated.
 - Never create GitHub PRs without user instruction — the Push & PR gate in Phase 4 is
   that instruction for the endstate PR.
-- Persona live-posting is a separate authorization from push/PR creation, not implied by
-  it — only the `Push & open PR, personas post live reviews` answer (persisted as
-  `PR: yes`) authorizes personas to post real GitHub reviews; `PR: yes, no-post` and
-  `PR: no` both forbid it.
+- Personas never post to GitHub. The panel's verdicts return inline in
+  `run_complete.findings_inline`, always — the OCR review rounds are this run's
+  on-the-record code review, and bot-authored approvals of a diff this same session wrote
+  would read as independent sign-off without being it.
 - If a task touches a production system, pause and confirm before that task runs.
 - The Workflow script owns the run state file and `.prs.json` from handover onward; this
-  session's last direct state-file write is Phase 2 Step 6 (later writes are the
-  `operator_decision` patches in Phase 4, applied via `jq` as documented there).
+  session's last full state-file write is Phase 2 Step 7. Afterwards it patches exactly
+  two fields, both via the documented single-field `jq` pattern: `workflow_script` in
+  Phase 3 Step 1, and `operator_decision` in Phase 4. Never a read-modify-write of the
+  whole file.
 - Worktree isolation is not airtight — after each merge step, don't just trust the
   recorded worktree path; if anything about a merge looks off, check `git status
   --short` and `git log --oneline -3` in the actual main checkout before assuming the
