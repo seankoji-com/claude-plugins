@@ -115,6 +115,20 @@ class PluginForCommandFileTest(unittest.TestCase):
             "imps",
         )
 
+    def test_embedded_md_in_filename_only_strips_suffix(self):
+        """Filename with embedded .md should only strip the final .md suffix.
+
+        This regression guard pins the suffix-only stripping behavior to match
+        installer.js's pluginForCommandFile(), which uses replace(/\.md$/, '').
+        A filename like 'foo.md-extra.md' should strip only the final .md,
+        matching to 'foo.md-extra', not 'foo-extra'.
+        """
+        # If both "foo" and "foo.md-extra" are plugins, "foo.md-extra.md" belongs to the latter
+        result = generate.plugin_for_command_file(
+            "foo.md-extra.md", ["foo", "foo.md-extra"]
+        )
+        self.assertEqual(result, "foo.md-extra")
+
 
 class SubtreeDirectiveTest(unittest.TestCase):
     """REPLACE-SUBTREE / DROP-SUBTREE (issue #164) must be depth-aware -- they swallow a
@@ -208,6 +222,53 @@ class SubtreeDirectiveTest(unittest.TestCase):
         self.assertIn("### Bar", spanned)
         self.assertNotIn("## Baz", spanned)
 
+    def test_replace_subtree_with_fenced_block_containing_closing_fence_before_child(self):
+        """REPLACE-SUBTREE must account for fence state to avoid early termination.
+
+        If a subtree body contains a fenced code block (e.g. a shell heredoc with
+        a closing ``` before any nested heading), find_subtree() must track fence
+        state and not treat the closing ``` as a terminator. This regression test
+        pins the behavior where a closing fence line inside a subtree is NOT
+        mistaken for a heading boundary.
+        """
+        with tempfile.TemporaryDirectory(dir=str(generate.REPO_ROOT)) as tmp:
+            override = self._override(
+                tmp,
+                "<!-- REPLACE-SUBTREE: ## Foo -->\n"
+                "## Foo\n"
+                "Replaced foo and bar (fenced).\n"
+                "<!-- END-SECTION -->\n",
+            )
+            body = "\n".join(
+                [
+                    "# Title",
+                    "",
+                    "## Foo",
+                    "Foo body line.",
+                    "```bash",
+                    "# shell comment",
+                    "```",
+                    "",
+                    "### Bar",
+                    "Bar body line.",
+                    "",
+                    "## Baz",
+                    "Baz body line.",
+                    "",
+                ]
+            )
+            result, held = generate.apply_override(body, override, "test")
+            result = generate.restore_overrides(result, held)
+            self.assertIn("Replaced foo and bar (fenced).", result)
+            # The nested ### Bar and its body must be swallowed by the subtree
+            self.assertNotIn("### Bar", result)
+            self.assertNotIn("Bar body line.", result)
+            # But the closing ``` should not be in the output either (it was inside Foo's subtree)
+            self.assertNotIn("```", result)
+            # The sibling ## Baz should remain
+            self.assertIn("## Baz", result)
+            self.assertIn("Baz body line.", result)
+
     def test_replace_subtree_requires_a_heading_line(self):
         with tempfile.TemporaryDirectory(dir=str(generate.REPO_ROOT)) as tmp:
             path = Path(tmp) / "bad.md"
@@ -223,6 +284,46 @@ class SubtreeDirectiveTest(unittest.TestCase):
             path.write_text("<!-- DROP-SUBTREE: not a heading -->\n")
             with self.assertRaises(generate.GenerateError):
                 generate.parse_override(path)
+
+    def test_drop_subtree_with_fenced_block_containing_child_heading(self):
+        """DROP-SUBTREE must account for fence state when detecting child boundaries.
+
+        Similar to the REPLACE-SUBTREE case: if a subtree body contains a fenced
+        code block with nested headings and closing fence delimiters, find_subtree()
+        must track fence state correctly so that neither the closing ``` nor any
+        heading after it (but within the same fence scope) prematurely end the span.
+        """
+        with tempfile.TemporaryDirectory(dir=str(generate.REPO_ROOT)) as tmp:
+            override = self._override(tmp, "<!-- DROP-SUBTREE: ## Foo -->\n")
+            body = "\n".join(
+                [
+                    "# Title",
+                    "",
+                    "## Foo",
+                    "Foo body line.",
+                    "```bash",
+                    "# shell comment",
+                    "```",
+                    "",
+                    "### Bar",
+                    "Bar body line.",
+                    "",
+                    "## Baz",
+                    "Baz body line.",
+                    "",
+                ]
+            )
+            result, held = generate.apply_override(body, override, "test")
+            result = generate.restore_overrides(result, held)
+            # The entire subtree (Foo, fenced block, Bar child, and closing fence) must be dropped
+            self.assertNotIn("## Foo", result)
+            self.assertNotIn("Foo body line.", result)
+            self.assertNotIn("```", result)
+            self.assertNotIn("### Bar", result)
+            self.assertNotIn("Bar body line.", result)
+            # But the sibling ## Baz should remain
+            self.assertIn("## Baz", result)
+            self.assertIn("Baz body line.", result)
 
 
 if __name__ == "__main__":
