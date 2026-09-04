@@ -1,72 +1,84 @@
 #!/usr/bin/env bash
-# Deterministic stand-in for the real `gh` CLI. tests/run.sh prepends this
+# Deterministic stand-in for the real `curl` CLI. tests/run.sh prepends this
 # stub's directory to PATH so scripts under test see fixed output instead of
 # making live network calls.
 #
-# Exec fixtures can vary stub behavior by passing specific values as arguments.
-# search-repos.sh fixtures: pass a query starting with "FAIL-" to trigger a
-# search failure (auth/network error simulation), or a normal query for success.
+# Only babysitter's list-prs.sh calls curl today, for the GraphQL round trip it
+# moved off `gh api graphql` to route around a sandbox TLS-trust mismatch (see
+# list-prs.sh's header comment). This stub understands exactly that call shape:
+#   curl -sS -o <file> -w '%{http_code}' -H ... -X POST --data <json> <url>
+# It writes a response body to -o's file and prints an HTTP status code to
+# stdout, mirroring curl's own -w behavior.
 set -euo pipefail
 
-case "$1" in
-  auth)
-    if [ "${2:-}" = "token" ]; then
-      echo "stub-gh-token"
-      exit 0
-    fi
-    echo "stub gh: unhandled auth subcommand: ${2:-}" >&2
-    exit 1
+out_file=""
+data=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+  -o)
+    out_file="${2:-}"
+    shift 2
     ;;
-  search)
-    # Check if query argument (position after "repos") starts with "FAIL-" to simulate failure.
-    # gh search repos "<query>" --limit ... => $1=search, $2=repos, $3=<query>
-    if [[ "${3:-}" == FAIL-* ]]; then
-      echo "stub gh: search failed (simulated error)" >&2
-      exit 1
-    fi
-    echo '[{"fullName":"acme/example","description":"stub result","stargazersCount":42,"updatedAt":"2026-01-01T00:00:00Z","license":{"key":"mit"},"url":"https://github.com/acme/example"}]'
+  --data)
+    data="${2:-}"
+    shift 2
     ;;
-  repo)
-    echo '{"isArchived":false,"pushedAt":"2026-01-01T00:00:00Z","diskUsage":1234,"licenseInfo":{"key":"mit"},"description":"stub repo"}'
+  *)
+    shift
     ;;
-  api)
-    if [ "${2:-}" = "graphql" ]; then
-      # babysitter list-prs.sh. Behavior is selected from the search query the
-      # script builds, the same way the search branch above uses a FAIL- prefix:
-      # an org named FAIL-* simulates a failed query.
-      if printf '%s\n' "$@" | grep -q 'org:FAIL-'; then
-        echo 'stub gh: GraphQL query failed (simulated error)' >&2
-        exit 1
-      fi
-      # Single-PR form: list-prs.sh passes -F number=<N>, and the response shape is
-      # repository.pullRequest rather than search.nodes. #99 is MERGED, to pin that a
-      # finished PR is filtered out — the single-PR query has no is:open qualifier to
-      # do it, and pr-events.sh --exit-when-empty only terminates because it happens.
-      if printf '%s\n' "$@" | grep -q '^number='; then
-        pr_number=$(printf '%s\n' "$@" | sed -n 's/^number=//p' | head -1)
-        if [ "$pr_number" = "99" ]; then
-          pr_state="MERGED"
-        else
-          pr_state="OPEN"
-        fi
-        cat <<GRAPHQL_ONE_PR
+  esac
+done
+
+[ -n "$out_file" ] || {
+  echo "stub curl: missing -o" >&2
+  exit 1
+}
+[ -n "$data" ] || {
+  echo "stub curl: missing --data" >&2
+  exit 1
+}
+
+q_val=$(printf '%s' "$data" | jq -r '.variables.q // empty')
+pr_number=$(printf '%s' "$data" | jq -r '.variables.number // empty')
+
+# babysitter list-prs.sh's own FAIL- convention (see tests/lib/stubs/gh's graphql
+# branch): an org/repo qualifier starting with FAIL- simulates a failed query.
+case "$q_val" in
+org:FAIL-* | repo:FAIL-*)
+  echo 'stub curl: GraphQL query failed (simulated error)' >"$out_file"
+  echo "500"
+  exit 0
+  ;;
+esac
+
+if [ -n "$pr_number" ]; then
+  # Single-PR form. #99 is MERGED, to pin that a finished PR is filtered out — the
+  # single-PR query has no is:open qualifier to do it, and pr-events.sh
+  # --exit-when-empty only terminates because it happens.
+  pr_state="OPEN"
+  [ "$pr_number" = "99" ] && pr_state="MERGED"
+  cat >"$out_file" <<GRAPHQL_ONE_PR
 {"data":{"viewer":{"login":"stubuser"},"repository":{"pullRequest":
 {"number":${pr_number},"title":"single","url":"https://github.com/acme/app/pull/${pr_number}","state":"${pr_state}","isDraft":false,"isCrossRepository":false,"mergeable":"MERGEABLE","author":{"login":"stubuser"},"headRefName":"feat/single","baseRefName":"main","baseRef":{"target":{"oid":"base1111111111111111111111111111111111111"}},"repository":{"nameWithOwner":"acme/app"},"comments":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[{"commit":{"oid":"head9999999999999999999999999999999999999","statusCheckRollup":null}}]}}
 }}}
 GRAPHQL_ONE_PR
-        exit 0
-      fi
-      # One PullRequest per case the filter has to get right:
-      #   #1 viewer's, mixed checks — FAILURE + QUEUED + SKIPPED. Only the
-      #      FAILURE is a failing check; a queued run is pending, not failing.
-      #   #2 a bot's — kept by default.
-      #   #3 another human's — dropped unless --all-authors.
-      #   #4 viewer's but a draft — dropped unless --include-drafts.
-      #   #5 viewer's but from a fork — dropped unless --include-forks.
-      #   #6 viewer's, conflicting, StatusContext checks (FAILURE + PENDING) and
-      #      two unresolved review threads; a third thread is resolved and a
-      #      fourth outdated, so neither counts.
-      search_fixture=$(cat <<'GRAPHQL_FIXTURE'
+  echo "200"
+  exit 0
+fi
+
+# One PullRequest per case the filter has to get right — same fixture data as
+# tests/lib/stubs/gh's graphql branch, kept in sync by hand since the two stubs
+# serve the same script from two different transports.
+#   #1 viewer's, mixed checks — FAILURE + QUEUED + SKIPPED. Only the
+#      FAILURE is a failing check; a queued run is pending, not failing.
+#   #2 a bot's — kept by default.
+#   #3 another human's — dropped unless --all-authors.
+#   #4 viewer's but a draft — dropped unless --include-drafts.
+#   #5 viewer's but from a fork — dropped unless --include-forks.
+#   #6 viewer's, conflicting, StatusContext checks (FAILURE + PENDING) and
+#      two unresolved review threads; a third thread is resolved and a
+#      fourth outdated, so neither counts.
+search_fixture=$(cat <<'GRAPHQL_FIXTURE'
 {"data":{"viewer":{"login":"stubuser"},"search":{"issueCount":6,"nodes":[
 {"number":1,"title":"mixed checks","url":"https://github.com/acme/app/pull/1","state":"OPEN","isDraft":false,"isCrossRepository":false,"mergeable":"MERGEABLE","author":{"login":"stubuser"},"headRefName":"feat/one","baseRefName":"main","baseRef":{"target":{"oid":"base1111111111111111111111111111111111111"}},"repository":{"nameWithOwner":"acme/app"},"comments":{"nodes":[{"databaseId":11,"body":"please fix"},{"databaseId":12,"body":"[babysitter] Fixed — bumped the timeout."}]},"reviews":{"nodes":[{"databaseId":21,"state":"CHANGES_REQUESTED"}]},"reviewThreads":{"nodes":[{"isResolved":false,"isOutdated":false,"comments":{"nodes":[{"databaseId":31,"body":"this leaks"},{"databaseId":32,"body":"[babysitter] Fixed — closed the handle."}]}}]},"commits":{"nodes":[{"commit":{"oid":"head1111111111111111111111111111111111111","statusCheckRollup":{"state":"FAILURE","contexts":{"nodes":[
   {"__typename":"CheckRun","name":"test","conclusion":"FAILURE"},
@@ -86,30 +98,21 @@ GRAPHQL_ONE_PR
   {"__typename":"StatusContext","context":"ci/pending","state":"PENDING"}]}}}}]}}
 ]}}}
 GRAPHQL_FIXTURE
-      )
-      # Honour the search qualifier the script built, so a --repo sweep fixture is
-      # actually scoped rather than passing because the stub ignored the scope.
-      # issueCount is recomputed so the truncation warning stays consistent.
-      q_val=$(printf '%s\n' "$@" | sed -n 's/^q=//p' | head -1)
-      case "$q_val" in
-      repo:*)
-        want=${q_val#repo:}
-        want=${want%% *}
-        printf '%s' "$search_fixture" | jq -c --arg want "$want" '
-          .data.search.nodes |= map(select(.repository.nameWithOwner == $want))
-          | .data.search.issueCount = (.data.search.nodes | length)'
-        ;;
-      *)
-        printf '%s\n' "$search_fixture"
-        ;;
-      esac
-      exit 0
-    fi
-    # readme-peek.sh: gh api repos/OWNER/REPO/readme -q .content
-    printf 'Stub README\n\nHello from the stub gh command.\n' | base64
-    ;;
-  *)
-    echo "stub gh: unhandled subcommand: $1" >&2
-    exit 1
-    ;;
+)
+
+# Honour the search qualifier the script built, so a --repo sweep fixture is
+# actually scoped rather than passing because the stub ignored the scope.
+# issueCount is recomputed so the truncation warning stays consistent.
+case "$q_val" in
+repo:*)
+  want=${q_val#repo:}
+  want=${want%% *}
+  printf '%s' "$search_fixture" | jq -c --arg want "$want" '
+    .data.search.nodes |= map(select(.repository.nameWithOwner == $want))
+    | .data.search.issueCount = (.data.search.nodes | length)' >"$out_file"
+  ;;
+*)
+  printf '%s' "$search_fixture" >"$out_file"
+  ;;
 esac
+echo "200"

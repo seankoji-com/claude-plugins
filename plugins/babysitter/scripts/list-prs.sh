@@ -13,6 +13,13 @@
 # head, check rollup, review threads and the newest comment/review ids — so a poll
 # loop over dozens of PRs costs one request, not one per PR per field.
 #
+# The GraphQL round trip itself goes over curl, not `gh api graphql`. Under the
+# Claude Code sandbox's network filter, gh's Go TLS stack fails cert verification
+# for this endpoint (x509 errors) while curl completes the same handshake cleanly —
+# observed consistently enough to be a real routing difference, not a flake. `gh`
+# is still required, but only for `gh auth token`, a local credential read with no
+# network round trip of its own.
+#
 # Usage:
 #   list-prs.sh --org <org> [options]            # every eligible open PR in the org
 #   list-prs.sh --repo <owner/name> [options]    # every eligible open PR in one repo
@@ -86,18 +93,50 @@ case "$RETRY_BASE_SECS" in
   ;;
 esac
 
-gh_graphql_retry() {
-  local attempt=1 out=""
-  while :; do
-    if out="$(gh api graphql "$@" 2>&1)"; then
-      printf '%s' "$out"
-      return 0
-    fi
-    if [ "$attempt" -ge 3 ]; then
-      printf '%s' "$out"
+# Cached across retries and across the two call sites below: a local credential
+# read (no network), so nothing is lost by asking once.
+GH_TOKEN=""
+gh_token() {
+  if [ -z "$GH_TOKEN" ]; then
+    if ! GH_TOKEN="$(gh auth token 2>&1)"; then
+      echo "list-prs.sh: gh auth token failed: ${GH_TOKEN}" >&2
       return 1
     fi
-    echo "list-prs.sh: GitHub query failed (attempt ${attempt}/3), retrying — ${out}" >&2
+  fi
+  printf '%s' "$GH_TOKEN"
+}
+
+# Takes an already-assembled GraphQL request body (query + variables, as JSON) and
+# POSTs it directly — see the header comment above for why curl rather than
+# `gh api graphql`. Mirrors gh_graphql_retry's old contract exactly: prints the
+# response body and returns 0 on success (HTTP 200), or prints the last error and
+# returns 1 after three attempts.
+curl_graphql_retry() {
+  local body="$1" attempt=1 code="" content="" tmp errfile token
+  token="$(gh_token)" || return 1
+  tmp="$(mktemp "${TMPDIR:-/tmp}/babysitter-graphql.XXXXXX")" || {
+    echo "list-prs.sh: mktemp failed for graphql response" >&2
+    return 1
+  }
+  errfile="${tmp}.err"
+  while :; do
+    code="$(curl -sS -o "$tmp" -w '%{http_code}' \
+      -H "Authorization: bearer ${token}" \
+      -H "Content-Type: application/json" \
+      -X POST --data "$body" \
+      https://api.github.com/graphql 2>"$errfile")" || code="000"
+    if [ "$code" = "200" ]; then
+      cat "$tmp"
+      rm -f "$tmp" "$errfile"
+      return 0
+    fi
+    content="$(cat "$tmp" "$errfile" 2>/dev/null)"
+    if [ "$attempt" -ge 3 ]; then
+      printf '%s' "$content"
+      rm -f "$tmp" "$errfile"
+      return 1
+    fi
+    echo "list-prs.sh: GitHub query failed (attempt ${attempt}/3), retrying — ${content}" >&2
     sleep "$((attempt * RETRY_BASE_SECS))"
     attempt=$((attempt + 1))
   done
@@ -144,6 +183,7 @@ while [ $# -gt 0 ]; do
 done
 
 command -v gh >/dev/null 2>&1 || die "gh CLI not found on PATH"
+command -v curl >/dev/null 2>&1 || die "curl not found on PATH"
 command -v jq >/dev/null 2>&1 || die "jq not found on PATH"
 
 case "$LIMIT" in
@@ -240,10 +280,9 @@ if [ -z "$PR_NUMBER" ]; then
     }
   }
   ${PR_FRAGMENT}"
-  RAW=$(gh_graphql_retry \
-    -f query="$QUERY" \
-    -f q="${SCOPE_QUALIFIER} is:pr is:open" \
-    -F limit="$LIMIT") || die "GitHub query failed after 3 attempts: ${RAW}" 3
+  BODY=$(jq -n --arg query "$QUERY" --arg q "${SCOPE_QUALIFIER} is:pr is:open" --argjson limit "$LIMIT" \
+    '{query: $query, variables: {q: $q, limit: $limit}}')
+  RAW=$(curl_graphql_retry "$BODY") || die "GitHub query failed after 3 attempts: ${RAW}" 3
   NODES_PATH='.data.search.nodes'
 
   # GitHub caps a search page at 100 and this script does not paginate. Silently
@@ -273,11 +312,9 @@ else
     }
   }
   ${PR_FRAGMENT}"
-  RAW=$(gh_graphql_retry \
-    -f query="$QUERY" \
-    -f owner="$OWNER" \
-    -f name="$NAME" \
-    -F number="$PR_NUMBER") || die "GitHub query failed after 3 attempts: ${RAW}" 3
+  BODY=$(jq -n --arg query "$QUERY" --arg owner "$OWNER" --arg name "$NAME" --argjson number "$PR_NUMBER" \
+    '{query: $query, variables: {owner: $owner, name: $name, number: $number}}')
+  RAW=$(curl_graphql_retry "$BODY") || die "GitHub query failed after 3 attempts: ${RAW}" 3
   NODES_PATH='[.data.repository.pullRequest]'
 fi
 
