@@ -161,8 +161,22 @@ esac
 export OCR_NO_UPDATE=1  # else bin/ocr.js detaches an updater that reinstalls mid-run
 if ! "$OCR_BIN" version 2>/dev/null | grep -qF "v${OCR_PIN_VERSION} "; then
   command -v npm >/dev/null 2>&1 || fail ocr_missing "npm is required to install @alibaba-group/open-code-review@${OCR_PIN_VERSION}"
-  npm install -g "@alibaba-group/open-code-review@${OCR_PIN_VERSION}" >/dev/null 2>&1 \
-    || fail ocr_install_failed "cannot install @alibaba-group/open-code-review@${OCR_PIN_VERSION}"
+  OCR_INSTALL_LOG="$(mktemp "${TMPDIR:-/tmp}/imps-ocr-install.XXXXXX")" || fail tmpdir_failed 'cannot create ocr install log'
+  if ! npm install -g "@alibaba-group/open-code-review@${OCR_PIN_VERSION}" >"$OCR_INSTALL_LOG" 2>&1; then
+    # A root-owned/corrupt npm cache (npm/cli#4828) makes `npm install -g` fail with
+    # EPERM before any network call — near-instant, unlike a real registry failure, and
+    # indistinguishable from one once stderr is thrown away. Retry once against a
+    # throwaway cache so a single bad machine state doesn't need a manual `sudo chown`
+    # before this gate can run; surface the real npm error either way instead of the
+    # unhelpful generic failure that made this bug look like a PATH/fnm problem.
+    if grep -qE 'code EPERM|cache folder contains root-owned files' "$OCR_INSTALL_LOG"; then
+      NPM_CACHE_RETRY="$(mktemp -d "${TMPDIR:-/tmp}/imps-ocr-npm-cache.XXXXXX")" || fail tmpdir_failed 'cannot create fallback npm cache'
+      npm install -g "@alibaba-group/open-code-review@${OCR_PIN_VERSION}" --cache "$NPM_CACHE_RETRY" >"$OCR_INSTALL_LOG" 2>&1 \
+        || fail ocr_install_failed "cannot install @alibaba-group/open-code-review@${OCR_PIN_VERSION} — npm cache is corrupt, run: sudo chown -R \$(id -u):\$(id -g) \"\$(npm config get cache)\" — $(tail -n 5 "$OCR_INSTALL_LOG" | tr '\n' ' ')"
+    else
+      fail ocr_install_failed "cannot install @alibaba-group/open-code-review@${OCR_PIN_VERSION}: $(tail -n 5 "$OCR_INSTALL_LOG" | tr '\n' ' ')"
+    fi
+  fi
 fi
 command -v "$OCR_BIN" >/dev/null 2>&1 || fail ocr_missing 'ocr is not on PATH'
 "$OCR_BIN" version 2>/dev/null | grep -qF "v${OCR_PIN_VERSION} " \
