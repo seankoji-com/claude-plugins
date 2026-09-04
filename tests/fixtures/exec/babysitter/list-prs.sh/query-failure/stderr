@@ -1,3 +1,3 @@
-list-prs.sh: GitHub query failed (attempt 1/3), retrying — stub gh: GraphQL query failed (simulated error)
-list-prs.sh: GitHub query failed (attempt 2/3), retrying — stub gh: GraphQL query failed (simulated error)
-list-prs.sh: GitHub query failed after 3 attempts: stub gh: GraphQL query failed (simulated error)
+list-prs.sh: GitHub query failed (attempt 1/3), retrying — stub curl: GraphQL query failed (simulated error)
+list-prs.sh: GitHub query failed (attempt 2/3), retrying — stub curl: GraphQL query failed (simulated error)
+list-prs.sh: GitHub query failed after 3 attempts: stub curl: GraphQL query failed (simulated error)
