@@ -257,7 +257,7 @@ and returns the outcome — this orchestrator never runs the merge. Handle what 
 | agent `status` | what it means | what to do |
 | --- | --- | --- |
 | `merged` | `merge-pr.sh` reported `MERGED` | drop it from the roster; remove the worktree now if you like rather than waiting for `GONE` |
-| `done` | blockers cleared; `merge.result` says how the merge attempt went | if `automerge=armed`, GitHub lands it on its own — watch and report; otherwise re-dispatch once so the agent completes the merge (contract step 5) |
+| `done` | blockers cleared; `merge.result` says how the merge attempt went | if `merge.automerge_armed` is `true`, GitHub lands it on its own — watch and report; otherwise re-dispatch once so the agent completes the merge (contract step 5) |
 | `blocked`, `blocked_on` starting `merge:` | the merge was refused on live state | map to a Step 8 event below — an event, not a retry target |
 | `partial` / `blocked` on code or judgment | cleared some blockers; needs a human or a stronger model | Step 6's escalation rules |
 
