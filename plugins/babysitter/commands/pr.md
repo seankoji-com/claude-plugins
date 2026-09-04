@@ -30,6 +30,20 @@ force-pushed.
 
 ---
 
+## Status line
+
+End every turn — after the snapshot, after a dispatch, after each event handled — with
+one line covering this PR:
+
+`owner/repo#N — status: <clean|dispatched|done|partial|blocked|merged> · conflicts:
+<none|conflict> · comments: <none|N unresolved> · checks: <green|failing: <names>>`
+
+`status` is this run's own tracking — `clean` from Step 3 until dispatched, then
+whatever the agent last returned, `merged` once `merge-pr.sh` reports `MERGED`. The
+other three come from the latest snapshot.
+
+---
+
 ## Step 0 — Load what previous runs learned
 
 Read `~/.claude/babysitter/learnings.md` if it exists — `$BABYSITTER_HOME/learnings.md`
@@ -142,6 +156,22 @@ Only for a blocker in the code or the judgment, re-dispatch **once** at
 is still blocked after that, report and leave it:
 `⚠ <repo>#<N> still blocked after escalation: <reason>`
 
+If the agent (or the escalation) returns `status: "done"`, attempt the merge before
+moving on to the watch below:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/merge-pr.sh --repo <owner/repo> --pr <N>
+```
+
+A green check and no conflicts is not the same thing as "GitHub will accept the merge
+right now" — `merge-pr.sh` fixes the two blockers that need no judgment call (the
+branch falling behind base, a review thread answered but never actually marked
+resolved) and merges. `MERGED ...` ends this command: report it, clean up per Step 7.
+`BLOCKED ... reason=branch_protection` is outside this plugin's authority (a required
+human reviewer, a code-scanning threshold, an org ruleset) — **never chase it with
+`--admin`**; report it and continue to the watch below. Any other `BLOCKED` reason,
+treat as the matching event in Step 6's table below.
+
 ## Step 6 — Watch until it merges
 
 ```
@@ -163,7 +193,7 @@ Handle events with the same table as `/babysitter:org` Step 8:
 | `CONFLICT`, `BASE-MOVED` | re-dispatch that PR, blocker = conflict / base moved (the agent checks whether it is actually behind) |
 | `CHECKS-FAILED` | re-dispatch, blocker = the named checks |
 | `REVIEW`, `COMMENT`, `THREADS` | re-fetch comments (Step 5) and re-dispatch |
-| `CHECKS-GREEN` | report it; nothing to do |
+| `CHECKS-GREEN` | this PR has been dispatched at least once (it is under this watch) — attempt `merge-pr.sh` per Step 5 above; report the result |
 | `DRAFT` | the PR went back to draft — stop the watch and say so |
 | `GONE` | merged, closed, or out of scope — go to Step 7 |
 | `ERROR` | report; the monitor is still polling |
