@@ -212,10 +212,23 @@ fi
 
 # ---- Run ---------------------------------------------------------------------------
 export HOME="$TMP_ROOT/home"          # keep `ocr config set` out of the real HOME
-export OCR_LLM_URL="$OCR_URL"
-export OCR_LLM_TOKEN="$OCR_TOKEN"
-export OCR_LLM_MODEL="$MODEL"
 export OCR_LLM_TIMEOUT="${IMPS_OCR_LLM_TIMEOUT:-180}"
+
+# The OCR_LLM_URL/TOKEN/MODEL env-var path silently defaults to the Anthropic Messages
+# protocol regardless of the endpoint, producing a doubled "/v1/v1/messages" 404 against
+# an OpenAI-compatible proxy like this one — every file review fails with no LLM-side
+# error. `ocr config set provider litellm` + `providers.litellm.*` goes through the same
+# built-in "litellm" provider entry OpenCode itself uses, which already declares
+# protocol "openai" — verified directly against the real endpoint (`ocr llm test` ->
+# "Connection test successful") before this was written.
+"$OCR_BIN" config set provider litellm >/dev/null 2>&1 \
+  || fail ocr_config_failed 'cannot set ocr provider'
+"$OCR_BIN" config set model "$MODEL" >/dev/null 2>&1 \
+  || fail ocr_config_failed 'cannot set ocr model'
+"$OCR_BIN" config set providers.litellm.url "$OCR_URL" >/dev/null 2>&1 \
+  || fail ocr_config_failed 'cannot set ocr provider url'
+"$OCR_BIN" config set providers.litellm.api_key "$OCR_TOKEN" >/dev/null 2>&1 \
+  || fail ocr_config_failed 'cannot set ocr provider api_key'
 
 "$OCR_BIN" config set language English >/dev/null 2>&1 || true
 
