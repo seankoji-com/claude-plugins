@@ -11,7 +11,7 @@
 #
 # Asserts:
 #   - STATE_SCHEMA.properties.tasks.items.additionalProperties === true  (the landmine)
-#   - the six schema-4 review-discipline fields are TOP-LEVEL and correctly shaped
+#   - the OCR review-discipline fields are TOP-LEVEL and correctly shaped
 #   - a schema-4 state object validates, AND a hand-written schema-3 one still does
 #     (the schema-4 fields are additive; none of them joined `required`)
 #   - negative controls: bad enum / missing required / wrong item type all FAIL to validate
@@ -91,9 +91,9 @@ assert(
 )
 
 // --- Schema 4: the review-discipline fields ------------------------------------------
-// All six are TOP-LEVEL for the same reason escalated_tasks is: patchState() merges
+// They are TOP-LEVEL for the same reason escalated_tasks is: patchState() merges
 // top-level keys only, so a field on the task item is writable at plan time and never
-// again. All six are additive and OPTIONAL — a schema-3 state file must still load, which
+// again. They are additive and OPTIONAL — a schema-3 state file must still load, which
 // the legacy assertion below proves.
 const SCHEMA4 = {
   parked_findings: (s) =>
@@ -116,6 +116,7 @@ const SCHEMA4 = {
   code_review_findings: (s) => Array.isArray(s.type) && s.type.indexOf('array') !== -1 && s.type.indexOf('null') !== -1,
   code_review_sessions: (s) => Array.isArray(s.type) && s.type.indexOf('array') !== -1 && s.type.indexOf('null') !== -1,
   code_review_override: (s) => Array.isArray(s.type) && s.type.indexOf('string') !== -1 && s.type.indexOf('null') !== -1,
+  code_review_warning: (s) => Array.isArray(s.type) && s.type.indexOf('object') !== -1 && s.type.indexOf('null') !== -1 && s.additionalProperties === true,
 }
 const topRequired = S.required || []
 for (const k of Object.keys(SCHEMA4)) {
@@ -127,6 +128,27 @@ for (const k of Object.keys(SCHEMA4)) {
     '`' + k + '` is ' + JSON.stringify(P[k]) + ' (and must stay OUT of top-level required)'
   )
 }
+
+// The helper still returns a blocked contract for an unavailable provider; it is the
+// workflow policy that must turn that operational result into a disclosed warning. These
+// source-level assertions protect both halves of that boundary without a live Workflow
+// agent call.
+const workflowSource = src.join('\n')
+assert(
+  'ocr-operational-failures-do-not-block',
+  !workflowSource.includes("{ status: 'blocked', reason: 'code_review_unavailable'"),
+  'OCR unavailability still returns a blocked workflow result'
+)
+assert(
+  'ocr-warning-is-persisted',
+  (workflowSource.match(/code_review_warning/g) || []).length >= 4 && workflowSource.includes('warning: codeReviewWarning') && workflowSource.includes('verdict: codeReviewWarning ? null'),
+  'OCR warning is not carried from preflight through the authorization result'
+)
+assert(
+  'ocr-major-findings-remain-blocking',
+  workflowSource.includes("reason: 'code_review_red'"),
+  'CHANGES_REQUESTED findings no longer have a blocking path'
+)
 
 // --- Minimal validator (type/enum/properties/required/items/additionalProperties) -----
 function validate(schema, value, path, errs) {
@@ -192,7 +214,7 @@ function sample() {
     fix_cycles: 1,
     posting_mode: 'live',
     review_engine: 'ocr', review_model: 'openai/gpt-5.4', code_review_rounds: 1,
-    code_review_findings: [], code_review_sessions: ['ses_test'], code_review_override: null,
+    code_review_findings: [], code_review_sessions: ['ses_test'], code_review_override: null, code_review_warning: { status: 'blocked', reason: 'ocr_failed' },
   }
 }
 
@@ -241,7 +263,7 @@ badVerdictsPending.verdicts_pending = 'not an object'
 assert('negative/verdicts_pending-wrong-type', validate(S, badVerdictsPending).length > 0, 'validator accepted verdicts_pending: "not an object"')
 
 // A truncated run must not pass silently.
-const EXPECTED_ASSERTS = 50
+const EXPECTED_ASSERTS = 55
 if (asserts !== EXPECTED_ASSERTS) {
   console.log('FAIL state-schema/assertion-count')
   console.log('     ran ' + asserts + ' assertions, expected ' + EXPECTED_ASSERTS)

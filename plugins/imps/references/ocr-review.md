@@ -46,7 +46,7 @@ The verdict is derived, since OCR has none of its own: any `blocker` or `major` 
 
 `CHANGES_REQUESTED` findings are fixed by Claude, gates rerun, and a fresh OCR run reviews the new diff. After three repair rounds the run blocks with `code_review_red`; an operator may record `override code review: <rationale>` only then.
 
-`provider_config_missing` means neither the environment nor `opencode.json` yielded an endpoint and credential. `ocr_version_mismatch` means the install did not land on the pin. Timeouts and malformed verdicts are blocking failures, not soft warnings — there is no OpenRouter fallback, no Claude diff review, and no Head Imp code-review supplement.
+`provider_config_missing` means neither the environment nor `opencode.json` yielded an endpoint and credential. `ocr_version_mismatch` means the install did not land on the pin. Provider, installation, timeout, and malformed-output failures are recorded as an OCR-unavailable warning and the workflow continues; the authorization result carries the redacted helper contract so this is never represented as an approval. There is no OpenRouter fallback, Claude diff review, or Head Imp code-review supplement.
 
 ## Why OCR
 

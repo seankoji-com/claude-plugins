@@ -200,11 +200,13 @@ IMPS_PLUGIN_ROOT/scripts/run-ocr.sh \
   --goal <run-record>
 ```
 
-Read the OCR review reference first. The helper is read-only and fail-closed. Missing
-authentication, an unavailable model, timeout, malformed output, or unresolved findings
-blocks publication. For `CHANGES_REQUESTED`, dispatch a repair worker, rerun deterministic
-gates, and start a fresh review. Stop after three failed review rounds unless the user
-provides the exact override instruction and rationale.
+Read the OCR review reference first. The helper is read-only and reports operational
+failures exactly. Missing authentication, an unavailable model, installation failure,
+timeout, or malformed output is recorded as an OCR-unavailable warning and does not block
+publication; never replace it with a Claude review or call it an approval. For
+`CHANGES_REQUESTED`, dispatch a repair worker, rerun deterministic gates, and start a
+fresh review. Stop after three failed review rounds unless the user provides the exact
+override instruction and rationale.
 
 When `--personas` is present, review the approved diff with the applicable persona briefs.
 Use separate read-only subagents, dispatching in waves. Skip the UX persona when the diff

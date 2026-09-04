@@ -154,9 +154,10 @@ code block). It is purely cosmetic — skip silently if absent.
 ## The Head Imp — opus adversarial reviewer
 
 The Head Imp is a reusable one-shot `model: opus` agent that reviews plans adversarially.
-OCR reviews the merged diff in a read-only snapshot after gates pass. A missing setup,
-timeout, malformed output, or unresolved major finding blocks rather than falling back
-to Claude. See `references/ocr-review.md` for endpoint configuration, pinning, and rules.
+OCR reviews the merged diff in a read-only snapshot after gates pass. Missing setup,
+installation failure, timeout, or malformed output is a recorded OCR-unavailable warning,
+not an implicit approval or a Claude fallback. Unresolved major findings still block. See
+`references/ocr-review.md` for endpoint configuration, pinning, and rules.
 
 Invoke it like this (swap in the actual reference and role):
 

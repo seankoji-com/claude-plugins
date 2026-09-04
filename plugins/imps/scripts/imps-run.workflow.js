@@ -166,6 +166,10 @@ const STATE_SCHEMA = {
     code_review_findings: { type: ['array', 'null'], items: { type: 'object', additionalProperties: true } },
     code_review_sessions: { type: ['array', 'null'], items: { type: 'string' } },
     code_review_override: { type: ['string', 'null'] },
+    // Operational OCR failures do not substitute for a review approval. Preserve the
+    // helper's redacted contract so the authorization result can disclose that review
+    // was unavailable while the workflow continues to publication.
+    code_review_warning: { type: ['object', 'null'], additionalProperties: true },
   },
   required: ['schema', 'task', 'branch', 'tasks', 'phase'],
 }
@@ -693,7 +697,7 @@ If the command exits non-zero, still return its final JSON contract. Never subst
 
 function ocrPreflight() {
   return agent(
-    `You are a mechanical wrapper. Do not inspect code. Run exactly \`${args.pluginRoot}/scripts/run-ocr.sh --check\`, capture its final stdout JSON line, and return it unchanged through the required schema. A failure is a hard block; never replace it with a Claude review.`,
+    `You are a mechanical wrapper. Do not inspect code. Run exactly \`${args.pluginRoot}/scripts/run-ocr.sh --check\`, capture its final stdout JSON line, and return it unchanged through the required schema. Never replace it with a Claude review.`,
     { label: 'ocr-review-preflight', phase: 'Preflight', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
   )
 }
@@ -1871,12 +1875,14 @@ if (decision === 'integrate partial') {
 phase('Dispatch')
 if (!state.dispatched_at) {
   const reviewPreflight = await ocrPreflight()
-  if (reviewPreflight.status !== 'ok') {
-    const result = { status: 'blocked', reason: 'code_review_unavailable', detail: reviewPreflight }
-    await saveResult(result)
-    return result
-  }
-  await patchState({ review_engine: 'ocr', review_model: reviewPreflight.model, code_review_rounds: 0, code_review_findings: [], code_review_sessions: [], code_review_override: null }, 'save-review-preflight')
+  // OCR is advisory when the service cannot return a trustworthy contract. Keep the
+  // complete redacted failure record for the authorization result instead of presenting
+  // an invented approval, but do not strand otherwise-tested work on provider setup,
+  // installation, timeout, or malformed-output failures.
+  const codeReviewWarning = reviewPreflight.status === 'ok' && reviewPreflight.verdict
+    ? null
+    : reviewPreflight
+  state = await patchState({ review_engine: 'ocr', review_model: reviewPreflight.model || null, code_review_rounds: 0, code_review_findings: [], code_review_sessions: [], code_review_override: null, code_review_warning: codeReviewWarning }, 'save-review-preflight')
 }
 if (!state.dispatched_at) {
   const pre = await preflight(state)
@@ -1972,15 +1978,17 @@ if (gateOutcome.blockedOn) {
 }
 
 // Gates are deliberately before review. A review-driven fix reruns every gate and is then
-// sent to a fresh OCR run; no Claude review fallback exists on any failure path.
-let codeReview = hasDiff ? await ocrReview(defaultBranch) : { status: 'ok', verdict: 'APPROVE', findings: [], model: state.review_model || 'openai/gpt-5.4', provider: 'openai', session_id: null, duration_ms: 0, cost_usd: null, reason: null }
+// sent to a fresh OCR run; operational OCR failures remain visible warnings, never Claude
+// review fallbacks or invented approvals.
+let codeReviewWarning = state.code_review_warning || null
+let codeReview = codeReviewWarning
+  ? { status: 'ok', verdict: 'APPROVE', findings: [], model: state.review_model || null, provider: 'unavailable', session_id: null, duration_ms: null, cost_usd: null, reason: codeReviewWarning.reason || 'code_review_unavailable' }
+  : hasDiff ? await ocrReview(defaultBranch) : { status: 'ok', verdict: 'APPROVE', findings: [], model: state.review_model || 'openai/gpt-5.4', provider: 'openai', session_id: null, duration_ms: 0, cost_usd: null, reason: null }
 let codeReviewRounds = 0
 let codeReviewSessions = codeReview.session_id ? [codeReview.session_id] : []
-if (codeReview.status !== 'ok') {
-  const result = { status: 'blocked', reason: 'code_review_unavailable', detail: codeReview }
-  await patchState({ code_review_findings: codeReview.findings || [], code_review_sessions: codeReviewSessions }, 'code-review-failed')
-  await saveResult(result)
-  return result
+if (codeReview.status !== 'ok' || !codeReview.verdict) {
+  codeReviewWarning = codeReview
+  codeReview = { ...codeReview, status: 'ok', verdict: 'APPROVE', findings: [] }
 }
 while (codeReview.verdict === 'CHANGES_REQUESTED' && codeReviewRounds < 3) {
   codeReviewRounds += 1
@@ -1994,14 +2002,12 @@ while (codeReview.verdict === 'CHANGES_REQUESTED' && codeReviewRounds < 3) {
   }
   codeReview = await ocrReview(defaultBranch)
   if (codeReview.session_id) codeReviewSessions.push(codeReview.session_id)
-  if (codeReview.status !== 'ok') {
-    const result = { status: 'blocked', reason: 'code_review_unavailable', detail: codeReview }
-    await patchState({ code_review_rounds: codeReviewRounds, code_review_findings: codeReview.findings || [], code_review_sessions: codeReviewSessions }, 'code-review-failed')
-    await saveResult(result)
-    return result
+  if (codeReview.status !== 'ok' || !codeReview.verdict) {
+    codeReviewWarning = codeReview
+    codeReview = { ...codeReview, status: 'ok', verdict: 'APPROVE', findings: [] }
   }
 }
-await patchState({ code_review_rounds: codeReviewRounds, code_review_findings: codeReview.findings, code_review_sessions: codeReviewSessions }, 'save-code-review')
+state = await patchState({ code_review_rounds: codeReviewRounds, code_review_findings: codeReview.findings, code_review_sessions: codeReviewSessions, code_review_warning: codeReviewWarning }, 'save-code-review')
 if (codeReview.verdict === 'CHANGES_REQUESTED') {
   const overridePrefix = 'override code review:'
   const codeReviewOverride = state.operator_decision && state.operator_decision.startsWith(overridePrefix)
@@ -2068,7 +2074,9 @@ const result = {
   status: 'awaiting_authorization',
   merged: mergeResult.merged,
   failed_tasks: dispatchOutcome.failed,
-  code_review: { engine: 'ocr', provider: codeReview.provider, model: codeReview.model, verdict: codeReview.verdict, rounds: codeReviewRounds, findings: codeReview.findings },
+  // `APPROVE` is a control-flow value after an unavailable review, not a claim about
+  // OCR's conclusion. Expose null plus the helper contract in that case.
+  code_review: { engine: 'ocr', provider: codeReviewWarning ? codeReviewWarning.provider : codeReview.provider, model: codeReviewWarning ? codeReviewWarning.model : codeReview.model, verdict: codeReviewWarning ? null : codeReview.verdict, rounds: codeReviewRounds, findings: codeReview.findings, warning: codeReviewWarning },
   code_review_override: state.operator_decision && state.operator_decision.startsWith('override code review:') ? state.operator_decision.slice('override code review:'.length).trim() : null,
   gates: gateOutcome.results,
   diff_stat: diffStatInfo.diff_stat,
