@@ -39,16 +39,23 @@ base or default branch, never force-pushed. The roster gate is where you approve
 ## Status table
 
 End every turn — the roster gate, the end of a dispatch round, each batch of events
-handled in the watch — with a table covering every PR currently on the roster:
+handled in the watch — with a table covering every PR currently on the roster. Drop a
+PR entirely the turn it merges or closes rather than keeping a row for it:
 
-| PR | Status | Conflicts | Comments | Checks |
-| --- | --- | --- | --- | --- |
-| `#123` | `clean` \| `dispatched` \| `done` \| `partial` \| `blocked` \| `merged` | `none` \| `conflict` | `none` \| `N unresolved` | `green` \| `failing: <names>` |
+| PR | mergeStateStatus | Blocker |
+| --- | --- | --- |
+| `#123` | `CLEAN` \| `BEHIND` \| `BLOCKED` \| `DIRTY` \| `DRAFT` \| `UNSTABLE` \| `UNKNOWN` | `—` \| one line naming the actual cause |
 
-`Status` is this run's own tracking — `clean` from Step 3 until dispatched, then
-whatever the agent last returned, `merged` once `merge-pr.sh` (Step 6.5) reports
-`MERGED`. The blocker columns come from the latest snapshot for that PR; update the row
-an event just touched rather than re-running `list-prs.sh` for the whole table.
+`mergeStateStatus` is GitHub's own live state (`list-prs.sh`'s `merge_state_status`, or
+`merge-pr.sh`'s fresher read right after acting), not this run's tracking, so a merged
+PR is simply absent — nothing to update by hand. `CLEAN` needs no `Blocker` entry;
+everything else names the actual cause (`merge-pr.sh`'s `reason=`/`detail=`, or "N
+unresolved review threads" / "failing check: `<name>`" from a raw snapshot), and if
+`automerge=armed` was reported, say so in the same cell — that is the difference
+between "still needs a push" and "will finish on its own."
+
+Refresh a row from whatever just fired for that PR rather than re-running
+`list-prs.sh` for the whole table every time.
 
 ---
 
@@ -135,11 +142,35 @@ this PR already contains those commits needs a merge-base, which the agent compu
 its worktree for free. Every dispatched agent checks and merges base drift as its first
 step, so a PR that is behind is handled whether or not the roster could see it.
 
-A PR with none of these is `clean` — it stays on the watch roster, but no agent is
-dispatched for it now.
+A PR with none of these is `clean` — no agent is dispatched for it, but it is not left
+untouched: Step 3.5 still attempts to land it immediately.
 
-Ask for confirmation, naming how many PRs will receive pushes. Wait for a clear yes. If
-the user narrows the list, honour exactly that subset.
+Ask for confirmation, naming how many PRs will receive pushes and the total on the
+roster (Step 3.5 runs against all of them, clean ones included). Wait for a clear yes.
+If the user narrows the list, honour exactly that subset for both.
+
+## Step 3.5 — Merge or arm auto-merge for the whole roster
+
+Before any worktree or agent, give every approved PR — `clean` ones included — an
+immediate landing attempt:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/merge-pr.sh --repo <owner/repo> --pr <number>
+```
+
+One call per PR, same one-invocation-per-call discipline as `pr-workspace.sh` below.
+
+`MERGED ...` — done. Drop it from the roster entirely — no worktree, no dispatch.
+
+`BLOCKED ... reason=<x> detail=<y> automerge=armed` — still blocked on `<x>` (handled
+normally from Step 4 onward if it needs a push), but GitHub will merge it the moment
+`<x>` clears on its own, with no further call to this script needed.
+
+`BLOCKED ... automerge=unavailable` — either this repository has auto-merge turned off
+in its settings, or arming it failed for a GitHub-side reason. Treat `reason=`/`detail=`
+exactly as Step 4 onward already does; this only means the eventual unblock will need
+an explicit merge afterward instead of happening on its own. A repository with
+auto-merge off is the owner's choice, not a workaround to look for.
 
 ## Step 4 — Prepare worktrees
 
@@ -225,7 +256,8 @@ right now": the branch can fall behind base again because another PR in this sam
 sweep just merged into it, or a review thread an agent answered with a `[babysitter]`
 reply was never actually marked resolved (`required_review_thread_resolution` checks
 GitHub's `isResolved` flag, which a reply does not set). `merge-pr.sh` fixes both —
-neither needs a judgment call — then merges.
+neither needs a judgment call — then merges. If it still cannot merge, it arms
+auto-merge the same way Step 3.5 does.
 
 `MERGED ...` — drop it from the roster; remove the worktree now if you like rather
 than waiting for `GONE`.

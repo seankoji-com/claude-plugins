@@ -28,6 +28,13 @@
 # repository accepts — GitHub's own error names any method the repo disallows, which
 # is simpler and more current than caching each repo's `allowed_merge_methods` here.
 #
+# Every BLOCKED outcome also tries arming GitHub's native auto-merge before it
+# reports — the courtesy costs one extra mutation and means a PR blocked only on
+# something outside this script's authority (a pending required check, a review
+# still needed) finishes on its own the moment that condition clears, with no further
+# call to this script needed. Arming it changes nothing about whether THIS run
+# considers the PR blocked; the exit code and reason are unaffected.
+#
 # Exit codes:
 #   0 — merged (stdout: "MERGED <repo>#<pr> via <method>")
 #   2 — precondition failed (missing gh/curl/jq, bad arguments)
@@ -36,7 +43,7 @@
 #       approval, a code-scanning threshold, an unresolved thread with no
 #       `[babysitter]` reply yet, or a merge conflict. Never retried, never
 #       overridden with admin/force. (stdout: "BLOCKED <repo>#<pr> reason=<category>
-#       detail=<...>")
+#       detail=<...> automerge=<armed|unavailable>")
 #
 # What this script will NOT do, on purpose:
 #   - Never passes `--admin` to bypass branch protection. A required check, a
@@ -191,7 +198,7 @@ curl_rest() {
 fetch_state() {
   local query resp
   query=$(jq -n --arg owner "$OWNER" --arg name "$NAME" --argjson number "$PR_NUMBER" '{
-    query: "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ mergeable mergeStateStatus baseRefName headRefName reviewThreads(first:100){ nodes{ id isResolved isOutdated comments(last:100){ nodes{ body } } } } commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } } } } }",
+    query: "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ id mergeable mergeStateStatus baseRefName headRefName autoMergeRequest{ enabledAt } reviewThreads(first:100){ nodes{ id isResolved isOutdated comments(last:100){ nodes{ body } } } } commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } } } } }",
     variables: { owner: $owner, name: $name, number: $number }
   }')
   resp="$(curl_graphql_retry "$query")" || { echo "merge-pr.sh: state query failed: $resp" >&2; return 1; }
@@ -248,6 +255,43 @@ sync_behind_branch() {
   return 1
 }
 
+# Arms GitHub's native auto-merge on the current PR (idempotent — re-arming an
+# already-armed PR just re-confirms it), trying the same method order as try_merge.
+# Returns 1 if the repository does not allow auto-merge at all (the setting is off in
+# repo settings) or every method is rejected; the caller treats that as informational,
+# never as a reason to change what it reports.
+enable_automerge() {
+  local pr_id already m mutation resp
+  pr_id="$(jq -r '.data.repository.pullRequest.id // empty' <<<"$state")"
+  [ -n "$pr_id" ] || return 1
+  already="$(jq -r '.data.repository.pullRequest.autoMergeRequest.enabledAt // empty' <<<"$state")"
+  [ -n "$already" ] && return 0
+  local methods_upper=(SQUASH MERGE REBASE)
+  [ -n "$METHOD" ] && methods_upper=("$(tr '[:lower:]' '[:upper:]' <<<"$METHOD")")
+  for m in "${methods_upper[@]}"; do
+    mutation=$(jq -n --arg id "$pr_id" --arg m "$m" '{
+      query: "mutation($id:ID!,$m:PullRequestMergeMethod!){ enablePullRequestAutoMerge(input:{pullRequestId:$id, mergeMethod:$m}){ pullRequest{ autoMergeRequest{ enabledAt } } } }",
+      variables: { id: $id, m: $m }
+    }')
+    resp="$(curl_graphql_retry "$mutation")" || continue
+    if jq -e '.data.enablePullRequestAutoMerge.pullRequest.autoMergeRequest.enabledAt' >/dev/null 2>&1 <<<"$resp"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Reports a BLOCKED outcome, arming auto-merge first (best-effort) so a condition
+# outside this run's control — a required check still to pass, a review still
+# needed — resolves on its own without another call to this script. Exit code and
+# reason are the same whether or not auto-merge could be armed.
+blocked() {
+  local reason="$1" detail="$2" automerge="unavailable"
+  enable_automerge && automerge="armed"
+  echo "BLOCKED ${REPO}#${PR_NUMBER} reason=${reason} detail=${detail} automerge=${automerge}"
+  exit 4
+}
+
 try_merge() {
   local method="$1" resp code body
   resp="$(curl_rest PUT "/repos/${REPO}/pulls/${PR_NUMBER}/merge" "$(jq -n --arg m "$method" '{merge_method:$m}')")" || return 2
@@ -269,14 +313,12 @@ mergeable="$(jq -r '.data.repository.pullRequest.mergeable' <<<"$state")"
 merge_state="$(jq -r '.data.repository.pullRequest.mergeStateStatus' <<<"$state")"
 
 if [ "$mergeable" = "CONFLICTING" ]; then
-  echo "BLOCKED ${REPO}#${PR_NUMBER} reason=conflict detail=merge conflicts against the base branch; resolve in a worktree first, not here"
-  exit 4
+  blocked "conflict" "merge conflicts against the base branch; resolve in a worktree first, not here"
 fi
 
 if [ "$merge_state" = "BEHIND" ]; then
   if ! sync_behind_branch; then
-    echo "BLOCKED ${REPO}#${PR_NUMBER} reason=behind detail=update-branch did not clear BEHIND in time"
-    exit 4
+    blocked "behind" "update-branch did not clear BEHIND in time"
   fi
   state="$(fetch_state)" || die "could not re-read PR state after update-branch" 3
 fi
@@ -298,8 +340,7 @@ while IFS= read -r thread; do
 done < <(jq -c '.[]' <<<"$unresolved_json")
 
 if [ "$unanswered_count" -gt 0 ]; then
-  echo "BLOCKED ${REPO}#${PR_NUMBER} reason=unanswered_threads detail=${unanswered_count} review thread(s) have no [babysitter] reply yet — answer them before this PR can merge"
-  exit 4
+  blocked "unanswered_threads" "${unanswered_count} review thread(s) have no [babysitter] reply yet — answer them before this PR can merge"
 fi
 
 # Checked here, after fixing what could be fixed, rather than at the very top: base
@@ -313,8 +354,7 @@ fi
 checks_state="$(jq -r '.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.state // "UNKNOWN"' <<<"$state")"
 case "$checks_state" in
 FAILURE | ERROR)
-  echo "BLOCKED ${REPO}#${PR_NUMBER} reason=failing_checks detail=required status checks are red (rollup=${checks_state}) — that is a code/CI fix, not something this script can resolve"
-  exit 4
+  blocked "failing_checks" "required status checks are red (rollup=${checks_state}) — that is a code/CI fix, not something this script can resolve"
   ;;
 esac
 
@@ -346,13 +386,12 @@ state="$(fetch_state)" || true
 merge_state="$(jq -r '.data.repository.pullRequest.mergeStateStatus // "UNKNOWN"' <<<"$state")"
 case "$merge_state" in
 BLOCKED)
-  echo "BLOCKED ${REPO}#${PR_NUMBER} reason=branch_protection detail=GitHub reports BLOCKED after every merge method failed (last HTTP ${last_code}) — likely a required reviewer, an org ruleset (e.g. approval required for unattributed changes), or a code-scanning alert at or above the org's threshold; none of these are safe for this script to satisfy on its own"
+  blocked "branch_protection" "GitHub reports BLOCKED after every merge method failed (last HTTP ${last_code}) — likely a required reviewer, an org ruleset (e.g. approval required for unattributed changes), or a code-scanning alert at or above the org's threshold; none of these are safe for this script to satisfy on its own"
   ;;
 DIRTY)
-  echo "BLOCKED ${REPO}#${PR_NUMBER} reason=conflict detail=mergeStateStatus flipped to DIRTY between the top of this run and the merge attempt"
+  blocked "conflict" "mergeStateStatus flipped to DIRTY between the top of this run and the merge attempt"
   ;;
 *)
-  echo "BLOCKED ${REPO}#${PR_NUMBER} reason=unknown detail=every merge method failed (last HTTP ${last_code}), mergeStateStatus=${merge_state}"
+  blocked "unknown" "every merge method failed (last HTTP ${last_code}), mergeStateStatus=${merge_state}"
   ;;
 esac
-exit 4

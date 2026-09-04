@@ -33,14 +33,17 @@ force-pushed.
 ## Status line
 
 End every turn — after the snapshot, after a dispatch, after each event handled — with
-one line covering this PR:
+one line covering this PR, unless it just merged or closed (say so once, in prose; do
+not keep printing a line for a PR that is no longer open):
 
-`owner/repo#N — status: <clean|dispatched|done|partial|blocked|merged> · conflicts:
-<none|conflict> · comments: <none|N unresolved> · checks: <green|failing: <names>>`
+`owner/repo#N — mergeStateStatus: <CLEAN|BEHIND|BLOCKED|DIRTY|DRAFT|UNSTABLE|UNKNOWN> ·
+blocker: <— | one line naming the actual cause>`
 
-`status` is this run's own tracking — `clean` from Step 3 until dispatched, then
-whatever the agent last returned, `merged` once `merge-pr.sh` reports `MERGED`. The
-other three come from the latest snapshot.
+`mergeStateStatus` is GitHub's own live state (`list-prs.sh`'s `merge_state_status`, or
+`merge-pr.sh`'s fresher read), not this run's tracking. `CLEAN` needs no blocker text;
+otherwise name the actual cause (`merge-pr.sh`'s `reason=`/`detail=`, or the snapshot's
+own `failing`/`unresolved_threads`), and append "(auto-merge armed)" when `merge-pr.sh`
+reported that.
 
 ---
 
@@ -115,6 +118,21 @@ agent settles it from a merge-base in the worktree as its first step.
 Ask for confirmation before proceeding — this pushes commits to the branch. If the PR is
 already clean, say so and ask whether to watch it anyway.
 
+Before the worktree, give it an immediate landing attempt regardless of whether it is
+clean or blocked:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/merge-pr.sh --repo <owner/repo> --pr <N>
+```
+
+`MERGED ...` — done; report it and skip straight to Step 7's cleanup, no worktree or
+dispatch needed. `BLOCKED ... automerge=armed` — GitHub will finish this PR on its own
+once the named reason clears; continue to Step 4 only if that reason needs a push
+(a real conflict, an unanswered thread, a failing check) — for anything else, arming
+auto-merge and moving to the watch (Step 6) is enough. `BLOCKED ... automerge=unavailable`
+— note it and continue to Step 4/6 as usual; this repository just does not have
+auto-merge turned on.
+
 ## Step 4 — Prepare the worktree
 
 ```bash
@@ -166,7 +184,8 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/merge-pr.sh --repo <owner/repo> --pr <N>
 A green check and no conflicts is not the same thing as "GitHub will accept the merge
 right now" — `merge-pr.sh` fixes the two blockers that need no judgment call (the
 branch falling behind base, a review thread answered but never actually marked
-resolved) and merges. `MERGED ...` ends this command: report it, clean up per Step 7.
+resolved) and merges, arming auto-merge if it still cannot. `MERGED ...` ends this
+command: report it, clean up per Step 7.
 `BLOCKED ... reason=branch_protection` is outside this plugin's authority (a required
 human reviewer, a code-scanning threshold, an org ruleset) — **never chase it with
 `--admin`**; report it and continue to the watch below. Any other `BLOCKED` reason,
