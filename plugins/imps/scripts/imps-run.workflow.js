@@ -1031,7 +1031,7 @@ function readPrStatus(prNumber, repo) {
   return agent(
     `Read-only status check on PR #${prNumber} in ${repo}. Change nothing. Report via the required schema:
 - "checks": run \`gh pr checks ${prNumber}\`. If any check is still running, wait for them to settle (\`gh pr checks ${prNumber} --watch --interval 30\`, giving up after about 10 minutes) BEFORE reporting — a pending result wastes a whole round on a PR that was simply mid-CI. Report "passing", "failing", "pending" (only if they never settled), or "none" if the repo runs no checks on this PR.
-- "mergeable": "conflicting" if the PR has merge conflicts with its base, "clean" if not, "unknown" if GitHub has not computed it yet.
+- "mergeable": "conflicting" if the PR has merge conflicts with its base, "clean" if not. GitHub computes mergeability asynchronously and reports null/UNKNOWN for a few seconds after a push: if you get that, wait and re-read before answering. Only report "unknown" if it genuinely never resolved — it is treated as NOT green, so reporting it early costs a needless hand-off.
 - "unresolved_comments": one short line per UNRESOLVED review comment thread that asks for a change. Ignore resolved threads, approvals, and pure commentary that requests nothing.
 - "detail": one line summarising what is blocking, or "green" if nothing is.`,
     { label: 'pr-status', phase: 'Publish', model: 'haiku', schema: PR_STATUS_SCHEMA }
@@ -1073,8 +1073,8 @@ Report "url" for the release you created, if any.`,
 // Bounded drive-to-green, then close as far as `endstate` allows. Returns a record of what
 // happened for the terminal result — it never throws, and it never treats "not green" or
 // "merge refused" as an error: both are legitimate hand-offs the operator needs told about.
-async function drivePrAndClose(prInfo, repo, defaultBranch, endstate, alreadyMerged) {
-  const outcome = { rounds: 0, green: false, merged: alreadyMerged || false, released: false, release_url: null, refused: false, detail: '' }
+async function drivePrAndClose(prInfo, repo, defaultBranch, endstate, alreadyMerged, alreadyReleased) {
+  const outcome = { rounds: 0, green: false, merged: alreadyMerged || false, released: alreadyReleased || false, release_url: null, refused: false, detail: '' }
   if (!prInfo) {
     outcome.detail = 'no PR — branch is local'
     return outcome
@@ -1088,8 +1088,11 @@ async function drivePrAndClose(prInfo, repo, defaultBranch, endstate, alreadyMer
     await fixPrBlockers(prInfo.number, status, defaultBranch)
     status = await readPrStatus(prInfo.number, repo)
   }
+  // `clean`, not merely "not conflicting": an `unknown` mergeability is GitHub declining to
+  // answer, and merging on it would be acting without the fact the check exists to
+  // establish. Fail closed — a needless hand-off is recoverable, a bad merge is not.
   outcome.green = (status.checks === 'passing' || status.checks === 'none') &&
-    status.mergeable !== 'conflicting' &&
+    status.mergeable === 'clean' &&
     (status.unresolved_comments || []).length === 0
   outcome.detail = status.detail || ''
   if (!outcome.green) {
@@ -1097,17 +1100,20 @@ async function drivePrAndClose(prInfo, repo, defaultBranch, endstate, alreadyMer
     return outcome
   }
   // `endstate` is the ONLY authorization to close the PR, and it was settled in Phase 1
-  // Step 7. `alreadyMerged` is the idempotency marker: a resumed invocation must not
-  // re-merge, the same way pr/verdicts/learnings_saved guard their own side effects.
-  if (endstate === 'pr' || outcome.merged) return outcome
-  const merge = await mergePr(prInfo.number, repo)
-  outcome.merged = !!merge.done
-  outcome.refused = !!merge.refused
+  // Step 7. The two markers are checked INDEPENDENTLY: a run that merged in a prior
+  // invocation and died before releasing must still be able to release on resume, so an
+  // already-merged PR skips only the merge — never the release.
+  if (endstate === 'pr') return outcome
   if (!outcome.merged) {
-    outcome.detail = merge.detail || 'merge did not complete'
-    return outcome
+    const merge = await mergePr(prInfo.number, repo)
+    outcome.merged = !!merge.done
+    outcome.refused = !!merge.refused
+    if (!outcome.merged) {
+      outcome.detail = merge.detail || 'merge did not complete'
+      return outcome
+    }
   }
-  if (endstate === 'release') {
+  if (endstate === 'release' && !outcome.released) {
     const release = await cutRelease(repo, defaultBranch)
     outcome.released = !!release.done
     outcome.release_url = release.url || null
@@ -2005,10 +2011,17 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     state.repo,
     state.last_result.default_branch,
     endstate,
-    Boolean(state.merged_at)
+    Boolean(state.merged_at),
+    Boolean(state.release_url)
   )
+  // Persisted separately, because they can happen in different invocations: a run can
+  // merge, die, and cut its release on the resume. Writing release_url only alongside
+  // merged_at would leave the release unmarked forever and re-cut it on every resume.
   if (prOutcome.merged && !state.merged_at) {
-    await patchState({ merged_at: await nowIso(), release_url: prOutcome.release_url || null }, 'mark-merged')
+    await patchState({ merged_at: await nowIso() }, 'mark-merged')
+  }
+  if (prOutcome.release_url && !state.release_url) {
+    await patchState({ release_url: prOutcome.release_url }, 'mark-released')
   }
 
   // The operator settled this in Phase 1 Step 7, precisely so a finished run does not stop

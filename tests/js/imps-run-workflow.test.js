@@ -651,6 +651,46 @@ test('unresolved review comments block green just as a failing check does', asyn
   assert.equal(out.green, true)
 })
 
+test('an unknown mergeability is not green — the check fails closed', async () => {
+  // GitHub computes mergeability asynchronously and reports unknown while it does.
+  // Treating that as green would merge on the absence of the fact the check establishes.
+  const UNKNOWN = { checks: 'passing', mergeable: 'unknown', unresolved_comments: [], detail: 'mergeability not computed' }
+  const { agent, calls } = prAgent({ 'pr-status': UNKNOWN, 'pr-fix': {} })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'merge', false)
+
+  assert.equal(out.green, false)
+  assert.equal(out.merged, false)
+  assert.ok(!calls.some((c) => c.startsWith('merge-pr')), 'must never merge on unknown mergeability')
+})
+
+test('a resume after a merge can still cut the release it never got to', async () => {
+  // The failure this guards: merge lands, the run dies, and the resume returns early
+  // because the PR is already merged — so the authorized release never happens.
+  const { agent, calls } = prAgent({
+    'pr-status': GREEN,
+    'cut-release': { done: true, refused: false, url: 'https://example.test/releases/v1', detail: 'cut' },
+  })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'release', true, false)
+
+  assert.ok(!calls.some((c) => c.startsWith('merge-pr')), 'an already-merged PR must not be re-merged')
+  assert.equal(out.released, true, 'the release must still be reachable on resume')
+  assert.equal(out.release_url, 'https://example.test/releases/v1')
+})
+
+test('an already-released run re-cuts nothing', async () => {
+  const { agent, calls } = prAgent({ 'pr-status': GREEN })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'release', true, true)
+
+  assert.equal(out.released, true)
+  assert.ok(!calls.some((c) => c.startsWith('cut-release')), 'the release_url marker must guard the re-cut')
+})
+
 test('a run with no PR reports that rather than treating it as an error', async () => {
   const { agent, calls } = prAgent({})
   const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })

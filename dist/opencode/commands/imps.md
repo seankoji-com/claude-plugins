@@ -792,7 +792,10 @@ same either way; `endstate` decides only how far it goes.
    force a change to silence a reviewer, and never resolve a thread you did not address.
    Waiting for in-flight CI is not a round; let checks settle before counting one.
 4. **Close** — if `endstate` is `"merge"` or `"release"` **and** the PR is green, merge
-   it. Then, for `"release"` only, cut a release following the repo's **own** convention,
+   it. Green means checks passing, **mergeability actually reported clean**, and no
+   unresolved threads: a host that has not computed mergeability yet has not said the PR
+   is safe to merge, so treat that as not-green and fail closed. Then, for `"release"`
+   only, cut a release following the repo's **own** convention,
    determined by reading its existing tags, prior releases, and any release workflow. If
    there is no discernible convention, or a workflow already releases on merge, do
    nothing and say why — a guessed tag format is worse than no release.
@@ -804,8 +807,10 @@ surface the PR URL and stop. Do not retry, do not substitute a direct push to th
 branch, and do not delegate it to another agent. An `endstate` of `"merge"` that ends in
 a green unmerged PR is a complete run with one step left to a human, and reads that way.
 
-Both irreversible steps are guarded by persisted markers (`merged_at`, `release_url`), so
-a resumed run re-reads the PR state but never re-merges or re-releases.
+Both irreversible steps are guarded by their own persisted marker (`merged_at`,
+`release_url`), recorded **independently**. A resumed run re-reads the PR state and
+re-does neither — but an already-merged PR skips only the merge, so a run that merged and
+then died can still cut the release it never reached.
 
 ## Design note — why resume is a state-file read, not a platform feature
 

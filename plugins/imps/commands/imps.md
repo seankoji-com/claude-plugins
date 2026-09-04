@@ -1526,8 +1526,16 @@ inferring it: `green: false` means the cap was hit, `refused: true` means the me
 denied, and `merged: false` with `green: true` on a `"merge"` endstate means the PR is
 sitting ready for a human.
 
-Both irreversible steps are guarded by persisted markers (`merged_at`, `release_url`), so a
-resumed invocation re-reads the PR state but never re-merges or re-releases.
+Both irreversible steps are guarded by their own persisted marker (`merged_at`,
+`release_url`), written **independently**. A resumed invocation re-reads the PR state and
+re-does neither — but an already-merged PR skips only the merge, so a run that merged and
+then died can still cut the release it never reached. Writing the two together would leave
+that release unmarked forever and re-cut it on every resume.
+
+**Green means mergeability reported `clean`, not merely "not conflicting".** GitHub
+computes it asynchronously and reports unknown while it does; that is the host declining to
+answer, not an all-clear, so it is treated as not-green. The status read waits and re-reads
+rather than reporting unknown early, and a residual unknown hands off.
 
 Relay works exactly as in Phase 4 — the same `operator_decision` patch, the same fresh
 re-invocation. `unresolved_findings` (documented above) is a Phase 5 block: it is the only
