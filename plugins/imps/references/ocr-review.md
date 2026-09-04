@@ -42,6 +42,12 @@ OCR emits `{"comments":[{path, start_line, end_line, body}], …}` and **has no 
 
 The verdict is derived, since OCR has none of its own: any `blocker` or `major` yields `CHANGES_REQUESTED`, otherwise `APPROVE`. This matches the contract's own rule that `APPROVE` may not carry either severity.
 
+**A single pass is not exhaustive or deterministic on a large diff.** Different findings can
+surface on different re-reviews of the identical diff — a finding that doesn't recur on a
+retry was not necessarily addressed, it may simply not have been sampled that time, and a
+clean pass is evidence of no findings in whatever was sampled, not of full coverage. Fix real
+issues as they surface rather than treating any single pass (clean or not) as complete.
+
 ## Failures
 
 `CHANGES_REQUESTED` findings are fixed by Claude, gates rerun, and a fresh OCR run reviews the new diff. After three repair rounds the run blocks with `code_review_red`; an operator may record `override code review: <rationale>` only then.

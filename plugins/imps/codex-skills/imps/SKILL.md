@@ -4,7 +4,7 @@ description: Explicit Codex command for substantial implementation work that sho
 metadata:
   version: "0.1.0"
   source-command: "plugins/imps/commands/imps.md"
-  source-version: "0.3.54"
+  source-version: "0.3.55"
 ---
 
 # Imps for Codex
@@ -181,6 +181,12 @@ For each wave of dependency-ready tasks:
 4. Merge successful worker branches into the integration worktree one at a time. If a
    merge conflicts, send the conflict and both intents back to the owning worker when
    practical. Otherwise stop for the user. Never pick a side merely by branch precedence.
+   A clean, conflict-free merge is not proof nothing was lost: a later branch can revert
+   a parameter or a whole file an earlier branch just landed, while still merging without
+   a single marked conflict. When two or more branches touch the same function or file,
+   spot-check the merged result against what each branch actually added before trusting
+   it — gates run against the merged tree either way, and will not catch a reversion the
+   merge itself made silently.
 5. Run the task's verification after merge and update the run record. Create dependent
    task worktrees only after their prerequisite commits are integrated.
 

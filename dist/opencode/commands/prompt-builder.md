@@ -106,6 +106,12 @@ Before structuring or drafting, establish:
 - **Target model**: preference, or open to recommendation?
 - **Past failures**: tried this before and seen specific failure modes?
 
+If the brief names a specific existing command, skill, or mode by name (e.g. "write a
+feeder prompt for `/imps:imps` checklist mode"), read that target's actual spec/reference
+doc before drafting — a mode's name can misdescribe its real contract (e.g. "checklist
+mode" reads as an implementation checklist but is actually an audit-first verification
+pass), and inferring behavior from the name alone produces a prompt for the wrong contract.
+
 Batch independent questions. Ask iteratively when each answer shapes the next. Hard cap: **20 questions across the session total**.
 
 If the cap is reached before diagnosis is sufficient, stop asking — proceed on explicitly-flagged assumptions instead of stalling. State each assumption inline (e.g. in the deliverable's Context/Use-when line) so the operator can correct it in one pass.
