@@ -13,19 +13,19 @@
     },
     {
       "name": "claude-tuneup",
-      "version": "0.1.17",
+      "version": "0.1.18",
       "source": "./plugins/claude-tuneup",
       "description": "Permission audit and settings tuneup — scans transcripts, classifies by scope, deduplicates global vs project settings."
     },
     {
       "name": "prompt-builder",
-      "version": "0.1.19",
+      "version": "0.1.20",
       "source": "./plugins/prompt-builder",
       "description": "Iterative prompt engineering assistant — structures with Anthropic's evidence-based prompting techniques, drafts, critiques, and delivers a finished artefact with test cases."
     },
     {
       "name": "imps",
-      "version": "0.3.54",
+      "version": "0.3.55",
       "source": "./plugins/imps",
       "description": "Swarm orchestration with model-routed execution, deterministic gates, whole-repo audits, PR monitoring, and proof-led blast-radius analysis."
     },

@@ -90,6 +90,12 @@ Before structuring or drafting, establish:
 - **Target model**: preference, or open to recommendation?
 - **Past failures**: tried this before and seen specific failure modes?
 
+If the brief names a specific existing command, skill, or mode by name (e.g. "write a
+feeder prompt for `/imps:imps` checklist mode"), read that target's actual spec/reference
+doc before drafting — a mode's name can misdescribe its real contract (e.g. "checklist
+mode" reads as an implementation checklist but is actually an audit-first verification
+pass), and inferring behavior from the name alone produces a prompt for the wrong contract.
+
 Batch independent questions. Ask iteratively when each answer shapes the next. Hard cap: **20 questions across the session total**.
 
 If the cap is reached before diagnosis is sufficient, stop asking — proceed on explicitly-flagged assumptions instead of stalling. State each assumption inline (e.g. in the deliverable's Context/Use-when line) so the operator can correct it in one pass.
@@ -198,6 +204,12 @@ reasoning). When in doubt, recommend Sonnet 5.0 and note conditions that would p
 For multi-agent dispatch/fan-out prompts, say explicitly that implementation agents inherit
 the session model and haiku is reserved for recon/mechanical sub-tasks only — left unstated,
 swarm-style habits default everything to haiku and silently downgrade quality-sensitive work.
+
+When the operator names a specific target model explicitly (e.g. "write this for Fable"),
+WebSearch that model's documented traits rather than stapling the name onto a generic
+prompt — this surfaces model-specific levers (e.g. delegating mechanical legwork to cheaper
+sub-agents, or preferring a fresh-context verifier sub-agent over in-context self-critique)
+that a generic prompt would miss.
 
 ---
 

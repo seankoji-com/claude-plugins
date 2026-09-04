@@ -33,6 +33,16 @@
 #       arg      passed as "$1" to the function (mutually exclusive w/ stdin)
 #       stdin    piped to the function's stdin (mutually exclusive w/ arg)
 #       expected exact expected stdout
+#
+#     The <function> path segment IS the call site: run_unit_case below calls
+#     "$func" dynamically, derived from this directory name, not from a static
+#     reference anywhere in source. A grep for a function name that finds only
+#     its definition does NOT prove it's dead code — check for a matching
+#     tests/fixtures/unit/<plugin>/<script>/<function>/ dir first. Deleting a
+#     function whose only caller is a fixture dir here silently deletes its
+#     only test coverage too (a real incident: #174 deleted a fail-closed
+#     gate's sole unit coverage this way, past a scout and an implementer,
+#     caught only by adversarial panel review).
 set -uo pipefail
 
 # This harness (not the scripts it tests) needs bash 4+ for `shopt -s
