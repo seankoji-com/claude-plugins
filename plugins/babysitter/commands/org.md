@@ -300,6 +300,13 @@ roster to one agent at a time, which is worse than the problem.
 One `babysitter:🍼` agent per PR, `model: "haiku"`, concurrently — but at most 8 in
 flight at once, so a large org does not stampede the GitHub API or the machine.
 
+**The agent owns its PR end-to-end — blockers, push, and the merge itself (its contract's
+step 5).** This orchestrator's only `merge-pr.sh` touch is the Step 3.5 landing pass up
+front; after dispatch it never edits a PR's branch, never polls its checks, never retries
+a merge — fan-out ends when a PR is merged or comes back definitively blocked. If per-PR
+work keeps landing back here, that is a prompt gap — the fix is a better dispatch, not
+doing the work in this context.
+
 Each prompt must carry: the worktree path, `repo`, `number`, `url`, `head_ref`,
 `base_ref`, the `## Per-repo notes` line for that repository if `learnings.md` had one,
 and the specific blockers from Step 3 with their details — the failing check names, and
@@ -355,46 +362,33 @@ Once. A second escalation is a human's call — report it instead:
 This is the whole reason `blocked` is a cheap answer: judgment work that haiku declines
 gets a stronger model rather than a guess.
 
-## Step 6.5 — Merge what got fixed
+## Step 6.5 — The agent already merged it
 
-For every PR that just returned `status: "done"` from Step 5 or this step's own
-escalation — **not** a PR that was `clean` at Step 3 and never dispatched; the roster
-gate's approval covered pushes to those PRs, not a merge action on PRs nobody touched:
+The dispatched agent drives its PR through `merge-pr.sh` itself (its contract's step 5)
+and returns the outcome — this orchestrator never runs the merge. Handle what came back:
 
-```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/merge-pr.sh --repo <repo> --pr <number>
-```
+| agent `status` | what it means | what to do |
+| --- | --- | --- |
+| `merged` | `merge-pr.sh` reported `MERGED` | drop it from the roster; `pr-workspace.sh --remove` if you are tidying up now rather than waiting for `GONE` |
+| `done` | blockers cleared; `merge.result` says how the merge attempt went | if `merge.automerge_armed` is `true`, GitHub lands it on its own — watch and report; otherwise re-dispatch once so the agent completes the merge (contract step 5) |
+| `blocked`, `blocked_on` starting `merge:` | the merge was refused on live state | map to a Step 8 event below — an event, not a retry target |
+| `partial` / `blocked` on code or judgment | cleared some blockers; needs a human or a stronger model | Step 6's escalation rules |
 
-A green check and no conflicts is not the same thing as "GitHub will accept the merge
-right now" — the roster snapshot and an agent's own worktree both stop short of the
-two things only live state catches: the branch falling behind base again because
-another PR in this same sweep just merged into it, and a review thread an agent
-answered with a `[babysitter]` reply that was never actually marked resolved
-(`required_review_thread_resolution` branch protection checks GitHub's `isResolved`
-flag — a reply is not that). `merge-pr.sh` fixes both, since neither needs a judgment
-call, then merges. If it still cannot merge, it arms auto-merge the same way Step 3.5
-does, so a check that is still finishing does not need yet another call once it passes.
+`merge:` reasons map to Step 8 events exactly:
 
-`MERGED ...` — drop it from the roster; `pr-workspace.sh --remove` if you are tidying
-up now rather than waiting for `GONE`.
+- `merge:unanswered_threads` — a thread nobody actually answered; treat as a `THREADS` event.
+- `merge:branch_protection` — something outside this plugin's authority: a required
+  human reviewer, a code-scanning alert at or above the org's threshold, an org ruleset
+  such as requiring approval from someone other than the author for unattributed
+  changes. **Never chase this with `--admin` or any other override.** Report it by name
+  — `repo#number: <detail>` — and move on. A rule like this exists on purpose; only a
+  human can satisfy or waive it.
+- `merge:conflict` — stale state; treat as a fresh `CONFLICT` event (Step 8).
+- `merge:failing_checks` — a required check went red; treat as a fresh `CHECKS-FAILED`
+  event (Step 8).
 
-`BLOCKED ... reason=unanswered_threads` — a review thread nobody has actually answered
-yet. That should not happen for a PR that just returned `done`; if it does, treat it
-as a `THREADS` event (Step 8) rather than retrying the merge.
-
-`BLOCKED ... reason=branch_protection` — something outside this plugin's authority: a
-required human reviewer, a code-scanning alert at or above the org's threshold, an org
-ruleset such as requiring approval from someone other than the author for unattributed
-changes. **Never chase this with `--admin` or any other override.** Report it by name
-— `repo#number: <detail>` — and move on. A rule like this exists on purpose; only a
-human can satisfy or waive it.
-
-`BLOCKED ... reason=conflict` — the roster or the agent's own check was stale between
-its `done` and now; treat it as a fresh `CONFLICT` event (Step 8).
-
-`BLOCKED ... reason=failing_checks` — a required check went red between `done` and
-now (a flake, or another commit landing in between); treat it as a fresh
-`CHECKS-FAILED` event (Step 8) rather than retrying the merge itself.
+There is no orchestrator-side `merge-pr.sh` in this command after Step 3.5's landing
+pass. A merge that needs a retry is a re-dispatch (Step 8), never a call from here.
 
 ## Step 7 — Arm the watch
 
@@ -420,7 +414,7 @@ Each line is `<KIND> <repo>#<number> [detail] [url]`.
 | `CONFLICT`, `BASE-MOVED` | re-dispatch that PR, blocker = conflict / base moved (the agent checks whether it is actually behind) |
 | `CHECKS-FAILED` | re-dispatch, blocker = the named checks |
 | `REVIEW`, `COMMENT`, `THREADS` | re-fetch that PR's comments (Step 5's filter) and re-dispatch |
-| `CHECKS-GREEN` | if this PR has been dispatched at least once this run, Step 6.5's merge-pr.sh; a PR still `clean` from Step 3 that never needed a dispatch is unaffected — report either way |
+| `CHECKS-GREEN` | if this PR has been dispatched at least once this run and has no agent in flight, re-dispatch it so its agent can run the merge (contract step 5); an agent already in flight will see the green and merge itself — fold, don't stack. A PR still `clean` from Step 3 that never needed a dispatch is unaffected — report either way |
 | `DRAFT` | drop from the active roster; a draft is not ready |
 | `GONE` | `pr-workspace.sh --repo <repo> --pr <n> --remove`, drop from the roster |
 | `ERROR` | report it; the monitor is still polling |

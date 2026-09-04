@@ -205,6 +205,13 @@ per-PR worktree the path above names, and two PRs would end up sharing one.
 
 One `babysitter:🍼` agent per PR, `model: "haiku"`, concurrently, at most 8 in flight.
 
+**The agent owns its PR end-to-end — blockers, push, and the merge itself (its contract's
+step 5).** This orchestrator's only `merge-pr.sh` touch is the Step 3.5 landing pass up
+front; after dispatch it never edits a PR's branch, never polls its checks, never retries
+a merge — fan-out ends when a PR is merged or comes back definitively blocked. If per-PR
+work keeps landing back here, that is a prompt gap — the fix is a better dispatch, not
+doing the work in this context.
+
 Each prompt carries the worktree path, `repo`, `number`, `url`, `head_ref`, `base_ref`,
 the failing check names, and the unresolved review threads:
 
@@ -242,38 +249,30 @@ comment, two incompatible sides of a conflict — re-dispatch **that PR once** a
 Once. Then report rather than retrying:
 `⚠ <repo>#<number> still blocked after escalation: <reason>`
 
-## Step 6.5 — Merge what got fixed
+## Step 6.5 — The agent already merged it
 
-For every PR that just returned `status: "done"` from Step 5 or this step's own
-escalation — **not** a PR that was `clean` at Step 3 and never dispatched:
+The dispatched agent drives its PR through `merge-pr.sh` itself (its contract's step 5)
+and returns the outcome — this orchestrator never runs the merge. Handle what came back:
 
-```bash
-${CLAUDE_PLUGIN_ROOT}/scripts/merge-pr.sh --repo <owner/repo> --pr <number>
-```
+| agent `status` | what it means | what to do |
+| --- | --- | --- |
+| `merged` | `merge-pr.sh` reported `MERGED` | drop it from the roster; remove the worktree now if you like rather than waiting for `GONE` |
+| `done` | blockers cleared; `merge.result` says how the merge attempt went | if `merge.automerge_armed` is `true`, GitHub lands it on its own — watch and report; otherwise re-dispatch once so the agent completes the merge (contract step 5) |
+| `blocked`, `blocked_on` starting `merge:` | the merge was refused on live state | map to a Step 8 event below — an event, not a retry target |
+| `partial` / `blocked` on code or judgment | cleared some blockers; needs a human or a stronger model | Step 6's escalation rules |
 
-A green check and no conflicts is not the same thing as "GitHub will accept the merge
-right now": the branch can fall behind base again because another PR in this same
-sweep just merged into it, or a review thread an agent answered with a `[babysitter]`
-reply was never actually marked resolved (`required_review_thread_resolution` checks
-GitHub's `isResolved` flag, which a reply does not set). `merge-pr.sh` fixes both —
-neither needs a judgment call — then merges. If it still cannot merge, it arms
-auto-merge the same way Step 3.5 does.
+`merge:` reasons map to Step 8 events exactly:
 
-`MERGED ...` — drop it from the roster; remove the worktree now if you like rather
-than waiting for `GONE`.
+- `merge:unanswered_threads` — a thread nobody actually answered; treat as a `THREADS` event.
+- `merge:branch_protection` — outside this plugin's authority: a required human reviewer,
+  a code-scanning alert at or above the org's threshold, a ruleset requiring approval from
+  someone other than the author. **Never chase this with `--admin` or any other override** —
+  report it by number and move on.
+- `merge:conflict` — stale state; treat as a fresh `CONFLICT` event.
+- `merge:failing_checks` — a required check went red; treat as a fresh `CHECKS-FAILED` event.
 
-`BLOCKED ... reason=unanswered_threads` — should not happen for a PR that just
-returned `done`; treat it as a `THREADS` event (Step 8) instead of retrying here.
-
-`BLOCKED ... reason=branch_protection` — outside this plugin's authority: a required
-human reviewer, a code-scanning alert at or above the org's threshold, a ruleset
-requiring approval from someone other than the author. **Never chase this with
-`--admin` or any other override** — report it by number and move on.
-
-`BLOCKED ... reason=conflict` — stale state; treat as a fresh `CONFLICT` event.
-
-`BLOCKED ... reason=failing_checks` — a required check went red in between; treat as
-a fresh `CHECKS-FAILED` event rather than retrying the merge itself.
+There is no orchestrator-side `merge-pr.sh` in this command. A merge that needs a retry
+is a re-dispatch (Step 8), never a call from here.
 
 ## Step 7 — Arm the watch
 
@@ -301,7 +300,7 @@ Each line is `<KIND> <repo>#<number> [detail] [url]`.
 | `CONFLICT`, `BASE-MOVED` | re-dispatch that PR, blocker = conflict / base moved (the agent checks whether it is actually behind) |
 | `CHECKS-FAILED` | re-dispatch, blocker = the named checks |
 | `REVIEW`, `COMMENT`, `THREADS` | re-fetch that PR's comments (Step 5) and re-dispatch |
-| `CHECKS-GREEN` | if this PR has been dispatched at least once this run, Step 6.5's merge-pr.sh; report either way |
+| `CHECKS-GREEN` | if this PR has been dispatched at least once this run and has no agent in flight, re-dispatch it so its agent can run the merge (contract step 5); an agent already in flight will see the green and merge itself — fold, don't stack. A PR still `clean` from Step 3 that never needed a dispatch is unaffected — report either way |
 | `DRAFT` | drop from the active roster; a draft is not ready |
 | `GONE` | `pr-workspace.sh --repo <owner/repo> --pr <n> --remove`, drop from the roster |
 | `ERROR` | report it; the monitor is still polling |

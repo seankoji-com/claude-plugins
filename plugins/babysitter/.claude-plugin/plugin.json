@@ -1,6 +1,6 @@
 {
   "name": "babysitter",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Keeps open pull requests unblocked and lands them — sweep a whole org, one repository, or one PR; each gets a worktree-isolated agent that clears review comments, merge conflicts, failing checks and base-branch drift, then an immediate merge attempt (or GitHub auto-merge where the repo allows it) finishes the job, and a live watch picks up new pull requests and new events as they land.",
   "author": {
     "name": "seankoji",
