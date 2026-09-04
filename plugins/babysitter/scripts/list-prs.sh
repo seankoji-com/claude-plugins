@@ -228,6 +228,7 @@ fragment PRState on PullRequest {
   isDraft
   isCrossRepository
   mergeable
+  mergeStateStatus
   author { login }
   headRefName
   baseRefName
@@ -400,10 +401,33 @@ printf '%s' "$RAW" | jq -c \
           base_oid: (.baseRef.target.oid // null),
           head_oid: ($head.oid // null),
           mergeable: .mergeable,
+          # GitHub-computed merge-readiness state (CLEAN, BEHIND, BLOCKED, DIRTY, DRAFT,
+          # HAS_HOOKS, UNKNOWN, UNSTABLE) — distinct from `mergeable`, which only
+          # says whether the diff applies cleanly (no conflicts). A PR can be
+          # `mergeable: MERGEABLE` and still be BLOCKED by branch protection: an
+          # unresolved conversation, a required reviewer, a code-scanning alert
+          # threshold, or an org ruleset like "extra approval for unattributed
+          # changes". Callers that only checked `mergeable` + checks_state +
+          # unresolved_threads have reported a PR "clean" and had the actual `gh pr
+          # merge` reject it for reasons this snapshot said nothing about.
+          merge_state_status: .mergeStateStatus,
           checks_state: ($head.statusCheckRollup.state // null),
           failing: ($head.statusCheckRollup.contexts.nodes // [] | failing_contexts),
+          # Counts every thread that the required_review_thread_resolution
+          # branch-protection rule blocks a merge on. That rule keys on
+          # `isResolved` alone — an `isOutdated` thread (its diff line moved under
+          # a later commit) still blocks merge if nobody resolved it. Excluding
+          # isOutdated here used to undercount: a PR could show
+          # `unresolved_threads: 0` and still hard-fail `gh pr merge` with "A
+          # conversation must be resolved before this pull request can be merged."
+          # `isOutdated` is exposed separately below so a caller can tell still
+          # open from resolved-but-not-yet-marked-outdated-clear if it matters,
+          # without reintroducing the undercount here.
           unresolved_threads: (
-            [.reviewThreads.nodes[]? | select(.isResolved == false and .isOutdated == false)]
+            [.reviewThreads.nodes[]? | select(.isResolved == false)] | length
+          ),
+          unresolved_outdated_threads: (
+            [.reviewThreads.nodes[]? | select(.isResolved == false and .isOutdated == true)]
             | length
           ),
           last_thread_comment_id: (

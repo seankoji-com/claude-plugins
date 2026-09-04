@@ -36,6 +36,22 @@ base or default branch, never force-pushed. The roster gate is where you approve
 
 ---
 
+## Status table
+
+End every turn — the roster gate, the end of a dispatch round, each batch of events
+handled in the watch — with a table covering every PR currently on the roster:
+
+| PR | Status | Conflicts | Comments | Checks |
+| --- | --- | --- | --- | --- |
+| `#123` | `clean` \| `dispatched` \| `done` \| `partial` \| `blocked` \| `merged` | `none` \| `conflict` | `none` \| `N unresolved` | `green` \| `failing: <names>` |
+
+`Status` is this run's own tracking — `clean` from Step 3 until dispatched, then
+whatever the agent last returned, `merged` once `merge-pr.sh` (Step 6.5) reports
+`MERGED`. The blocker columns come from the latest snapshot for that PR; update the row
+an event just touched rather than re-running `list-prs.sh` for the whole table.
+
+---
+
 ## Step 0 — Load what previous runs learned
 
 Read `~/.claude/babysitter/learnings.md` if it exists — `$BABYSITTER_HOME/learnings.md`
@@ -195,6 +211,38 @@ comment, two incompatible sides of a conflict — re-dispatch **that PR once** a
 Once. Then report rather than retrying:
 `⚠ <repo>#<number> still blocked after escalation: <reason>`
 
+## Step 6.5 — Merge what got fixed
+
+For every PR that just returned `status: "done"` from Step 5 or this step's own
+escalation — **not** a PR that was `clean` at Step 3 and never dispatched:
+
+```bash
+${CLAUDE_PLUGIN_ROOT}/scripts/merge-pr.sh --repo <owner/repo> --pr <number>
+```
+
+A green check and no conflicts is not the same thing as "GitHub will accept the merge
+right now": the branch can fall behind base again because another PR in this same
+sweep just merged into it, or a review thread an agent answered with a `[babysitter]`
+reply was never actually marked resolved (`required_review_thread_resolution` checks
+GitHub's `isResolved` flag, which a reply does not set). `merge-pr.sh` fixes both —
+neither needs a judgment call — then merges.
+
+`MERGED ...` — drop it from the roster; remove the worktree now if you like rather
+than waiting for `GONE`.
+
+`BLOCKED ... reason=unanswered_threads` — should not happen for a PR that just
+returned `done`; treat it as a `THREADS` event (Step 8) instead of retrying here.
+
+`BLOCKED ... reason=branch_protection` — outside this plugin's authority: a required
+human reviewer, a code-scanning alert at or above the org's threshold, a ruleset
+requiring approval from someone other than the author. **Never chase this with
+`--admin` or any other override** — report it by number and move on.
+
+`BLOCKED ... reason=conflict` — stale state; treat as a fresh `CONFLICT` event.
+
+`BLOCKED ... reason=failing_checks` — a required check went red in between; treat as
+a fresh `CHECKS-FAILED` event rather than retrying the merge itself.
+
 ## Step 7 — Arm the watch
 
 ```
@@ -221,7 +269,7 @@ Each line is `<KIND> <repo>#<number> [detail] [url]`.
 | `CONFLICT`, `BASE-MOVED` | re-dispatch that PR, blocker = conflict / base moved (the agent checks whether it is actually behind) |
 | `CHECKS-FAILED` | re-dispatch, blocker = the named checks |
 | `REVIEW`, `COMMENT`, `THREADS` | re-fetch that PR's comments (Step 5) and re-dispatch |
-| `CHECKS-GREEN` | report it; nothing to do |
+| `CHECKS-GREEN` | if this PR has been dispatched at least once this run, Step 6.5's merge-pr.sh; report either way |
 | `DRAFT` | drop from the active roster; a draft is not ready |
 | `GONE` | `pr-workspace.sh --repo <owner/repo> --pr <n> --remove`, drop from the roster |
 | `ERROR` | report it; the monitor is still polling |
