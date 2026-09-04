@@ -138,31 +138,67 @@ If it exists, tell the user what it says and ask whether to resume or discard:
   file against git ground truth (branches, worktrees, merged commits) before dispatching
   anything, so an interrupted run picks up where it stopped instead of re-running finished
   tasks.
-- **Discard** — delete the state file and start from Phase 0. GOAL.md stays; it is the
+- **Discard** — delete the state file and start from Phase 1. GOAL.md stays; it is the
   human-readable record.
 
 One state file per project slug. Two concurrent runs in the same project will overwrite
 each other — finish or discard one first.
 <!-- END-SECTION -->
 
-<!-- REPLACE-SECTION: ## Phase 1 — Discovery -->
-## Phase 1 — Discovery
+<!-- REPLACE-SECTION: ## 🎯 Phase 1 — Define -->
+## 🎯 Phase 1 — Define
 
-Ask the following in a single batched question (skip anything already answered):
+One phase, two paths, then a shared tail. Triage the brief first: it is **sufficient**
+when it names both a concrete deliverable and at least one repo anchor (a file, path,
+command, or reproducible symptom). Sufficient briefs pass through verbatim to the
+questions below; a thinner one earns an interrogation instead, drawing on
+`__PLUGIN_ROOT__/references/brief-probes.md`. Exactly one of the two runs. Discussion-seed
+mode never interrogates — the discussion body is already the brief.
 
-1. Which repo/owner is this for?
-2. What concrete output artifacts are expected? Be specific — scripts, a GitHub
+If the brief was sufficient, ask these in one batched question:
+
+1. What concrete output artifacts are expected? Be specific — scripts, a GitHub
    Discussion post, a PR, code changes.
-3. What are the gate commands (build · lint · test · type)?
-4. What is the default branch?
-5. Any constraints every task must satisfy?
+2. What access will agents need — and does any task have to change live state rather
+   than read it?
+3. What must be true of the diff for this to be done, and which command proves it?
+   Reject vague criteria; every answer becomes a Definition-of-Done line.
+4. What constrains this? Ask for two distinct things: what is off-limits (safety), and
+   what must hold identically across independently-written tasks — exact field names,
+   shared signatures, an API shape more than one task touches (consistency). The second
+   is what `## Global Constraints` exists for.
+
+Then, on **both** paths, settle the run's autonomy contract in one more batched question.
+This is what lets the later phases run unattended:
+
+1. **Endstate** — stop at a green PR, merge the green PR, or merge and release.
+2. **Plan review** — show the plan before dispatch, or only stop if the Head Imp objects.
+3. **Learnings** — save what the run finds, ask at the end, or save nothing.
+
+Persist them as `endstate` (`"pr" | "merge" | "release"`), `plan_review`
+(`"ask" | "on_objection"`) and `learnings_policy` (`"auto" | "ask" | "none"`). **Each
+falls back to its most conservative value** when absent or unrecognized — `"pr"`,
+`"ask"`, `"ask"`. A policy this build cannot read is never consent to merge or to skip
+plan review.
+
+Also settle here what this build cannot discover for itself: the gate commands
+(build · lint · test · type) and the default branch. Then confirm the checkout can
+actually run those gates — a lockfile with no installed dependencies, a declared venv
+that is not there — and stop if it cannot. An uninstalled dependency otherwise surfaces
+later as a red gate, and the gate fixer goes off editing source to "fix" it.
 
 In discussion-seed mode, the outcome comment on the source discussion is posted by the
-finalize step of Phase 4 regardless of the answer to Q2 — that question is only about
-artifacts *beyond* that reply.
+finalize step regardless of the artifacts answer — that question is only about artifacts
+*beyond* that reply.
 <!-- END-SECTION -->
 
-<!-- REPLACE-SECTION: ## Phase 2 — Plan (native plan mode) -->
+<!-- Path B and Step 7 are subsections of the Claude phase above; this build folds both -->
+<!-- into the single replacement, so they are dropped rather than mapped. -->
+<!-- DROP-SECTION: ### 📋 Path B — Ask -->
+
+<!-- DROP-SECTION: ### 🔒 Step 7 — Settle (both paths) -->
+
+<!-- REPLACE-SECTION: ## 🗺️ Phase 2 — Plan -->
 ## Phase 2 — Plan
 
 Using `<REFINED_TASK>` and the discovery answers, produce the authoritative decomposition.
@@ -193,11 +229,15 @@ when the plan must quote or reason about its contents. Then:
 - For each task assign:
   - **Spec** — the operative instructions the imp needs to act without improvising:
     concrete inputs (repo/owner, file paths, exact commands), the expected output
-    artifact, and any constraints. **Specs must travel with tasks** — a dispatched task
-    receives ONLY its state-file entry, never this planning context. Either embed the full
-    spec or open it with an explicit pointer ("Read <GOAL_PATH>, section T<N>, before
-    acting"). Label-only tasks improvise, and improvised work is how runs produce
-    unauthorized artifacts.
+    artifact, and any constraints. A dispatched task receives ONLY its state-file entry,
+    never this planning context. **Write the full spec into GOAL.md's `## Task specs`
+    section and put a pointer in the state file** — "MANDATORY FIRST ACTION: Read
+    <GOAL_PATH> section '### T<N>'; if unreadable, return failed" — substituting the
+    resolved absolute path, since a dispatched task cannot expand a placeholder later.
+    Only a spec short enough to be obviously intact at a glance may travel inline: a long
+    embedded spec has been observed reaching a task truncated to its first line, and the
+    task then improvises the rest. Label-only tasks improvise too, and improvised work is
+    how runs produce unauthorized artifacts.
     For a bug, regression, flake, performance problem, or unexplained failing gate, the
     installed command text shows an absolute
     `__PLUGIN_ROOT__/references/diagnosis-loop.md` path because the installer replaces that
@@ -353,7 +393,8 @@ falling back to the current branch.
 ```
 
 Per-task fields:
-- `spec` — required for every task; what the imp actually executes.
+- `spec` — required for every task. Normally a pointer into GOAL.md's `## Task specs`
+  rather than the instructions themselves; see the Spec rule in the planning phase.
 - `tier` — `cheap` · `standard` · `deep`, resolved to a model id at dispatch (see
   [Model selection reference](#model-selection-reference)).
 - `oracle` — the machine-checkable acceptance command, run in the task's worktree; exit 0
@@ -363,7 +404,7 @@ Per-task fields:
 Then proceed to Phase 3.
 <!-- END-SECTION -->
 
-<!-- REPLACE-SECTION: ## Phase 3 — Sync and run the Workflow script -->
+<!-- REPLACE-SECTION: ## 🔨 Phase 3 — Build -->
 ## Phase 3 — Dispatch loop
 
 This is the dispatch backend for Agy. On Claude Code everything from here to run
@@ -443,7 +484,7 @@ gates, and re-review with a fresh session. A reviewer failure blocks. **The five
 diff review here is the review gate — see the Runtime flags section.
 <!-- END-SECTION -->
 
-<!-- REPLACE-SECTION: ## Phase 4 — Result relay loop -->
+<!-- REPLACE-SECTION: ## 🔗 Phase 4 — Consolidate -->
 ## Phase 4 — Decision points
 
 The loop stops at a decision point rather than guessing. Each one is a question to the
@@ -458,8 +499,9 @@ jq --arg d '<decision>' '.operator_decision = $d' \
 
 Decision vocabulary: `resolved, continue` · `retry <gate>: <guidance>` · `skip <gate>` ·
 `reconciled, continue` · `retry tasks #N,#M: <guidance>` · `skip tasks #N,#M` ·
-`integrate partial` · `retry findings` · `override findings: <rationale>` · `PR: yes` ·
-`PR: yes, no-post` · `PR: no` · `learnings: <json|none>` · `abort`.
+`integrate partial` · `retry findings` · `override findings: <rationale>` ·
+`override code review: <rationale>` · `skip code review: <rationale>` · `PR: yes` ·
+`PR: no` · `learnings: <json|none>` · `abort`.
 
 **The anti-pre-judging rule applies to every guidance string you compose here.** Guidance
 says *what* failed and *how*; it never says what the reviewer should conclude. "This is
@@ -506,21 +548,23 @@ run. A skipped persona is an unreviewed lens, not a parked finding; say so disti
 thread, so the PR must exist first. Ask once branches are merged, the Head Imp has
 reviewed, and gates are green:
 
-1. `Push & open PR, personas post live reviews`
-2. `Push & open PR, findings only (no persona posts)`
-3. `Not yet` — no push, no PR; findings return inline and the branch stays local.
+**Do not ask whether to open the PR — derive it.** `endstate`, settled in Phase 1,
+already answered it. Persist `PR: yes` when there is a diff and `endstate` is `"pr"`,
+`"merge"` or `"release"`; persist `PR: no` when there is no diff, since an empty PR is
+worse than none. `PR: no` stays available for an operator who wants the branch kept local
+despite a diff, but it is no longer a question the run asks.
 
-Without `--personas` there is no panel to post: option 1 collapses into a plain
-`Push & open PR` and no persona posting happens either way — the PR still opens for
-whatever GitHub-side review the repo runs. The `unresolved_findings` state and the
-`retry findings` / `override findings:` verbs below cannot occur on a panel-less run.
+**The persona panel never posts.** Its verdicts always return inline. Personas used to
+publish real GitHub reviews under dedicated App identities; that was removed once the
+read-only diff review became this run's on-the-record code review, since bot-authored
+approvals of a diff the same session wrote read as independent sign-off without being it.
+The `unresolved_findings` state and the `retry findings` / `override findings:` verbs
+below cannot occur on a panel-less run.
 
-**Self-review disclosure.** If this session wrote code directly into the diff during the
-Head Imp fix loop, say so before asking. Persona posting under dedicated GitHub App
-identities (`__PLUGIN_ROOT__/references/persona-posting.md`) is attribution and audit
-trail only; it is not an independent review of content this same session authored. Pushing
-and PR creation is a separate authorization from letting personas post live reviews — one
-does not imply the other.
+**Self-review disclosure.** Print it — it is no longer attached to a question, so it is
+the only thing between a self-reviewed diff and a published one. Say so whenever the code
+review ran fix rounds, was overridden, or was skipped outright; a skipped review means
+this diff was never reviewed at all, and that is the strongest thing to lead with.
 
 **DoD coverage.** Before asking the Push & PR question, walk each *functional* DoD
 criterion against the merged diff and print one line per criterion:
@@ -548,13 +592,13 @@ Then print the results block:
 ```
   merged:    #6 <label>    (3 files)
   published: #3 Discussion → https://github.com/...
-  verdicts:  solution-architect APPROVE (posted) · grumpy-engineer APPROVE (inline) · ...
+  verdicts:  solution-architect APPROVE · grumpy-engineer APPROVE · ...
   PR:        <url, "ready for review"> | "no PR — branch is local"
+  endstate:  merge → merged · release → merged, released <url>
 ```
 
-Tag each verdict with how it was delivered — `(posted)` for a real GitHub review under
-that persona's own identity, `(inline — <reason>)` when it fell back. A partial panel must
-never read as full independent sign-off.
+Every verdict is delivered inline — nothing is posted to GitHub — so no delivery tag is
+needed. A `SKIPPED` persona is an unreviewed lens, not an approval; say so distinctly.
 
 Then the **learnings gate**, its own explicit step: present any candidates, persist
 `learnings: [...]` or `learnings: none`, append the confirmed ones to the user- or
@@ -566,13 +610,54 @@ local only and no PR was opened — push and open a PR, then invoke `/prs` to ac
 monitor."
 <!-- END-SECTION -->
 
+<!-- Phase 5 is new: the Claude source drives the PR to green and then closes it as far -->
+<!-- as `endstate` allows, inside its Workflow script. This build does the same work in -->
+<!-- the foreground loop, so the mechanics are restated rather than mapped. -->
+<!-- REPLACE-SECTION: ## 🚢 Phase 5 — PR -->
+## 🚢 Phase 5 — PR
+
+**PR, Merge, or Release — whichever `endstate` was set to in Phase 1.** The work is the
+same either way; `endstate` decides only how far it goes.
+
+1. **Open** — push the branch and open the PR.
+2. **Panel** — the five personas and their fix loop, only with `--personas`. Verdicts
+   always return inline; nothing is posted.
+3. **Green** — read the PR's real state (failing checks, merge conflicts, unresolved
+   review threads), fix what is blocking, push, and re-read. **Bounded at three rounds**,
+   the same cap as the gate and panel fix loops. Resolve conflicts first, then failing
+   checks (read the actual logs, never guess from a check name), then review comments.
+   Change the code when a comment is right; when it is not, leave it and say why — never
+   force a change to silence a reviewer, and never resolve a thread you did not address.
+   Waiting for in-flight CI is not a round; let checks settle before counting one.
+4. **Close** — if `endstate` is `"merge"` or `"release"` **and** the PR is green, merge
+   it. Green means checks passing, **mergeability actually reported clean**, and no
+   unresolved threads: a host that has not computed mergeability yet has not said the PR
+   is safe to merge, so treat that as not-green and fail closed. Then, for `"release"`
+   only, cut a release following the repo's **own** convention,
+   determined by reading its existing tags, prior releases, and any release workflow. If
+   there is no discernible convention, or a workflow already releases on merge, do
+   nothing and say why — a guessed tag format is worse than no release.
+5. **Land** — final summary, monitor handoff, learnings.
+
+Exhausting the round cap is a **hand-off, not a failure**: report which round it stopped
+on and what was still red. A merge that a permission rule refuses is likewise final —
+surface the PR URL and stop. Do not retry, do not substitute a direct push to the base
+branch, and do not delegate it to another agent. An `endstate` of `"merge"` that ends in
+a green unmerged PR is a complete run with one step left to a human, and reads that way.
+
+Both irreversible steps are guarded by their own persisted marker (`merged_at`,
+`release_url`), recorded **independently**. A resumed run re-reads the PR state and
+re-does neither — but an already-merged PR skips only the merge, so a run that merged and
+then died can still cut the release it never reached.
+<!-- END-SECTION -->
+
 <!-- REPLACE-SECTION: ## Design note — why every Workflow invocation above is fresh, never `resumeFromRunId` -->
 ## Design note — why resume is a state-file read, not a platform feature
 
 Resume here is deliberately a **state-file reconciliation**, not anything the platform
 provides: Phase 3 Step 1 re-reads the state file and cross-checks it against git before
 dispatching. Idempotency for side-effecting steps has two sources — **merge** relies on
-`git merge` of an already-merged branch being a no-op, and **PR creation, persona posting
+`git merge` of an already-merged branch being a no-op, and **PR creation, the merge/release
 and the learnings append** each check an explicit persisted marker in the state file
 (`pr`, `verdicts`, `discussion_comment_url`, `learnings_saved`) before acting.
 
@@ -625,8 +710,10 @@ task table instead, where the operator can see it.
   pushes fix commits to the PR branch once activated.
 - Never create GitHub PRs without user instruction — the Push & PR gate in Phase 4 is that
   instruction for the endstate PR.
-- Persona live-posting is a separate authorization from push/PR creation, not implied by
-  it — only the `personas post live reviews` answer authorizes real GitHub reviews.
+- Personas never post to GitHub. The panel's verdicts always return inline — the
+  read-only diff review is this run's on-the-record code review.
+- `endstate` is the only authorization to merge, and it is settled in Phase 1. A merge
+  refused by a permission rule is final: hand off, never retry or route around it.
 - **Never bypass permission prompts with an unattended-override flag, and never write
   permission allow-rules into a user's `settings.json` on their behalf.** Document what a run needs and let the
   operator add it.
@@ -669,7 +756,7 @@ task table instead, where the operator can see it.
   (GraphQL only, no REST) — this is why a discussion reference needs its own detection
   branch instead of falling into issue-driven mode.
   **→ Read `__PLUGIN_ROOT__/references/discussion-mode.md` and follow it** — it fetches
-  the discussion, seeds it as the free-text task (Phase 0 onward), and defines the reply
+  the discussion, seeds it as the free-text task (Phase 1 onward), and defines the reply
   obligation Phase 4's finalize step fulfills.
 
 - **Free-text mode** — `$ARGUMENTS` is a task description (anything that is not purely
