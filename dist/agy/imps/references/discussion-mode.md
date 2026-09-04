@@ -2,7 +2,7 @@
 
 *Read by the orchestrator only when Mode detection matched a GitHub Discussion
 reference. This is not a separate phase sequence like issue-driven mode — it's a fetch
-step that seeds free-text mode (Phase 0 onward) with the discussion's content, then adds
+step that seeds free-text mode (Phase 1 onward) with the discussion's content, then adds
 one obligation the run's finalize step fulfills.*
 
 **1. Resolve owner/repo/number.**
@@ -36,20 +36,21 @@ comment bodies.
 
 **3. Seed the task.** Build `<DISCUSSION_TASK_SEED>` from the title + body (+ any
 comments that add requirements or constraints — skip pure "+1"/social replies). This
-replaces `$ARGUMENTS` as the input to Phase 0's brief refinement: pass
-`<DISCUSSION_TASK_SEED>` to the `prompt-builder` skill instead of raw `$ARGUMENTS`, and
-skip the "What's the task?" prompt — the discussion body *is* the task description.
-Continue with Phase 0 onward exactly as free-text mode does from here.
+replaces `$ARGUMENTS` as the input to Phase 1: the discussion body *is* the task
+description, so Phase 1's triage sets `<REFINED_TASK>` from `<DISCUSSION_TASK_SEED>` and
+**never runs the interrogation** — compressing a whole discussion thread into a couple of
+sentences before decomposition throws away the run's richest input. Phase 2's discovery
+questions still run. Continue with Phase 1 onward exactly as free-text mode does.
 
 **4. Record the source.** Carry `owner`, `repo`, `number`, `id` (GraphQL node ID), and
-`url` as `source_discussion` in the durable state file (Phase 2 Step 6) so a `/clear`
+`url` as `source_discussion` in the durable state file (Phase 2 Step 7) so a `/clear`
 mid-run doesn't lose the reply target.
 
-**5. Mandatory reply obligation.** Regardless of what Phase 1 discovery answers for
+**5. Mandatory reply obligation.** Regardless of what Phase 2 discovery answers for
 "expected output artifacts," a discussion-seeded run posts one summary comment back to
 the source discussion whenever finalize is reached. **The finalize step owns this** — it
 posts the outcome comment in its finalize step, and on an operator `abort` at any
 gate it posts a short abort notice instead, both keyed off `source_discussion` in the
 state file (see `scripts/imps-run.workflow.js`'s `finalizeRun` function). It is not a
-dispatched task, and Phase 1 Q2 may still surface additional artifacts (PRs, code) on top
+dispatched task, and Phase 2 Q2 may still surface additional artifacts (PRs, code) on top
 of it. The orchestrator never posts to the discussion itself.

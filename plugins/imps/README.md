@@ -32,7 +32,7 @@ deterministic gates and an adversarial **Head Imp** review. An optional five-per
 review panel runs on top when you pass `--personas` (see [Runtime flags](#runtime-flags)).
 
 The orchestrating session is deliberately minimal: it holds only the operator-facing
-work (plan approval, the push/PR gate, conflict decisions, learnings) while everything
+work (the run's autonomy contract, then only genuine failures) while everything
 else — dispatch, imp monitoring, merges, diffs, gate logs, persona traffic,
 finalize — is real control flow inside a **`Workflow` script**
 (`scripts/imps-run.workflow.js`), not a subagent. The command syncs the bundled script
@@ -58,7 +58,7 @@ Optional:
 | --- | --- |
 | **`CLAUDE_CDP_URL`** env var | Browser panel via CDP (default `ws://localhost:3000`). Point at a headless-Chrome container, local or LAN. |
 | **Claude-in-Chrome MCP** | Browser panel fallback if no CDP endpoint is reachable. |
-| **`~/.claude/scripts/persona-post.sh`** implementing the protocol in `${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md`, with per-persona GitHub App identities whose credentials live in your secret store | Independent, per-persona review identity for the persona panel (see [The persona panel](#the-persona-panel)). Absent or failing → that persona's verdict goes to `findings_inline` instead of posting — it never falls back to the orchestrator's own identity. |
+| **`~/.claude/scripts/persona-post.sh`** implementing the protocol in `${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md`, with per-persona GitHub App identities whose credentials live in your secret store | `/imps:issue-mode`'s persona reviews only. The free-text run's panel never posts — its verdicts always return inline. |
 
 ## Install
 
@@ -112,7 +112,7 @@ only turn the panel off there if such a PR review genuinely exists.
 ### Free-text mode walkthrough
 
 1. `/imps:imps` with a task description (or empty — it will ask).
-2. `/imps:imps` refines the brief via `prompt-builder`, asks five discovery questions, then enters plan mode (opus) to decompose and write `GOAL.md` (to `~/.claude/imps/runs/<slug>.md`, not the repo — see [Runtime state](#runtime-state)). Discovery question 5 ("any constraints?") feeds a `## Global Constraints` section in `GOAL.md` — cross-cutting invariants, stated verbatim, that every task must honor; unlike the Definition of Done (true once, ticked, verified), constraints are true of every task and never ticked. Every code-writing or code-reviewing agent call the script makes receives it by pointer, not by copy.
+2. `/imps:imps` triages the brief — a brief naming a concrete deliverable and at least one repo anchor (file, path, command, symptom) passes through verbatim to four discovery questions; a thinner one gets an interrogation instead (drawing on `references/brief-probes.md`, and replacing those questions rather than adding to them). Either way it then enters plan mode (opus) to decompose and write `GOAL.md` (to `~/.claude/imps/runs/<slug>.md`, not the repo — see [Runtime state](#runtime-state)). The constraints question feeds a `## Global Constraints` section in `GOAL.md` — cross-cutting invariants, stated verbatim, that every task must honor; unlike the Definition of Done (true once, ticked, verified), constraints are true of every task and never ticked. Every code-writing or code-reviewing agent call the script makes receives it by pointer, not by copy.
 3. The Head Imp (opus) adversarially reviews the plan; findings are addressed before dispatch.
 4. After plan approval, `/imps:imps` syncs and invokes the Workflow script, then returns control — `Workflow` runs in the background, and you're notified when it reaches a result. The script does the git preflight, dispatches the task DAG as staged `agent()` calls, and tracks progress in the run state file, so progress is `cat ~/.claude/imps/runs/<slug>.json` (the imps run inside the script's own tracked execution, invisible to the main session's transcript the same way the old subagent design was).
 5. When the imps finish, the script merges branches, syncs master, runs gates, then sends the merged diff to read-only OpenCode review. ChatGPT OAuth is preferred; OpenRouter is opt-in. Claude fixes blocker/major findings, reruns gates, and OpenCode reviews the fresh diff in a new session. Setup or verdict failure blocks rather than falling back to Claude. Only approval reaches `awaiting_authorization`, and the final summary names the provider and model.
@@ -231,31 +231,15 @@ Each persona ends its review with a parseable verdict line:
 VERDICT: APPROVE | CHANGES_REQUESTED @ <sha>
 ```
 `CHANGES_REQUESTED` requires at least one `[blocker]` or `[major]` finding. Minors and
-nits are recorded but never block. By default each persona posts as a **real GitHub PR
-review under its own dedicated GitHub App identity** via a posting script
-(`~/.claude/scripts/persona-post.sh`) that implements the protocol in
-`${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md` — never the orchestrator's own
-`gh`/GitHub-MCP access, so each review is attributed to and traceable as a genuinely
-separate GitHub actor, not the session that authored the diff. The posting script uses
-per-persona identities drawn from your secret store; the maintainer's deployment
-(dedicated GitHub Apps + 1Password) is one example. This is independent *attribution*,
-not an unforgeable *gate*: the orchestrator still holds the credentials the posting
-script uses to mint every App's token, so it isn't a control the authoring session is
-structurally unable to satisfy — it fixes the previous self-approval-under-one's-own-
-name problem, not every trust concern a branch-protection rule might assume. If that
-script is absent, fails, or its post can't be verified on the PR for a given persona
-(GitHub Apps not installed on the target repo, secret store unavailable, etc.), that
-persona's verdict fails **closed**: it goes into `findings_inline` for the operator to
-read or post by hand, never under the orchestrator's own identity — the rest of the
-panel is unaffected.
+nits are recorded but never block. **The panel never posts to GitHub.** Every verdict
+returns inline in `run_complete.findings_inline` for the operator to read, or post by
+hand. Personas previously published real PR reviews under dedicated GitHub App
+identities; that was removed once the OCR review rounds became this run's on-the-record
+code review, since five bot-authored approvals of a diff the same session wrote read as
+independent sign-off without being it.
 
-Pushing/opening the endstate PR and authorizing personas to post live GitHub reviews are
-two separate operator decisions, not one — the `Push & PR?` question (asked once the
-Workflow script returns `awaiting_authorization`) offers a `findings only (no persona
-posts)` option precisely for runs where this session's own Head-Imp-driven amendments
-make an independent review under a bot identity misleading. The posting-identity
-protocol itself lives in `references/persona-posting.md`, shared by this panel and
-`/imps:issue-mode`'s — not duplicated between them.
+`/imps:issue-mode` still posts persona reviews under App identities, and the protocol for
+it lives in `references/persona-posting.md`.
 
 Findings survive up to three fix rounds. A `WONTFIX: <rationale>` in any round is captured, not
 discarded — every rationale is retained as a `wontfix_rulings` entry and rendered in the run's
