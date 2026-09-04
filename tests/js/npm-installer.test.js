@@ -405,6 +405,54 @@ test('listPlugins() falls back to directory scan when .plugins.json is not an ar
   }
 })
 
+test("doctor() reports an install as unhealthy when a manifest-tracked file exists but is outside the prefix", () => {
+  const installer = freshInstaller()
+  const prefix = mkPrefix()
+  const outsideDir = mkPrefix()
+  const outsideFile = path.join(outsideDir, 'out-of-prefix.md')
+  try {
+    // Create a file outside the prefix and write it to disk
+    fs.writeFileSync(outsideFile, 'out of prefix content', 'utf8')
+
+    // Create a manifest that references this out-of-prefix file
+    fs.mkdirSync(prefix, { recursive: true })
+    fs.writeFileSync(
+      installer.manifestPath(prefix),
+      JSON.stringify(
+        {
+          manifestVersion: 1,
+          packageVersion: '0.0.0-test',
+          prefix,
+          installedFrom: 'test',
+          installedAt: new Date().toISOString(),
+          plugins: [],
+          files: [outsideFile],
+        },
+        null,
+        2
+      ) + '\n',
+      'utf8'
+    )
+
+    const report = installer.doctor({ prefix })
+
+    // doctor() should report the install as unhealthy (ok: false)
+    assert.equal(report.ok, false, 'doctor should report ok: false for out-of-prefix files')
+
+    // doctor() should report the specific problem
+    assert.ok(
+      report.problems.some((p) => p.includes('outside install prefix')),
+      'doctor should report a problem mentioning "outside install prefix"'
+    )
+
+    // doctor() should not have deleted the out-of-prefix file
+    assert.ok(fs.existsSync(outsideFile), 'doctor should not delete out-of-prefix files')
+  } finally {
+    fs.rmSync(prefix, { recursive: true, force: true })
+    fs.rmSync(outsideDir, { recursive: true, force: true })
+  }
+})
+
 // --- package.json / package-lock.json version lockstep -------------------------
 //
 // Nothing else in the checked-in checks catches a bumped package.json version whose

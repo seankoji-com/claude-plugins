@@ -599,7 +599,7 @@ if sys.argv[2] == "fence":
         "alpha tail", "",
         "## Beta", "beta body",
     ])
-    out = render(body, [("## Alpha", "## Alpha\nREPLACED")])
+    out = render(body, [("## Alpha", "## Alpha\nREPLACED", False)])
     if "LEAKED" in out or "alpha tail" in out:
         fail("a fenced `# comment` truncated the section; its tail leaked into output")
     if "REPLACED" not in out or "## Beta" not in out:
@@ -611,7 +611,7 @@ if sys.argv[2] == "fence":
         "```markdown", "## Inner", "inner body", "```", "",
         "## Outro", "outro body",
     ])
-    out = render(tmpl, [("## Inner", "## Inner\nINNER-REPLACED")])
+    out = render(tmpl, [("## Inner", "## Inner\nINNER-REPLACED", False)])
     if "INNER-REPLACED" not in out:
         fail("a heading inside a ```markdown fence stopped being targetable")
 elif sys.argv[2] == "order":
@@ -620,7 +620,7 @@ elif sys.argv[2] == "order":
     # discarding B's replacement text.
     body = "\n".join(["## A", "a body", "## B", "b body", "## C", "c body"])
     try:
-        out = render(body, [("## B", "## B\nB-REPLACED"), ("## A", "## A\nA-REPLACED")])
+        out = render(body, [("## B", "## B\nB-REPLACED", False), ("## A", "## A\nA-REPLACED", False)])
     except gen.GenerateError as error:
         fail("vanished-replacement assertion fired: %s" % error)
     for needle in ("A-REPLACED", "B-REPLACED", "## C"):

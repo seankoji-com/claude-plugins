@@ -174,13 +174,13 @@ class FindSectionTest(unittest.TestCase):
 
 class ApplyOverrideTest(unittest.TestCase):
     def test_replacement_text_is_inserted_verbatim(self):
-        out = _render(_doc("## A", "a body", "## B", "b body"), [("## A", "## A\nNEW")])
+        out = _render(_doc("## A", "a body", "## B", "b body"), [("## A", "## A\nNEW", False)])
         self.assertIn("NEW", out)
         self.assertNotIn("a body", out)
         self.assertIn("b body", out)
 
     def test_drop_section_removes_it(self):
-        out = _render(_doc("## A", "a body", "## B", "b body"), [("## A", None)])
+        out = _render(_doc("## A", "a body", "## B", "b body"), [("## A", None, False)])
         self.assertNotIn("a body", out)
         self.assertIn("b body", out)
 
@@ -191,7 +191,7 @@ class ApplyOverrideTest(unittest.TestCase):
             "alpha tail", "",
             "## Beta", "beta body",
         )
-        out = _render(body, [("## Alpha", "## Alpha\nREPLACED")])
+        out = _render(body, [("## Alpha", "## Alpha\nREPLACED", False)])
         for gone in ("LEAKED", "alpha tail", "not-a-heading"):
             self.assertNotIn(gone, out)
         self.assertIn("REPLACED", out)
@@ -202,37 +202,37 @@ class ApplyOverrideTest(unittest.TestCase):
         # immediately precedes it makes A's span run past B's vanished heading and swallow
         # B's sentinel -- discarding B's replacement text with no error at all.
         body = _doc("## A", "a body", "## B", "b body", "## C", "c body")
-        forward = _render(body, [("## A", "## A\nA-NEW"), ("## B", "## B\nB-NEW")])
-        reverse = _render(body, [("## B", "## B\nB-NEW"), ("## A", "## A\nA-NEW")])
+        forward = _render(body, [("## A", "## A\nA-NEW", False), ("## B", "## B\nB-NEW", False)])
+        reverse = _render(body, [("## B", "## B\nB-NEW", False), ("## A", "## A\nA-NEW", False)])
         self.assertEqual(forward, reverse)
         for needle in ("A-NEW", "B-NEW", "## C"):
             self.assertIn(needle, reverse)
 
     def test_reverse_ordered_drop_and_replace_agree(self):
         body = _doc("## A", "a body", "## B", "b body", "## C", "c body")
-        forward = _render(body, [("## A", None), ("## B", "## B\nB-NEW")])
-        reverse = _render(body, [("## B", "## B\nB-NEW"), ("## A", None)])
+        forward = _render(body, [("## A", None, False), ("## B", "## B\nB-NEW", False)])
+        reverse = _render(body, [("## B", "## B\nB-NEW", False), ("## A", None, False)])
         self.assertEqual(forward, reverse)
         self.assertNotIn("a body", reverse)
         self.assertIn("B-NEW", reverse)
 
     def test_three_adjacent_sections_in_any_order(self):
         body = _doc("## A", "a", "## B", "b", "## C", "c", "## D", "d")
-        pairs = [("## A", "## A\nAX"), ("## B", "## B\nBX"), ("## C", "## C\nCX")]
+        pairs = [("## A", "## A\nAX", False), ("## B", "## B\nBX", False), ("## C", "## C\nCX", False)]
         expected = _render(body, pairs)
         for order in ([2, 1, 0], [1, 0, 2], [0, 2, 1], [2, 0, 1]):
             self.assertEqual(_render(body, [pairs[i] for i in order]), expected)
 
     def test_non_adjacent_sections_are_independent_of_order(self):
         body = _doc("## A", "a", "## Mid", "m", "## B", "b")
-        forward = _render(body, [("## A", "## A\nAX"), ("## B", "## B\nBX")])
-        reverse = _render(body, [("## B", "## B\nBX"), ("## A", "## A\nAX")])
+        forward = _render(body, [("## A", "## A\nAX", False), ("## B", "## B\nBX", False)])
+        reverse = _render(body, [("## B", "## B\nBX", False), ("## A", "## A\nAX", False)])
         self.assertEqual(forward, reverse)
         self.assertIn("## Mid", reverse)
 
     def test_missing_heading_raises_with_the_override_label_and_file(self):
         override = generate.Override()
-        override.replacements = [("## Nope", "x")]
+        override.replacements = [("## Nope", "x", False)]
         with self.assertRaises(generate.GenerateError) as caught:
             generate.apply_override("## A\nbody", override, "plugins/p/commands/c.md")
         message = str(caught.exception)
@@ -243,7 +243,7 @@ class ApplyOverrideTest(unittest.TestCase):
         # source_position sends an unfindable heading to the back of the ordering; the
         # loop must still reach it and raise rather than quietly skipping it.
         override = generate.Override()
-        override.replacements = [("## Nope", "x"), ("## A", "## A\nAX")]
+        override.replacements = [("## Nope", "x", False), ("## A", "## A\nAX", False)]
         with self.assertRaises(generate.GenerateError):
             generate.apply_override(_doc("## A", "body"), override, "<test>")
 
@@ -288,7 +288,7 @@ class RealSourceTest(unittest.TestCase):
                 self.assertTrue(source.is_file(), "no Claude source for %s" % path)
                 _, body = generate.split_frontmatter(generate.read_text(source), str(source))
                 lines = body.split("\n")
-                for heading, _text in generate.parse_override(path).replacements:
+                for heading, _text, _is_subtree in generate.parse_override(path).replacements:
                     self.assertIsNotNone(
                         generate.find_section(lines, heading),
                         "%s: heading %r no longer resolves in %s" % (path.name, heading, source.name),
