@@ -126,3 +126,17 @@ grep -rn --include="*.md" 'CLAUDE_PLUGIN_ROOT' plugins/*/commands/ | head  # con
 See `.github/workflows/validate.yml` for the full check suite; `build/dist-lint.sh`
 gates generated `dist/` output separately, including a self-test that the shared block
 above stays identical between this file and `CLAUDE.md`.
+
+A push to a holding/integration branch also triggers `version-bump.yml` (a bot commit
+that bumps `plugin.json` versions) and re-runs `validate.yml` against that new commit —
+a CI-monitor "failed" event can therefore fire while the real run is still `in_progress`
+on the bumped commit. Poll `gh run view --json status,conclusion` (or the equivalent
+GitHub API call) to completion before treating a failure notification as real or
+dispatching a fixer.
+
+A subagent's own sandboxed worktree can fail `git checkout`/`git commit` with an EPERM
+on provenance-attributed files even though the identical command succeeds in a normal
+orchestrator shell on the same tree. If this happens, run the gate commands from the
+orchestrator instead, in a fresh worktree created with `git worktree add <absolute path
+under $TMPDIR> origin/<branch>` — use an absolute path, since `$TMPDIR` resolves
+differently between a sandboxed subagent's Bash calls and the orchestrator's own.

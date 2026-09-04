@@ -133,6 +133,12 @@ const STATE_SCHEMA = {
     // from a healthy run. Cleared to null on the next clean read of the same helper.
     heartbeat_clock_error: { type: ['string', 'null'] },
     dispatch_clock_error: { type: ['string', 'null'] },
+    // Advisory only, never a gate: mergeBranches()/syncDefaultBranch()'s post-merge
+    // spot-check for a call shape or a whole file silently reverted by an otherwise-clean
+    // merge. Null (the common case) means "checked, clean" — the prompt requires the
+    // check on every call, so absence is a real result, not "not checked".
+    merge_regression_check: { type: ['string', 'null'] },
+    sync_regression_check: { type: ['string', 'null'] },
     tasks_done: { type: 'array', items: { type: 'number' } },
     worktrees: { type: 'object', additionalProperties: { type: 'string' } },
     artifacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
@@ -220,6 +226,12 @@ const MERGE_SCHEMA = {
     merged: { type: 'array', items: { type: 'object', properties: { id: { type: 'number' }, label: { type: 'string' }, files: { type: 'number' } }, required: ['id', 'label', 'files'] } },
     conflict: { type: ['object', 'null'], properties: { branch: { type: 'string' }, files: { type: 'array', items: { type: 'string' } } } },
     default_branch_violation: { type: 'boolean', description: 'true if HEAD resolved to the default branch — merge must NOT proceed' },
+    // Advisory, never blocking: a clean textual merge can still silently revert a call
+    // shape or a whole file's content a dependency/earlier merge just landed, with every
+    // gate staying green because the gates only run against the already-reverted tree.
+    // Left null when nothing suspicious was found — absence is a real "checked, clean",
+    // not "not checked", since the prompt requires the spot-check on every call.
+    regression_check: { type: ['string', 'null'], description: 'one-line note on anything suspicious the post-merge spot-check found, or null if clean' },
   },
   required: ['merged', 'conflict', 'default_branch_violation'],
 }
@@ -598,7 +610,7 @@ ${spec}
 ${guidance ? `\nThis is a retry. Operator guidance: ${guidance}\n` : ''}
 ${isCode ? 'You run in an isolated git worktree, created from the default branch\'s last committed HEAD (not the run\'s working branch — in-progress commits on a side branch are not visible to you). Make the minimal change that satisfies the task. Resolve this repo\'s gate/lint commands yourself and run them (plus any autofix) before committing — fix failures you caused, note pre-existing ones. Stage and commit; do not push. Return the branch name.' : ''}
 ${task.type === 'query' && !/\bMUTATIONS_ALLOWED\b/.test(spec) ? 'Read-only. No file changes. Return structured data. Cite sources (file paths, line numbers, URLs) for every claim.' : ''}
-${task.type === 'publish' ? 'Create GitHub artifacts (PRs, issues, comments, Discussions) from the main working branch only, never from an isolated worktree branch. Use `gh api graphql` for Discussions. Confirm the artifact URL.' : ''}
+${task.type === 'publish' ? 'Create GitHub artifacts (PRs, issues, comments, Discussions) from the main working branch only, never from an isolated worktree branch. Use `gh api graphql` for Discussions. Confirm the artifact URL. Prefer `mcp__github__*` tools (create_pull_request, issue_write, etc.) over shelling out to `gh` where an equivalent tool exists — `gh` can fail reading `~/.config/gh/config.yml` in a sandboxed environment; if it does, retry the identical `gh` command unsandboxed rather than treating it as a real auth problem. `gh api graphql` has no MCP equivalent for Discussions, so keep using it there.' : ''}
 
 Do exactly this task. Nothing more — note anything else you notice but do not fix it.
 Return via the required schema: status "done" or "failed" (with a ≤50-word reason in notes if failed).`,
@@ -736,7 +748,8 @@ function mergeBranches(worktrees, doneIds, defaultBranch) {
     `Merge these branches into the current working tree, one at a time, in order: ${branchList.map(([, b]) => b).join(', ')}.
 Before merging ANYTHING: run \`git rev-parse --abbrev-ref HEAD\` and compare to \`${defaultBranch}\` (re-derive the default branch yourself with \`git remote show origin\` if you don't trust this value) — if HEAD equals the default branch, STOP, do not merge, set "default_branch_violation": true and return immediately. This check is not optional even if a caller claims preflight already verified it; a stale state file or a concurrent branch change is exactly what this guards against.
 For each branch, \`git merge <branch>\`. On conflict: leave it in the tree (do not \`--abort\`), stop merging further branches, and report the conflicting branch + \`git diff --name-only --diff-filter=U\` in "conflict".
-Report "merged": [{id, label, files changed}] for each that merged cleanly (map branch names back to task ids/labels from this list: ${JSON.stringify(branchList)}), "conflict" (or null), "default_branch_violation" (bool).`,
+${branchList.length > 1 ? `After all clean merges: a later branch can silently revert a parameter or call shape an earlier branch just threaded through, even though the merge itself had zero conflicts — the later task's own edits just happened to be written against the pre-earlier-branch version of a function it also touches. Spot-check any function/file touched by more than one of these branches: does the final merged version still carry what the earliest branch added? Report a one-line description of anything suspicious in "regression_check", or null if clean.` : 'Set "regression_check" to null — only one branch merged, so there is no cross-branch shape to check.'}
+Report "merged": [{id, label, files changed}] for each that merged cleanly (map branch names back to task ids/labels from this list: ${JSON.stringify(branchList)}), "conflict" (or null), "default_branch_violation" (bool), "regression_check" (string or null, per above).`,
     { label: 'merge', phase: 'Integrate', model: 'sonnet', schema: MERGE_SCHEMA }
   )
 }
@@ -785,7 +798,7 @@ function fixOcrReview(findings) {
 
 function syncDefaultBranch(defaultBranch) {
   return agent(
-    `Sync the default branch into the current working tree (merge, not rebase — one merge commit keeps SHAs stable for the diff about to be reviewed): \`git fetch origin ${defaultBranch} && git merge origin/${defaultBranch}\`. On conflict, leave it in the tree and report it. Return via the required schema (reuse "merged": [] and "conflict" fields; "default_branch_violation": false always here since this step only ever merges FROM the default branch, never onto it).`,
+    `Sync the default branch into the current working tree (merge, not rebase — one merge commit keeps SHAs stable for the diff about to be reviewed): \`git fetch origin ${defaultBranch} && git merge origin/${defaultBranch}\`. On conflict, leave it in the tree and report it. If the merge was clean and non-trivial (more than a handful of files touched on the default-branch side), a clean merge is not proof nothing was lost — a merge whose own gate run stays green can still have silently reverted a whole file's worth of this run's own production code back to its pre-batch state, because the gates only test whatever the merge left behind. Spot-check: grep for a couple of this run's own expected helper/function names that should still be in the merged tree, and sanity-check that a file this run substantially rewrote didn't shrink back toward its original line count. Report anything suspicious in "regression_check" (or null if clean / the merge was trivial). Return via the required schema (reuse "merged": [] and "conflict" fields; "default_branch_violation": false always here since this step only ever merges FROM the default branch, never onto it).`,
     { label: 'sync-default', phase: 'Integrate', model: 'sonnet', schema: MERGE_SCHEMA }
   )
 }
@@ -874,7 +887,7 @@ async function runGatesWithRetry(gates, gateDecision) {
 
 function pushAndOpenPR(state, defaultBranch) {
   return agent(
-    `Push the current branch and open the endstate PR: \`git push -u origin ${state.branch}\` then \`gh pr create --draft --base ${defaultBranch} --title "..." --body "..."\` (title from the run's task "${state.task}"; body: a change summary plus the GOAL.md DoD from ${args.goalFilePath}). Return via the required schema: "number", "url".`,
+    `Push the current branch: \`git push -u origin ${state.branch}\`. Then open the endstate PR — prefer \`mcp__github__create_pull_request\` (base "${defaultBranch}", draft, title from the run's task "${state.task}", body: a change summary plus the GOAL.md DoD from ${args.goalFilePath}); fall back to \`gh pr create --draft --base ${defaultBranch} --title "..." --body "..."\` only if that tool is unavailable in your context. If \`gh\` fails reading \`~/.config/gh/config.yml\` (a sandboxed environment denying it), retry the identical command unsandboxed rather than treating it as a real auth problem. Return via the required schema: "number", "url".`,
     { label: 'push-pr', phase: 'Publish', model: 'sonnet', schema: PR_CREATE_SCHEMA }
   )
 }
@@ -1174,6 +1187,7 @@ function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria
     .replace(/[`"$\\]/g, '')
   return agent(
     `Finalize this /imps run. State file: ${args.stateFilePath}. GOAL.md: ${args.goalFilePath}.
+For every \`gh\` invocation below (steps 2 and 4), prefer the equivalent \`mcp__github__*\` tool where one exists (\`gh pr ready\` has none — that step stays \`gh\`); \`gh api graphql\` for Discussions also has no MCP equivalent. If \`gh\` fails reading \`~/.config/gh/config.yml\` (a sandboxed environment denying it), retry the identical command unsandboxed rather than treating it as a real auth problem.
 1. You MUST run this now, before any other step below (the script itself is fail-soft about a missing \`jq\` or unwritable log dir — but \`--duration-ms\` itself is a required, strictly-validated argument: passing anything non-numeric, including omitting the flag, makes the script exit 1 and drop this mandatory line entirely): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status <choose completed, partial, blocked, failed, or cancelled from the run outcome> --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms; if dispatched_at is not a real timestamp — see step 6 — pass 0 here instead of omitting the flag> --scope <project-or-user> --notes "<one-line summary>"\`. Choose \`blocked\` for a tool or permission refusal, \`partial\` when some work landed but a required phase failed, \`failed\` when no usable result was produced, and \`cancelled\` when the operator stopped the run. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, backtick, dollar sign, or backslash, since any of those would break out of or reinterpret this command's own double-quoted argument.
 2. If a PR exists (${prInfo ? `#${prInfo.number}` : 'none'}), flip it to ready: \`gh pr ready ${prInfo ? prInfo.number : ''}\`. Skip if no PR.
 2b. If a PR exists, reconcile its BODY's Definition-of-Done checklist against the coverage actually recorded for this run: ${JSON.stringify(dodCoverageCriteria || [])}. The PR body was written at creation time and never updated since, so a criterion verified later still reads unchecked there — the human-visible record then understates what was verified. Tick every body checkbox whose criterion is recorded "satisfied"; leave "unsatisfied" and "unverifiable" ones unticked, and add a one-line note under the checklist naming any unverifiable criteria so an empty box is not read as a failure. If a criterion is absent from the coverage array (the process lines — gates, panel, merge conflicts, CI, discussion comment) leave its box exactly as it is; other mechanisms own those. ${state.code_review_skipped ? `ALSO add a clearly-worded line to the PR body recording that the code review was SKIPPED for this diff at the operator's direction, with their rationale verbatim: ${String(state.code_review_skipped).replace(/[`"$\\]/g, '')}. Never phrase a skipped review as an approval.` : ''}Edit only the PR body; touch nothing else.
@@ -2218,9 +2232,17 @@ if (mergeResult.conflict) {
   await saveResult(result)
   return result
 }
+// Advisory only — never blocks. Recorded in the state file for the operator/a later
+// Head Imp-style review to see; a clean textual merge is not proof nothing was reverted.
+if (mergeResult.regression_check) {
+  await patchState({ merge_regression_check: mergeResult.regression_check }, 'merge-regression-check').catch(() => {})
+}
 
 const hasDiff = mergeResult.merged.length > 0
 const syncResult = await syncDefaultBranch(defaultBranch)
+if (syncResult.regression_check) {
+  await patchState({ sync_regression_check: syncResult.regression_check }, 'sync-regression-check').catch(() => {})
+}
 if (syncResult.conflict) {
   const result = { status: 'blocked', reason: 'merge_conflict', detail: syncResult.conflict }
   await saveResult(result)
