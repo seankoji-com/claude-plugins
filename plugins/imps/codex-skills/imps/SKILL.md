@@ -4,7 +4,7 @@ description: Explicit Codex command for substantial implementation work that sho
 metadata:
   version: "0.1.0"
   source-command: "plugins/imps/commands/imps.md"
-  source-version: "0.3.51"
+  source-version: "0.3.55"
 ---
 
 # Imps for Codex
@@ -27,9 +27,9 @@ Use these maintained resources when relevant:
 - Bugs, regressions, flakes, and failing gates: `IMPS_PLUGIN_ROOT/references/diagnosis-loop.md`
 - Checklist audits: `IMPS_PLUGIN_ROOT/references/checklist-mode.md`
 - Discussion parsing and reply shape: `IMPS_PLUGIN_ROOT/references/discussion-mode.md`
-- Independent diff review: `IMPS_PLUGIN_ROOT/references/opencode-review.md`
+- Independent diff review: `IMPS_PLUGIN_ROOT/references/ocr-review.md`
 - Review roles: `IMPS_PLUGIN_ROOT/personas/`
-- Read-only review helper: `IMPS_PLUGIN_ROOT/scripts/opencode-review.sh`
+- Read-only review helper: `IMPS_PLUGIN_ROOT/scripts/run-ocr.sh`
 - Shared structured audit appender: `IMPS_PLUGIN_ROOT/scripts/audit-log.sh`
 
 ## Invocation
@@ -140,8 +140,13 @@ verification. It must return findings labelled `blocker`, `major`, `minor`, or `
 `APPROVE` or `CHANGES_REQUESTED`. Amend the plan for supported findings, then run at most
 one follow-up review on the amended plan.
 
+Settle the run's endstate with the user before execution, alongside the plan: stop at a
+green PR, merge the green PR, or merge and release. Record it. This is the only
+authorization to merge — an approved plan is not one, and neither is permission to push.
+Each unrecognized or absent value means stop at a green PR.
+
 Present the reviewed plan, base commit, expected branches/worktrees, gates, external
-mutations, and publication outcome. If approval is not already explicit, ask whether to
+mutations, and the recorded endstate. If approval is not already explicit, ask whether to
 execute this exact plan and stop that turn.
 
 With `--dry-run`, stop here even when the plan is approved.
@@ -176,6 +181,12 @@ For each wave of dependency-ready tasks:
 4. Merge successful worker branches into the integration worktree one at a time. If a
    merge conflicts, send the conflict and both intents back to the owning worker when
    practical. Otherwise stop for the user. Never pick a side merely by branch precedence.
+   A clean, conflict-free merge is not proof nothing was lost: a later branch can revert
+   a parameter or a whole file an earlier branch just landed, while still merging without
+   a single marked conflict. When two or more branches touch the same function or file,
+   spot-check the merged result against what each branch actually added before trusting
+   it — gates run against the merged tree either way, and will not catch a reversion the
+   merge itself made silently.
 5. Run the task's verification after merge and update the run record. Create dependent
    task worktrees only after their prerequisite commits are integrated.
 
@@ -190,20 +201,22 @@ failure, dispatch one bounded repair task from the current integration `HEAD`, m
 and rerun the failing gate followed by the full relevant suite. Record pre-existing
 failures separately; do not relabel them as success.
 
-After gates pass, run the existing OpenCode helper with the integration worktree, immutable
+After gates pass, run the OCR helper with the integration worktree, immutable
 base commit, and run record as the goal file:
 
 ```text
-IMPS_PLUGIN_ROOT/scripts/opencode-review.sh \
+IMPS_PLUGIN_ROOT/scripts/run-ocr.sh \
   --repo <integration-worktree> \
   --base <base-commit> \
   --goal <run-record>
 ```
 
-Read the OpenCode review reference first. The helper is read-only and fail-closed. Missing
+Read the OCR review reference first. The helper is read-only and fail-closed. Missing
 authentication, an unavailable model, timeout, malformed output, or unresolved findings
 blocks publication. For `CHANGES_REQUESTED`, dispatch a repair worker, rerun deterministic
-gates, and start a fresh review. Stop after three failed review rounds unless the user
+gates, and start a fresh review. **Every repair must be committed before that re-review.**
+The helper reviews committed history, and a push sends commits, so an uncommitted repair
+is reviewed around and then silently dropped — with every gate still green. Stop after three failed review rounds unless the user
 provides the exact override instruction and rationale.
 
 When `--personas` is present, review the approved diff with the applicable persona briefs.
@@ -218,8 +231,17 @@ planned item against actual evidence. Do not push or open a pull request unless 
 part of the approved plan.
 
 When publication is approved, push only the integration branch and open or update one PR
-against the recorded default branch. Never merge it automatically. Include the task,
-verification evidence, review result, known limitations, and any explicit override.
+against the recorded default branch. Include the task, verification evidence, review
+result, known limitations, and any explicit override.
+
+Then honour the recorded endstate, and nothing beyond it. Merge only when the endstate is
+merge or release AND the PR is genuinely green — checks passing, no conflicts, no
+unresolved review threads. Mergeability the host has not computed is not green; fail
+closed. Release only after a merge, following the repository's own existing convention,
+and do nothing if it has none. A refused merge is final: report it and hand over rather
+than retrying or pushing to the base branch by another route. Mark merge and release
+separately in the run record, so a resumed run neither re-merges nor re-releases — and so
+a run that merged before dying can still cut the release it never reached.
 
 Remove only the exact temporary worktrees created by this run, and only after their commits
 are safely integrated or their unresolved state has been reported. Keep the integration
@@ -235,7 +257,9 @@ Finish with:
 - the next operator action.
 
 Before closing the run, propose only concrete, reusable learning candidates caused by
-this run. Ask which, if any, should be saved. Append approved project-specific rules to
+this run. Ask which, if any, should be saved — unless the user set a learnings policy up
+front with the endstate, in which case honour it: save every candidate, save none, or ask.
+An absent or unrecognized policy means ask. Append approved project-specific rules to
 `.codex/imps/learnings.md` and stack-independent rules to
 `~/.codex/imps/learnings.md`, under `## Active rules`. Mark the append in the run record
 before retrying any finalization so a resumed run cannot duplicate it. Never rewrite this

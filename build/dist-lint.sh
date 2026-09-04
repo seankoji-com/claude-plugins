@@ -43,7 +43,10 @@ Usage: build/dist-lint.sh [--scope <plugin>] [--check-frozen-sources] [--self-te
                             e.g. right before merging a change that must prove it left
                             Claude sources untouched.
   --self-test              prove each of the 10 invariants below fails on a broken fixture
-                            and passes on a correct one; touches nothing under $ROOT
+                            and passes on a correct one; touches nothing under $ROOT.
+                            Also covers two build/generate.py override-engine failure
+                            modes that corrupt dist/ without tripping any dist/ invariant
+                            (see "generator override-engine probes")
   -h, --help               this text
 
 Invariants checked: regen-diff, unsubstituted-ref, absolute-path, manifest, budget,
@@ -556,6 +559,81 @@ print(p.get("agy", ""))
   return $status
 }
 
+# ------------------------------------------------- generator override-engine probes
+#
+# These two do not inspect dist/ — they exercise build/generate.py's override engine
+# directly, because both failure modes below corrupt dist/ *silently*: the generated file
+# is still well-formed markdown, so every dist/-shaped invariant above stays green. The
+# only reason either was ever noticed was an unrelated absolute-path failure and a
+# hand-diff of headings. They run under --self-test only (against the real generate.py and
+# against copies with the fix reverted); run_lint's ten dist/ invariants are unchanged.
+
+_override_probe() {
+  # $1 = path to a generate.py; $2 = probe name ('fence' or 'order')
+  python3 - "$1" "$2" <<'PROBE'
+import importlib.util, sys
+
+spec = importlib.util.spec_from_file_location("gen_under_test", sys.argv[1])
+gen = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(gen)
+
+
+def render(body, replacements):
+    override = gen.Override()
+    override.replacements = replacements
+    held_body, held = gen.apply_override(body, override, "<probe>")
+    return gen.restore_overrides(held_body, held, "<probe>")
+
+
+def fail(message):
+    print("override-probe: " + message, file=sys.stderr)
+    raise SystemExit(1)
+
+
+if sys.argv[2] == "fence":
+    # A column-0 `# comment` inside a ```bash fence is a shell comment, not a heading.
+    # Treating it as one ends `## Alpha` early and leaks the fence's tail into dist/.
+    body = "\n".join([
+        "## Alpha", "alpha body", "",
+        "```bash", "# not-a-heading shell comment", "echo LEAKED", "```", "",
+        "alpha tail", "",
+        "## Beta", "beta body",
+    ])
+    out = render(body, [("## Alpha", "## Alpha\nREPLACED", False)])
+    if "LEAKED" in out or "alpha tail" in out:
+        fail("a fenced `# comment` truncated the section; its tail leaked into output")
+    if "REPLACED" not in out or "## Beta" not in out:
+        fail("the replacement or the following section went missing")
+    # ...while a heading inside a ```markdown fence is real and stays targetable: 20+
+    # live directives stitch imps.md's fenced GOAL.md template together this way.
+    tmpl = "\n".join([
+        "## Intro", "see below:", "",
+        "```markdown", "## Inner", "inner body", "```", "",
+        "## Outro", "outro body",
+    ])
+    out = render(tmpl, [("## Inner", "## Inner\nINNER-REPLACED", False)])
+    if "INNER-REPLACED" not in out:
+        fail("a heading inside a ```markdown fence stopped being targetable")
+elif sys.argv[2] == "order":
+    # Directive order must not matter. Replacing B before the A that immediately
+    # precedes it makes A's span swallow B's (non-heading) sentinel, silently
+    # discarding B's replacement text.
+    body = "\n".join(["## A", "a body", "## B", "b body", "## C", "c body"])
+    try:
+        out = render(body, [("## B", "## B\nB-REPLACED", False), ("## A", "## A\nA-REPLACED", False)])
+    except gen.GenerateError as error:
+        fail("vanished-replacement assertion fired: %s" % error)
+    for needle in ("A-REPLACED", "B-REPLACED", "## C"):
+        if needle not in out:
+            fail("reverse-ordered directives dropped %r from the output" % needle)
+else:
+    fail("unknown probe %r" % sys.argv[2])
+PROBE
+}
+
+check_override_fenced_heading() { _override_probe "$1" fence; }
+check_override_order() { _override_probe "$1" order; }
+
 # --------------------------------------------------------------------------- self-test
 
 st_pass=0
@@ -833,6 +911,24 @@ FIXTURE
   st_case "readme-marker" \
     "check_readme_marker '$tmp/marker/broken'" \
     "check_readme_marker '$tmp/marker/correct'"
+
+  # 11/12. generator override engine. Both fixtures are copies of the REAL
+  # build/generate.py with exactly one line reverted to its pre-fix form — a broken
+  # *generator*, not a broken document, because these bugs corrupt correct input. The sed
+  # targets are single, stable expressions; if a refactor renames them the sed silently
+  # matches nothing, the "broken" copy stays fixed, and st_case reports the
+  # catches-broken-fixture half as a FAIL rather than passing vacuously.
+  mkdir -p "$tmp/override"
+  sed 's/end not in headings/not HEADING_RE.match(body_lines[end])/' \
+    "$ROOT/build/generate.py" > "$tmp/override/broken_fence.py"
+  sed 's/sorted(override.replacements, key=source_position)/override.replacements/' \
+    "$ROOT/build/generate.py" > "$tmp/override/broken_order.py"
+  st_case "override-fenced-heading" \
+    "check_override_fenced_heading '$tmp/override/broken_fence.py'" \
+    "check_override_fenced_heading '$ROOT/build/generate.py'"
+  st_case "override-directive-order" \
+    "check_override_order '$tmp/override/broken_order.py'" \
+    "check_override_order '$ROOT/build/generate.py'"
 
   echo
   echo "$st_pass ok, $st_fail failed (of $((st_pass + st_fail)))"

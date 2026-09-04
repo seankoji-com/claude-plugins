@@ -1,0 +1,1 @@
+run-note.sh: --kind must be one of env|github|process|repo|policy, got 'bogus'

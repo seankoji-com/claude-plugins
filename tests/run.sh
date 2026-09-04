@@ -33,6 +33,16 @@
 #       arg      passed as "$1" to the function (mutually exclusive w/ stdin)
 #       stdin    piped to the function's stdin (mutually exclusive w/ arg)
 #       expected exact expected stdout
+#
+#     The <function> path segment IS the call site: run_unit_case below calls
+#     "$func" dynamically, derived from this directory name, not from a static
+#     reference anywhere in source. A grep for a function name that finds only
+#     its definition does NOT prove it's dead code — check for a matching
+#     tests/fixtures/unit/<plugin>/<script>/<function>/ dir first. Deleting a
+#     function whose only caller is a fixture dir here silently deletes its
+#     only test coverage too (a real incident: #174 deleted a fail-closed
+#     gate's sole unit coverage this way, past a scout and an implementer,
+#     caught only by adversarial panel review).
 set -uo pipefail
 
 # This harness (not the scripts it tests) needs bash 4+ for `shopt -s
@@ -97,10 +107,16 @@ run_exec_case() {
   # user's home directory during a test run. OLLAMA_MODEL/GEMINI_MODEL are unset so a
   # maintainer's own shell config (real elephant-goldfish usage often exports these)
   # can't leak into the fixture and make goldfish-judge.sh call a real ollama/gemini
-  # with a non-stub model name.
+  # with a non-stub model name. BABYSITTER_HOME is unset for the same reason and with
+  # more at stake: it overrides the pinned HOME outright, so a maintainer who exports it
+  # would have run-note.sh fixtures writing into their real notes ledger.
+  # BABYSITTER_RETRY_BASE_SECS=0 collapses list-prs.sh's retry backoff: its
+  # query-failure fixture exists to prove three attempts then exit 3, and waiting the
+  # real 2s+4s to prove it made the suite a third slower for nothing.
   (
-    cd "$test_home" && unset OLLAMA_MODEL GEMINI_MODEL
-    HOME="$test_home" PATH="$STUBS:$PATH" bash "$target" "${args[@]+"${args[@]}"}" >"$out" 2>"$err"
+    cd "$test_home" && unset OLLAMA_MODEL GEMINI_MODEL BABYSITTER_HOME
+    HOME="$test_home" PATH="$STUBS:$PATH" BABYSITTER_RETRY_BASE_SECS=0 \
+      bash "$target" "${args[@]+"${args[@]}"}" >"$out" 2>"$err"
   )
   exit_code=$?
 
@@ -330,17 +346,32 @@ else
   skip "imps/tests/state-schema.sh" "missing or not executable: $imps_state_schema"
 fi
 
-imps_opencode_review="$ROOT/plugins/imps/tests/opencode-review.sh"
-if [ -x "$imps_opencode_review" ]; then
-  opencode_review_out="$(bash "$imps_opencode_review" 2>&1)"
-  opencode_review_rc=$?
-  if [ "$opencode_review_rc" -eq 0 ]; then
-    report "imps/tests/opencode-review.sh" 1
+imps_ocr_review="$ROOT/plugins/imps/tests/run-ocr.sh"
+if [ -x "$imps_ocr_review" ]; then
+  ocr_review_out="$(bash "$imps_ocr_review" 2>&1)"
+  ocr_review_rc=$?
+  if [ "$ocr_review_rc" -eq 0 ]; then
+    report "imps/tests/run-ocr.sh" 1
   else
-    report "imps/tests/opencode-review.sh" 0 "$opencode_review_out"
+    report "imps/tests/run-ocr.sh" 0 "$ocr_review_out"
   fi
 else
-  skip "imps/tests/opencode-review.sh" "missing or not executable: $imps_opencode_review"
+  skip "imps/tests/run-ocr.sh" "missing or not executable: $imps_ocr_review"
+fi
+
+# /imps concurrency invariants — the slug derivation that keeps two runs against one repo
+# from sharing a state file, plus the learnings-append lock. Pure git + bash, no network.
+imps_concurrency="$ROOT/plugins/imps/tests/concurrency.sh"
+if [ -x "$imps_concurrency" ]; then
+  concurrency_out="$(bash "$imps_concurrency" 2>&1)"
+  concurrency_rc=$?
+  if [ "$concurrency_rc" -eq 0 ]; then
+    report "imps/tests/concurrency.sh" 1
+  else
+    report "imps/tests/concurrency.sh" 0 "$concurrency_out"
+  fi
+else
+  skip "imps/tests/concurrency.sh" "missing or not executable: $imps_concurrency"
 fi
 
 # Cross-platform e2e (OpenCode npm channel, Agy plugin channel). These exercise real

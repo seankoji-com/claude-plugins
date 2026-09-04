@@ -25,7 +25,7 @@ function loadWorkflowFunctions({ agent, parallel, phase, args, log }) {
     'phase',
     'args',
     'log',
-    `${body}\nreturn { runDispatch, stageTasks, dispatchImp, parseTaskDecision, parseGateDecision, validateStateRead, nowIso, fixLoopRound, adjudicateFindings, writeParkedFindings, constraintsPointer, constraintsPointerForReviewer, openCodeReview, openCodePreflight, fixCodeReview, personaReview, fixGate, finalizeRun }`
+    `${body}\nreturn { runDispatch, stageTasks, dispatchImp, parseTaskDecision, parseGateDecision, validateStateRead, nowIso, fixLoopRound, adjudicateFindings, writeParkedFindings, constraintsPointer, constraintsPointerForReviewer, resolvePolicy, drivePrAndClose, ocrReview, ocrPreflight, fixOcrReview, personaReview, fixGate, finalizeRun }`
   )
   return factory(agent, parallel, phase || (() => {}), args || {}, log || (() => {}))
 }
@@ -117,6 +117,65 @@ test('validateStateRead blocks when readState() mismaps tasks to [] (#87 reprodu
   assert.equal(result.ok, false)
   assert.match(result.error, /returned 0 task\(s\) but the raw file has 8/)
   assert.match(result.error, /#87/)
+})
+
+test('an unreadable autonomy policy is never read as consent', async () => {
+  // Phase 1 Step 7 settles endstate / plan_review / learnings_policy. A state file that
+  // omits one, or carries a value this version does not know, must fall back to the
+  // conservative choice — not to merging, not to skipping plan review, and not to writing
+  // the shared learnings log unasked.
+  const { resolvePolicy: resolve } = loadWorkflowFunctions({ agent: async () => ({}), parallel })
+
+  for (const bad of [undefined, null, '', 'yes', 'MERGE', 'auto ', 7, {}]) {
+    assert.equal(resolve(bad, ['pr', 'merge', 'release'], 'pr'), 'pr')
+    assert.equal(resolve(bad, ['ask', 'on_objection'], 'ask'), 'ask')
+    assert.equal(resolve(bad, ['auto', 'none', 'ask'], 'ask'), 'ask')
+  }
+  // And the recognized values still resolve to themselves.
+  assert.equal(resolve('release', ['pr', 'merge', 'release'], 'pr'), 'release')
+  assert.equal(resolve('auto', ['auto', 'none', 'ask'], 'ask'), 'auto')
+})
+
+test('validateStateRead blocks when a task spec comes back truncated', async () => {
+  const { validateStateRead } = loadWorkflowFunctions({ agent: async () => ({}), parallel })
+  // The observed failure: the task list and phase are intact, so the count check passes,
+  // but the imp would be dispatched on the first line of a multi-KB spec.
+  const state = { tasks: [task(1, { spec: 'Read the goal file.' })], phase: 'dispatch_pending' }
+  const rawCheck = {
+    raw_task_count: 1,
+    raw_phase: 'dispatch_pending',
+    raw_spec_lengths: [4200],
+    raw_error: null,
+  }
+
+  const result = validateStateRead(state, rawCheck)
+  assert.equal(result.ok, false)
+  assert.match(result.error, /spec for task #1/)
+  assert.match(result.error, /truncated/)
+})
+
+test('validateStateRead tolerates whitespace-scale spec length drift', async () => {
+  const { validateStateRead } = loadWorkflowFunctions({ agent: async () => ({}), parallel })
+  const spec = 'x'.repeat(1000)
+  const state = { tasks: [task(1, { spec })], phase: 'dispatch_pending' }
+  const rawCheck = {
+    raw_task_count: 1,
+    raw_phase: 'dispatch_pending',
+    raw_spec_lengths: [1005],
+    raw_error: null,
+  }
+
+  assert.deepEqual(validateStateRead(state, rawCheck), { ok: true, error: null })
+})
+
+test('validateStateRead skips the spec check when raw_spec_lengths is absent', async () => {
+  const { validateStateRead } = loadWorkflowFunctions({ agent: async () => ({}), parallel })
+  // Legacy invocation shape, or a jq run that failed: nothing to compare against, so the
+  // guard must not block a run it cannot evaluate.
+  const state = { tasks: [task(1, { spec: 'short' })], phase: 'dispatch_pending' }
+  const rawCheck = { raw_task_count: 1, raw_phase: 'dispatch_pending', raw_error: null }
+
+  assert.deepEqual(validateStateRead(state, rawCheck), { ok: true, error: null })
 })
 
 test('validateStateRead blocks on a phase mismatch even when task counts agree', async () => {
@@ -305,7 +364,23 @@ test('finalizeRun persists a bounded checkbox-free decision trail in GOAL.md', a
   assert.match(prompt, /Record only pivots, not routine actions/)
 })
 
-test('OpenCode review is a mechanical wrapper and code fixes carry constraints', async () => {
+test('every Integrate-phase fixer is told to commit its work', async () => {
+  const { agent, calls } = captureAgent()
+  const wf = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
+
+  await wf.fixGate({ name: 'lint', cmd: 'npm run lint' }, 'tail', undefined)
+  await wf.fixOcrReview([{ severity: 'major', path: 'x.js', line: 1, message: 'breaks zero input' }])
+  await wf.fixLoopRound(['a finding'])
+
+  // run-ocr.sh reviews MERGE_BASE..HEAD and `git push` sends commits, so a fixer that
+  // leaves work uncommitted is reviewed around and then silently dropped — with every
+  // gate still green. fixLoopRound always had this instruction; the other two did not.
+  for (const call of calls) {
+    assert.match(call.prompt, /commit/i, `${call.opts.label} does not tell its agent to commit`)
+  }
+})
+
+test('OCR review is a mechanical wrapper and code fixes carry constraints', async () => {
   const { agent, calls } = captureAgent()
   const wf = loadWorkflowFunctions({ agent, parallel, args: GOAL_ARGS })
   const task = { id: 1, label: 'do a thing', type: 'code', model: 'sonnet', deps: [], spec: 'the spec' }
@@ -314,25 +389,25 @@ test('OpenCode review is a mechanical wrapper and code fixes carry constraints',
   await wf.dispatchImp(task, { task: 'run goal' }, undefined, false)
   await wf.fixGate({ name: 'lint', cmd: 'npm run lint' }, 'tail', undefined)
   await wf.fixLoopRound(['a finding'])
-  await wf.openCodeReview('master')
-  await wf.fixCodeReview([{ severity: 'major', path: 'x.js', line: 1, message: 'breaks zero input' }])
+  await wf.ocrReview('master')
+  await wf.fixOcrReview([{ severity: 'major', path: 'x.js', line: 1, message: 'breaks zero input' }])
   await wf.personaReview('sre', brief, 7, 'seankoji/claude-plugins', 'master', 'live')
 
   assert.equal(calls.length, 6)
-  for (const call of calls.filter((c) => c.opts.label !== 'opencode-review')) {
+  for (const call of calls.filter((c) => c.opts.label !== 'ocr-review')) {
     assert.ok(
       call.prompt.includes('MANDATORY FIRST ACTION') && call.prompt.includes(GOAL_ARGS.goalFilePath),
       `${call.opts.label} lost the Global Constraints pointer`
     )
   }
   // Only the persona reviewer gets the review-specific major-finding escalation. The
-  // OpenCode wrapper receives neither code nor a diff; the helper snapshots it itself.
+  // OCR wrapper receives neither code nor a diff; the helper snapshots it itself.
   const withMajor = calls.filter((c) => /MAJOR finding/.test(c.prompt)).map((c) => c.opts.label)
   assert.deepEqual(withMajor.sort(), ['persona-sre'])
 
-  const wrapper = calls.find((c) => c.opts.label === 'opencode-review')
+  const wrapper = calls.find((c) => c.opts.label === 'ocr-review')
   assert.ok(wrapper.prompt.includes('Do not read, summarize, review, edit'), 'wrapper must not receive review work')
-  assert.ok(wrapper.prompt.includes('opencode-review.sh'), 'wrapper must invoke the dedicated harness')
+  assert.ok(wrapper.prompt.includes('run-ocr.sh'), 'wrapper must invoke the dedicated harness')
   assert.ok(wrapper.prompt.includes(GOAL_ARGS.goalFilePath), 'wrapper must pass GOAL.md by path')
 })
 
@@ -476,4 +551,153 @@ test('a working nowIso puts a real ISO value in the heartbeat', async () => {
   await runDispatch(baseState([task(1)]))
 
   assert.equal(patches[0].last_heartbeat, '2026-08-07T11:22:33Z')
+})
+
+// ---- Phase 5: drive-to-green and close ----
+
+function prAgent(script) {
+  const calls = []
+  async function agent(prompt, opts) {
+    calls.push(opts.label)
+    const key = Object.keys(script).find((k) => opts.label.startsWith(k))
+    const v = script[key]
+    return typeof v === 'function' ? v(calls) : v
+  }
+  return { agent, calls }
+}
+
+const GREEN = { checks: 'passing', mergeable: 'clean', unresolved_comments: [], detail: 'green' }
+const PR = { number: 7, url: 'https://example.test/pr/7' }
+
+test('a green PR with endstate "pr" is never merged', async () => {
+  const { agent, calls } = prAgent({ 'pr-status': GREEN })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'pr', false)
+
+  assert.equal(out.green, true)
+  assert.equal(out.merged, false)
+  assert.equal(out.rounds, 0, 'a green PR needs no fix rounds')
+  assert.ok(!calls.some((c) => c.startsWith('merge-pr')), 'endstate "pr" must not merge')
+})
+
+test('a refused merge is final — no retry, and it is reported as refused', async () => {
+  const { agent, calls } = prAgent({
+    'pr-status': GREEN,
+    'merge-pr': { done: false, refused: true, detail: 'denied by a standing deny rule' },
+  })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'merge', false)
+
+  assert.equal(out.merged, false)
+  assert.equal(out.refused, true)
+  assert.match(out.detail, /deny rule/)
+  assert.equal(calls.filter((c) => c.startsWith('merge-pr')).length, 1, 'a refusal must never be retried')
+})
+
+test('a merge that is refused never proceeds to a release', async () => {
+  const { agent, calls } = prAgent({
+    'pr-status': GREEN,
+    'merge-pr': { done: false, refused: true, detail: 'blocked' },
+  })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  await drivePrAndClose(PR, 'o/r', 'main', 'release', false)
+
+  assert.ok(!calls.some((c) => c.startsWith('cut-release')), 'nothing may be released off an unmerged PR')
+})
+
+test('the green loop is bounded and hands off rather than looping forever', async () => {
+  const RED = { checks: 'failing', mergeable: 'clean', unresolved_comments: [], detail: 'tests red' }
+  const { agent, calls } = prAgent({ 'pr-status': RED, 'pr-fix': {} })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'merge', false)
+
+  assert.equal(out.rounds, 3, 'the cap is three rounds')
+  assert.equal(out.green, false)
+  assert.equal(out.merged, false, 'a PR that never went green must not be merged')
+  assert.match(out.detail, /not green after 3 round/)
+  assert.ok(!calls.some((c) => c.startsWith('merge-pr')))
+})
+
+test('an already-merged PR is not merged again on a resume', async () => {
+  const { agent, calls } = prAgent({ 'pr-status': GREEN })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'merge', true)
+
+  assert.equal(out.merged, true)
+  assert.ok(!calls.some((c) => c.startsWith('merge-pr')), 'the merged_at marker must guard the re-merge')
+})
+
+test('unresolved review comments block green just as a failing check does', async () => {
+  let round = 0
+  const { agent } = prAgent({
+    'pr-status': () => {
+      round += 1
+      return round === 1
+        ? { checks: 'passing', mergeable: 'clean', unresolved_comments: ['rename the helper'], detail: '1 comment' }
+        : GREEN
+    },
+    'pr-fix': {},
+  })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'pr', false)
+
+  assert.equal(out.rounds, 1, 'the comment must drive exactly one fix round')
+  assert.equal(out.green, true)
+})
+
+test('an unknown mergeability is not green — the check fails closed', async () => {
+  // GitHub computes mergeability asynchronously and reports unknown while it does.
+  // Treating that as green would merge on the absence of the fact the check establishes.
+  const UNKNOWN = { checks: 'passing', mergeable: 'unknown', unresolved_comments: [], detail: 'mergeability not computed' }
+  const { agent, calls } = prAgent({ 'pr-status': UNKNOWN, 'pr-fix': {} })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'merge', false)
+
+  assert.equal(out.green, false)
+  assert.equal(out.merged, false)
+  assert.ok(!calls.some((c) => c.startsWith('merge-pr')), 'must never merge on unknown mergeability')
+})
+
+test('a resume after a merge can still cut the release it never got to', async () => {
+  // The failure this guards: merge lands, the run dies, and the resume returns early
+  // because the PR is already merged — so the authorized release never happens.
+  const { agent, calls } = prAgent({
+    'pr-status': GREEN,
+    'cut-release': { done: true, refused: false, url: 'https://example.test/releases/v1', detail: 'cut' },
+  })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'release', true, false)
+
+  assert.ok(!calls.some((c) => c.startsWith('merge-pr')), 'an already-merged PR must not be re-merged')
+  assert.equal(out.released, true, 'the release must still be reachable on resume')
+  assert.equal(out.release_url, 'https://example.test/releases/v1')
+})
+
+test('an already-released run re-cuts nothing', async () => {
+  const { agent, calls } = prAgent({ 'pr-status': GREEN })
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(PR, 'o/r', 'main', 'release', true, true)
+
+  assert.equal(out.released, true)
+  assert.ok(!calls.some((c) => c.startsWith('cut-release')), 'the release_url marker must guard the re-cut')
+})
+
+test('a run with no PR reports that rather than treating it as an error', async () => {
+  const { agent, calls } = prAgent({})
+  const { drivePrAndClose } = loadWorkflowFunctions({ agent, parallel })
+
+  const out = await drivePrAndClose(null, 'o/r', 'main', 'merge', false)
+
+  assert.equal(out.merged, false)
+  assert.match(out.detail, /no PR/)
+  assert.equal(calls.length, 0)
 })

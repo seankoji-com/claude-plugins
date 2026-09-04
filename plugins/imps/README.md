@@ -32,7 +32,7 @@ deterministic gates and an adversarial **Head Imp** review. An optional five-per
 review panel runs on top when you pass `--personas` (see [Runtime flags](#runtime-flags)).
 
 The orchestrating session is deliberately minimal: it holds only the operator-facing
-work (plan approval, the push/PR gate, conflict decisions, learnings) while everything
+work (the run's autonomy contract, then only genuine failures) while everything
 else — dispatch, imp monitoring, merges, diffs, gate logs, persona traffic,
 finalize — is real control flow inside a **`Workflow` script**
 (`scripts/imps-run.workflow.js`), not a subagent. The command syncs the bundled script
@@ -58,7 +58,7 @@ Optional:
 | --- | --- |
 | **`CLAUDE_CDP_URL`** env var | Browser panel via CDP (default `ws://localhost:3000`). Point at a headless-Chrome container, local or LAN. |
 | **Claude-in-Chrome MCP** | Browser panel fallback if no CDP endpoint is reachable. |
-| **`~/.claude/scripts/persona-post.sh`** implementing the protocol in `${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md`, with per-persona GitHub App identities whose credentials live in your secret store | Independent, per-persona review identity for the persona panel (see [The persona panel](#the-persona-panel)). Absent or failing → that persona's verdict goes to `findings_inline` instead of posting — it never falls back to the orchestrator's own identity. |
+| **`~/.claude/scripts/persona-post.sh`** implementing the protocol in `${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md`, with per-persona GitHub App identities whose credentials live in your secret store | `/imps:issue-mode`'s persona reviews only. The free-text run's panel never posts — its verdicts always return inline. |
 
 ## Install
 
@@ -112,7 +112,7 @@ only turn the panel off there if such a PR review genuinely exists.
 ### Free-text mode walkthrough
 
 1. `/imps:imps` with a task description (or empty — it will ask).
-2. `/imps:imps` refines the brief via `prompt-builder`, asks five discovery questions, then enters plan mode (opus) to decompose and write `GOAL.md` (to `~/.claude/imps/runs/<slug>.md`, not the repo — see [Runtime state](#runtime-state)). Discovery question 5 ("any constraints?") feeds a `## Global Constraints` section in `GOAL.md` — cross-cutting invariants, stated verbatim, that every task must honor; unlike the Definition of Done (true once, ticked, verified), constraints are true of every task and never ticked. Every code-writing or code-reviewing agent call the script makes receives it by pointer, not by copy.
+2. `/imps:imps` triages the brief — a brief naming a concrete deliverable and at least one repo anchor (file, path, command, symptom) passes through verbatim to four discovery questions; a thinner one gets an interrogation instead (drawing on `references/brief-probes.md`, and replacing those questions rather than adding to them). Either way it then enters plan mode (opus) to decompose and write `GOAL.md` (to `~/.claude/imps/runs/<slug>.md`, not the repo — see [Runtime state](#runtime-state)). The constraints question feeds a `## Global Constraints` section in `GOAL.md` — cross-cutting invariants, stated verbatim, that every task must honor; unlike the Definition of Done (true once, ticked, verified), constraints are true of every task and never ticked. Every code-writing or code-reviewing agent call the script makes receives it by pointer, not by copy.
 3. The Head Imp (opus) adversarially reviews the plan; findings are addressed before dispatch.
 4. After plan approval, `/imps:imps` syncs and invokes the Workflow script, then returns control — `Workflow` runs in the background, and you're notified when it reaches a result. The script does the git preflight, dispatches the task DAG as staged `agent()` calls, and tracks progress in the run state file, so progress is `cat ~/.claude/imps/runs/<slug>.json` (the imps run inside the script's own tracked execution, invisible to the main session's transcript the same way the old subagent design was).
 5. When the imps finish, the script merges branches, syncs master, runs gates, then sends the merged diff to read-only OpenCode review. ChatGPT OAuth is preferred; OpenRouter is opt-in. Claude fixes blocker/major findings, reruns gates, and OpenCode reviews the fresh diff in a new session. Setup or verdict failure blocks rather than falling back to Claude. Only approval reaches `awaiting_authorization`, and the final summary names the provider and model.
@@ -231,31 +231,15 @@ Each persona ends its review with a parseable verdict line:
 VERDICT: APPROVE | CHANGES_REQUESTED @ <sha>
 ```
 `CHANGES_REQUESTED` requires at least one `[blocker]` or `[major]` finding. Minors and
-nits are recorded but never block. By default each persona posts as a **real GitHub PR
-review under its own dedicated GitHub App identity** via a posting script
-(`~/.claude/scripts/persona-post.sh`) that implements the protocol in
-`${CLAUDE_PLUGIN_ROOT}/references/persona-posting.md` — never the orchestrator's own
-`gh`/GitHub-MCP access, so each review is attributed to and traceable as a genuinely
-separate GitHub actor, not the session that authored the diff. The posting script uses
-per-persona identities drawn from your secret store; the maintainer's deployment
-(dedicated GitHub Apps + 1Password) is one example. This is independent *attribution*,
-not an unforgeable *gate*: the orchestrator still holds the credentials the posting
-script uses to mint every App's token, so it isn't a control the authoring session is
-structurally unable to satisfy — it fixes the previous self-approval-under-one's-own-
-name problem, not every trust concern a branch-protection rule might assume. If that
-script is absent, fails, or its post can't be verified on the PR for a given persona
-(GitHub Apps not installed on the target repo, secret store unavailable, etc.), that
-persona's verdict fails **closed**: it goes into `findings_inline` for the operator to
-read or post by hand, never under the orchestrator's own identity — the rest of the
-panel is unaffected.
+nits are recorded but never block. **The panel never posts to GitHub.** Every verdict
+returns inline in `run_complete.findings_inline` for the operator to read, or post by
+hand. Personas previously published real PR reviews under dedicated GitHub App
+identities; that was removed once the OCR review rounds became this run's on-the-record
+code review, since five bot-authored approvals of a diff the same session wrote read as
+independent sign-off without being it.
 
-Pushing/opening the endstate PR and authorizing personas to post live GitHub reviews are
-two separate operator decisions, not one — the `Push & PR?` question (asked once the
-Workflow script returns `awaiting_authorization`) offers a `findings only (no persona
-posts)` option precisely for runs where this session's own Head-Imp-driven amendments
-make an independent review under a bot identity misleading. The posting-identity
-protocol itself lives in `references/persona-posting.md`, shared by this panel and
-`/imps:issue-mode`'s — not duplicated between them.
+`/imps:issue-mode` still posts persona reviews under App identities, and the protocol for
+it lives in `references/persona-posting.md`.
 
 Findings survive up to three fix rounds. A `WONTFIX: <rationale>` in any round is captured, not
 discarded — every rationale is retained as a `wontfix_rulings` entry and rendered in the run's
@@ -285,13 +269,16 @@ a durable, readable record even after the state file is deleted at finalize.
 | `🦇` agent type | `${CLAUDE_PLUGIN_ROOT}/agents/imp.md` |
 | `😈` agent type | `${CLAUDE_PLUGIN_ROOT}/agents/head-imp.md` |
 | `👺` agent type (audit orchestrator) | `${CLAUDE_PLUGIN_ROOT}/agents/imp-agency.md` |
-| Free-text run's Workflow script | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-run.workflow.js` — synced to `~/.claude/workflows/imps-run.js` on every invocation |
+| Free-text run's Workflow script | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-run.workflow.js` — synced to `~/.claude/workflows/imps-run-<sha8>.js` on every invocation (content-addressed, so concurrent runs on different plugin versions never swap it under each other) |
 | Checklist-file mode workflow | `${CLAUDE_PLUGIN_ROOT}/references/checklist-mode.md` |
 | Discussion-seed mode workflow | `${CLAUDE_PLUGIN_ROOT}/references/discussion-mode.md` |
 | Summon banner (cosmetic) | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-intro.py` |
 | Dispatch banner (cosmetic) | `${CLAUDE_PLUGIN_ROOT}/scripts/dispatch-banner.py` |
 | Final banner (cosmetic) | `${CLAUDE_PLUGIN_ROOT}/scripts/final-banner.py` |
 | Structured audit-log appender | `${CLAUDE_PLUGIN_ROOT}/scripts/audit-log.sh` |
+| Run slug/path derivation (single source of truth) | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-paths.sh` |
+| Run-worktree manager (concurrent runs) | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh` |
+| Locked learnings appender | `${CLAUDE_PLUGIN_ROOT}/scripts/imps-learnings-append.sh` |
 
 No manual setup needed for any of these — the plugin installs them at
 `${CLAUDE_PLUGIN_ROOT}` and the commands resolve them at runtime. The bundled
@@ -304,11 +291,54 @@ Written to `~/.claude/imps/` on first run — not bundled:
 
 | Path | Purpose |
 | --- | --- |
-| `~/.claude/imps/runs/<slug>.json` | Per-project run state — resume spine, owned by the Workflow script after handover; it heartbeats `last_heartbeat` + `tasks_done` while imps run, so `cat` this file for live progress. Every invocation of the script is fresh (never `resumeFromRunId`) — this file, plus git ground truth, is the entire resume mechanism |
+| `~/.claude/imps/runs/<slug>.json` | Per-run state — resume spine, owned by the Workflow script after handover; it heartbeats `last_heartbeat` + `tasks_done` while imps run, so `cat` this file for live progress. Every invocation of the script is fresh (never `resumeFromRunId`) — this file, plus git ground truth, is the entire resume mechanism |
 | `~/.claude/imps/runs/<slug>.md` | Per-run `GOAL.md` spine (`/compact`-durable), including the final nontrivial decision trail — lives here, not in the repo, so writing it never needs project-directory permission |
 | `~/.claude/imps/runs/<slug>.prs.json` | Per-PR monitor state for `/imps:prs` |
 | `~/.claude/imps/learnings.md` | Self-tuning `## Active rules` (≤10 bullets) + per-run notes |
 | `~/.claude/audit.jsonl` | One structured JSON line per completed run — shared across plugins in this marketplace (schema in the root `AGENTS.md`) |
+
+The slug is derived by `scripts/imps-paths.sh` from the **working tree**
+(`git rev-parse --show-toplevel`), disambiguated by the remote — e.g.
+`seankoji_claude-plugins__claude-plugins`. Two worktrees of one repo therefore get two
+slugs, which is what keeps concurrent runs apart (see below).
+
+## Concurrent runs against one repo
+
+Several `/imps:imps` runs can work on the same repo at once — **one run per git worktree,
+each in its own session.**
+
+The reason it needs a worktree rather than just a second session is that every
+orchestration step (cutting the run branch, merging imp branches, running gates, pushing
+the PR) acts on the session's own checkout. Two runs sharing one checkout share one HEAD,
+so one run's `git checkout -b` sends the other's merges onto the wrong branch. Separate
+worktrees make each run's cwd correct by construction. (The individual code imps were
+always isolated — the harness gives each its own worktree — so only the orchestrator
+needed one.)
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh" new [name]   # create a run worktree
+"${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh" list         # what is running where
+"${CLAUDE_PLUGIN_ROOT}/scripts/imps-worktree.sh" remove <name>
+```
+
+`new` creates a detached worktree at `<repo>.imps/<name>`, beside the main checkout — not
+inside the repo (where gates and globs would see it) and not inside `.claude/worktrees/`
+(which Claude Code manages). `remove` refuses while that worktree still has a state file,
+since that file is the run's only resume handle.
+
+Two steps are yours, not the script's:
+
+1. **Install dependencies in the new worktree.** A fresh worktree has no `node_modules`
+   or venv, and gates run in the session's own tree.
+2. **Start the new session with that worktree as its cwd** — a command cannot relocate
+   the session it runs in.
+
+Runs in different worktrees share no state file, run branch or PR. Of what remains
+shared: the workflow script is content-addressed, `$TMPDIR` scratch files are
+slug-namespaced, and `~/.claude/imps/learnings.md` is appended under a lock. The one
+thing worth knowing about is git's auto-gc, which rewrites `packed-refs` and can race
+`git worktree add` — `imps-worktree.sh` prints the `gc.auto 0` advisory once a second
+worktree exists.
 
 The `learnings.md` `## Active rules` section is read at startup on every run and applied
 to model routing, task boundaries, and dependency detection. `/imps:imps` appends a new run

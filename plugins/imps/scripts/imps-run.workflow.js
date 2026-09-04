@@ -25,7 +25,7 @@
 // `learnings_saved`) before acting.
 //
 // args shape: {
-//   pluginRoot, stateFilePath, goalFilePath, personaPostingProtocolPath,  // all required
+//   pluginRoot, stateFilePath, goalFilePath,  // all required
 //   personaBriefPaths: {                                                  // required
 //     "solution-architect": { path, model }, "grumpy-engineer": { path, model },
 //     "sre": { path, model }, "business-analyst": { path, model },
@@ -34,7 +34,7 @@
 //   personaPanel: boolean  // OPTIONAL, default false. The in-run five-persona panel is
 //                          // OPT-IN — only runs when this is exactly `true` (set by the
 //                          // `--personas` flag in commands/imps.md). Absent/false: the
-//                          // panel and its fix loop are skipped; OpenCode diff review is
+//                          // panel and its fix loop are skipped; OCR diff review is
 //                          // the gate. personaBriefPaths is still passed either
 //                          // way — it is only read when the panel actually runs.
 // }
@@ -47,6 +47,11 @@
 // prompt template — the script body itself has no FS access. "Deterministic" here means
 // the loop/branching logic is real JS, not that zero model calls happen.
 
+// These titles are the HARNESS's progress groupings (what /workflows renders), keyed to
+// where each agent() call runs. They deliberately do NOT match commands/imps.md's
+// operator-facing phases (Define/Plan/Build/Consolidate/PR) — that file carries the
+// mapping table. Preflight spans both the state read and dispatch preflight; Publish
+// spans open/panel/green/close. Renaming either side to match would make one wrong.
 export const meta = {
   name: 'imps-run',
   description: 'Dispatch, merge, gate, review, and finalize one /imps:imps free-text run.',
@@ -107,7 +112,19 @@ const STATE_SCHEMA = {
     segment: { type: ['string', 'null'] },
     dispatched_at: { type: ['string', 'null'] },
     poll_interval_seconds: { type: 'number' },
-    max_dispatch_hours: { type: 'number' },
+    // Where the run stops: 'pr' (green PR, human merges), 'merge', or 'release'.
+    // The ONLY authorization to close the PR. Absent or unrecognized means 'pr' —
+    // a legacy state file must never be read as consent to merge.
+    endstate: { type: ['string', 'null'] },
+    // What happens to this run's learnings, settled in Phase 1 Step 7: 'auto' appends
+    // every candidate without asking, 'none' discards them, 'ask' (the default for an
+    // absent or unrecognized value) returns them for the operator to choose.
+    learnings_policy: { type: ['string', 'null'] },
+    // Idempotency markers for Phase 5's two irreversible steps, guarding them exactly the
+    // way pr/verdicts/learnings_saved guard theirs: a resumed invocation must never
+    // re-merge or re-release.
+    merged_at: { type: ['string', 'null'] },
+    release_url: { type: ['string', 'null'] },
     last_heartbeat: { type: ['string', 'null'] },
     // One-line clock-helper failure messages, fail-soft like the fields they sit beside
     // (dispatched_at falls back to the "agent-supplies-timestamp" sentinel, last_heartbeat
@@ -116,6 +133,12 @@ const STATE_SCHEMA = {
     // from a healthy run. Cleared to null on the next clean read of the same helper.
     heartbeat_clock_error: { type: ['string', 'null'] },
     dispatch_clock_error: { type: ['string', 'null'] },
+    // Advisory only, never a gate: mergeBranches()/syncDefaultBranch()'s post-merge
+    // spot-check for a call shape or a whole file silently reverted by an otherwise-clean
+    // merge. Null (the common case) means "checked, clean" — the prompt requires the
+    // check on every call, so absence is a real result, not "not checked".
+    merge_regression_check: { type: ['string', 'null'] },
+    sync_regression_check: { type: ['string', 'null'] },
     tasks_done: { type: 'array', items: { type: 'number' } },
     worktrees: { type: 'object', additionalProperties: { type: 'string' } },
     artifacts: { type: 'array', items: { type: 'object', additionalProperties: true } },
@@ -157,15 +180,16 @@ const STATE_SCHEMA = {
     // Bounds `retry findings`: incremented where the verb is CONSUMED, refused past 2.
     fix_cycles: { type: ['number', 'null'] },
     // Persisted so a findings resume — whose decision no longer starts with "PR:" —
-    // does not silently degrade to posting_mode "none".
-    posting_mode: { type: ['string', 'null'] },
-    // Schema 5: OpenCode review is additive so legacy state files remain valid.
+    // Schema 5: OCR review is additive so legacy state files remain valid.
     review_engine: { type: ['string', 'null'] },
     review_model: { type: ['string', 'null'] },
     code_review_rounds: { type: ['number', 'null'] },
     code_review_findings: { type: ['array', 'null'], items: { type: 'object', additionalProperties: true } },
     code_review_sessions: { type: ['array', 'null'], items: { type: 'string' } },
     code_review_override: { type: ['string', 'null'] },
+    // The operator's rationale for proceeding with NO review at all (`skip code review:`),
+    // as opposed to accepting one that completed with findings (`code_review_override`).
+    code_review_skipped: { type: ['string', 'null'] },
   },
   required: ['schema', 'task', 'branch', 'tasks', 'phase'],
 }
@@ -202,6 +226,12 @@ const MERGE_SCHEMA = {
     merged: { type: 'array', items: { type: 'object', properties: { id: { type: 'number' }, label: { type: 'string' }, files: { type: 'number' } }, required: ['id', 'label', 'files'] } },
     conflict: { type: ['object', 'null'], properties: { branch: { type: 'string' }, files: { type: 'array', items: { type: 'string' } } } },
     default_branch_violation: { type: 'boolean', description: 'true if HEAD resolved to the default branch — merge must NOT proceed' },
+    // Advisory, never blocking: a clean textual merge can still silently revert a call
+    // shape or a whole file's content a dependency/earlier merge just landed, with every
+    // gate staying green because the gates only run against the already-reverted tree.
+    // Left null when nothing suspicious was found — absence is a real "checked, clean",
+    // not "not checked", since the prompt requires the spot-check on every call.
+    regression_check: { type: ['string', 'null'], description: 'one-line note on anything suspicious the post-merge spot-check found, or null if clean' },
   },
   required: ['merged', 'conflict', 'default_branch_violation'],
 }
@@ -255,10 +285,9 @@ const PERSONA_VERDICT_SCHEMA = {
   properties: {
     slug: { type: 'string' },
     verdict: { type: 'string', enum: ['APPROVE', 'CHANGES_REQUESTED'] },
-    posted: { type: 'boolean' },
     findings: { type: 'array', items: { type: 'string' } },
   },
-  required: ['slug', 'verdict', 'posted', 'findings'],
+  required: ['slug', 'verdict', 'findings'],
 }
 
 // One persona fix round's outcome. fixLoopRound() was schema-less and its return
@@ -332,11 +361,24 @@ const LEARNINGS_APPEND_SCHEMA = {
   required: ['saved'],
 }
 
+const TREE_CHECK_SCHEMA = {
+  type: 'object',
+  properties: {
+    clean: { type: 'boolean' },
+    porcelain: { type: 'string' },
+  },
+  required: ['clean'],
+}
+
 const RAW_STATE_CHECK_SCHEMA = {
   type: 'object',
   properties: {
     raw_task_count: { type: 'number' },
     raw_phase: { type: 'string' },
+    // Per-task spec lengths, in task-table order. Optional: a legacy state file or a
+    // failed jq run leaves it absent, and validateStateRead() skips the spec check
+    // rather than blocking a run it cannot evaluate.
+    raw_spec_lengths: { type: 'array', items: { type: 'number' } },
     raw_error: { type: ['string', 'null'] },
   },
   required: ['raw_task_count', 'raw_phase'],
@@ -397,7 +439,7 @@ function readState() {
 // phase before anything downstream trusts them.
 function countStateTasks() {
   return agent(
-    `Run \`jq '.tasks | length' ${args.stateFilePath}\` and report the integer result as "raw_task_count". Run \`jq -r '.phase' ${args.stateFilePath}\` and report the string result as "raw_phase". If either jq command fails (e.g. the file isn't valid JSON), report the error text as "raw_error" and use -1 and "" for the other two fields. Do not interpret or summarize the file's contents beyond these two command outputs.`,
+    `Run \`jq '.tasks | length' ${args.stateFilePath}\` and report the integer result as "raw_task_count". Run \`jq -r '.phase' ${args.stateFilePath}\` and report the string result as "raw_phase". Run \`jq -c '[.tasks[] | ((.spec // "") | length)]' ${args.stateFilePath}\` and report the resulting array of integers as "raw_spec_lengths" — it must stay in task-table order and have one entry per task. If any jq command fails (e.g. the file isn't valid JSON), report the error text as "raw_error" and use -1, "" and [] for the other three fields. Do not interpret or summarize the file's contents beyond these command outputs.`,
     { label: 'count-state-tasks', phase: 'Preflight', model: 'haiku', schema: RAW_STATE_CHECK_SCHEMA }
   )
 }
@@ -425,7 +467,37 @@ function validateStateRead(state, rawCheck) {
       error: `readState() returned phase "${state.phase}" but the raw file has phase "${rawCheck.raw_phase}" — refusing to proceed on an untrustworthy read.`,
     }
   }
+  // Spec truncation is the same class of failure as the task mismapping above, but it is
+  // invisible to a count check: the task list is intact and only the operative text is
+  // short, so dispatch proceeds and the imp improvises the missing instructions. Observed
+  // as an imp receiving the first line of a multi-KB spec. Only the SHORTER direction is a
+  // safety problem, and a small tolerance absorbs whitespace normalization in the
+  // re-emission rather than blocking healthy runs on it.
+  const rawSpecLengths = rawCheck.raw_spec_lengths
+  if (Array.isArray(rawSpecLengths) && rawSpecLengths.length === tasksLen) {
+    for (let i = 0; i < tasksLen; i += 1) {
+      const rawLen = rawSpecLengths[i]
+      if (typeof rawLen !== 'number' || rawLen <= 0) continue
+      const gotLen = String(state.tasks[i].spec || '').length
+      const tolerance = Math.max(8, Math.floor(rawLen * 0.01))
+      if (gotLen < rawLen - tolerance) {
+        return {
+          ok: false,
+          error: `readState() returned a ${gotLen}-character spec for task #${state.tasks[i].id} but the raw file has ${rawLen} characters — the spec was truncated in the state-file read; refusing to dispatch an imp on partial instructions.`,
+        }
+      }
+    }
+  }
   return { ok: true, error: null }
+}
+
+// The Phase 1 Step 7 autonomy contract is read back through this, never inline. Every
+// policy falls back to its most conservative value when the stored one is absent or
+// unrecognized: a policy this version cannot read is not consent to merge, to skip plan
+// review, or to write the shared learnings log unasked. Kept as one named function so the
+// fallback is provably the same at every call site rather than re-typed at each.
+function resolvePolicy(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback
 }
 
 function patchState(patch, label) {
@@ -538,7 +610,7 @@ ${spec}
 ${guidance ? `\nThis is a retry. Operator guidance: ${guidance}\n` : ''}
 ${isCode ? 'You run in an isolated git worktree, created from the default branch\'s last committed HEAD (not the run\'s working branch — in-progress commits on a side branch are not visible to you). Make the minimal change that satisfies the task. Resolve this repo\'s gate/lint commands yourself and run them (plus any autofix) before committing — fix failures you caused, note pre-existing ones. Stage and commit; do not push. Return the branch name.' : ''}
 ${task.type === 'query' && !/\bMUTATIONS_ALLOWED\b/.test(spec) ? 'Read-only. No file changes. Return structured data. Cite sources (file paths, line numbers, URLs) for every claim.' : ''}
-${task.type === 'publish' ? 'Create GitHub artifacts (PRs, issues, comments, Discussions) from the main working branch only, never from an isolated worktree branch. Use `gh api graphql` for Discussions. Confirm the artifact URL.' : ''}
+${task.type === 'publish' ? 'Create GitHub artifacts (PRs, issues, comments, Discussions) from the main working branch only, never from an isolated worktree branch. Use `gh api graphql` for Discussions. Confirm the artifact URL. Prefer `mcp__github__*` tools (create_pull_request, issue_write, etc.) over shelling out to `gh` where an equivalent tool exists — `gh` can fail reading `~/.config/gh/config.yml` in a sandboxed environment; if it does, retry the identical `gh` command unsandboxed rather than treating it as a real auth problem. `gh api graphql` has no MCP equivalent for Discussions, so keep using it there.' : ''}
 
 Do exactly this task. Nothing more — note anything else you notice but do not fix it.
 Return via the required schema: status "done" or "failed" (with a ≤50-word reason in notes if failed).`,
@@ -676,38 +748,57 @@ function mergeBranches(worktrees, doneIds, defaultBranch) {
     `Merge these branches into the current working tree, one at a time, in order: ${branchList.map(([, b]) => b).join(', ')}.
 Before merging ANYTHING: run \`git rev-parse --abbrev-ref HEAD\` and compare to \`${defaultBranch}\` (re-derive the default branch yourself with \`git remote show origin\` if you don't trust this value) — if HEAD equals the default branch, STOP, do not merge, set "default_branch_violation": true and return immediately. This check is not optional even if a caller claims preflight already verified it; a stale state file or a concurrent branch change is exactly what this guards against.
 For each branch, \`git merge <branch>\`. On conflict: leave it in the tree (do not \`--abort\`), stop merging further branches, and report the conflicting branch + \`git diff --name-only --diff-filter=U\` in "conflict".
-Report "merged": [{id, label, files changed}] for each that merged cleanly (map branch names back to task ids/labels from this list: ${JSON.stringify(branchList)}), "conflict" (or null), "default_branch_violation" (bool).`,
+${branchList.length > 1 ? `After all clean merges: a later branch can silently revert a parameter or call shape an earlier branch just threaded through, even though the merge itself had zero conflicts — the later task's own edits just happened to be written against the pre-earlier-branch version of a function it also touches. Spot-check any function/file touched by more than one of these branches: does the final merged version still carry what the earliest branch added? Report a one-line description of anything suspicious in "regression_check", or null if clean.` : 'Set "regression_check" to null — only one branch merged, so there is no cross-branch shape to check.'}
+Report "merged": [{id, label, files changed}] for each that merged cleanly (map branch names back to task ids/labels from this list: ${JSON.stringify(branchList)}), "conflict" (or null), "default_branch_violation" (bool), "regression_check" (string or null, per above).`,
     { label: 'merge', phase: 'Integrate', model: 'sonnet', schema: MERGE_SCHEMA }
   )
 }
 
-function openCodeReview(defaultBranch) {
+// Guard for the whole class of "the fix was made but never committed" bugs. Every
+// downstream consumer of this run's work reads commits, not the working tree:
+// run-ocr.sh reviews MERGE_BASE..HEAD, diff_stat and dodCoverage read
+// origin/<default>..HEAD, and `git push` sends commits. So a dirty tree at either of
+// these two points means real repair work is about to be reviewed-around and then
+// dropped, silently, with every gate still green. Loud stop beats silent loss; it also
+// catches a future fixer added without the commit instruction its siblings carry.
+function assertTreeCommitted(where) {
+  return agent(
+    `Run \`git status --porcelain\` in the current checkout and report the exact output as "porcelain" (empty string if clean) and whether it was empty as "clean". Do not stage, commit, stash, or modify anything — this is a read-only check.`,
+    { label: `tree-check-${where}`, phase: 'Integrate', model: 'haiku', schema: TREE_CHECK_SCHEMA }
+  )
+}
+
+function ocrReview(defaultBranch) {
   return agent(
     `You are a mechanical wrapper. Do not read, summarize, review, edit, or otherwise inspect code or a diff. Run exactly this command from the current checkout, capture its final stdout JSON line, and return it unchanged through the required schema:
 REPO="$(git rev-parse --show-toplevel)"
-"${args.pluginRoot}/scripts/opencode-review.sh" --repo "$REPO" --base "origin/${defaultBranch}" --head HEAD --goal "${args.goalFilePath}"
+"${args.pluginRoot}/scripts/run-ocr.sh" --repo "$REPO" --base "origin/${defaultBranch}" --head HEAD --goal "${args.goalFilePath}"
 If the command exits non-zero, still return its final JSON contract. Never substitute a Claude review or alter the contract.`,
-    { label: 'opencode-review', phase: 'Integrate', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
+    { label: 'ocr-review', phase: 'Integrate', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
   )
 }
 
-function openCodePreflight() {
+function ocrPreflight() {
   return agent(
-    `You are a mechanical wrapper. Do not inspect code. Run exactly \`${args.pluginRoot}/scripts/opencode-review.sh --check\`, capture its final stdout JSON line, and return it unchanged through the required schema. A failure is a hard block; never replace it with a Claude review.`,
-    { label: 'opencode-review-preflight', phase: 'Preflight', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
+    `You are a mechanical wrapper. Do not inspect code. Run exactly \`${args.pluginRoot}/scripts/run-ocr.sh --check\`, capture its final stdout JSON line, and return it unchanged through the required schema. A failure is a hard block; never replace it with a Claude review.`,
+    { label: 'ocr-review-preflight', phase: 'Preflight', model: 'haiku', schema: CODE_REVIEW_SCHEMA }
   )
 }
 
-function fixCodeReview(findings) {
+function fixOcrReview(findings) {
   return agent(
-    `OpenCode returned these blocker/major review findings on the merged diff: ${JSON.stringify(findings)}. Fix only those findings in the current checkout. ${constraintsPointer()} Do not push, open a PR, or claim review approval.`,
-    { label: 'fix-opencode-review', phase: 'Integrate', model: 'sonnet' }
+    // The commit instruction is load-bearing, not hygiene: run-ocr.sh reviews
+    // MERGE_BASE..HEAD, so an uncommitted fix is invisible to the re-review and the loop
+    // re-raises the finding it just fixed until the round cap blocks the run. The same
+    // uncommitted edit is then dropped by `git push`, which sends commits only.
+    `OCR returned these blocker/major review findings on the merged diff: ${JSON.stringify(findings)}. Fix only those findings in the current checkout. ${constraintsPointer()} Stage and commit your changes — an uncommitted fix is not visible to the re-review that follows and would be silently dropped at push. Do not push, open a PR, or claim review approval.`,
+    { label: 'fix-ocr-review', phase: 'Integrate', model: 'sonnet' }
   )
 }
 
 function syncDefaultBranch(defaultBranch) {
   return agent(
-    `Sync the default branch into the current working tree (merge, not rebase — one merge commit keeps SHAs stable for the diff about to be reviewed): \`git fetch origin ${defaultBranch} && git merge origin/${defaultBranch}\`. On conflict, leave it in the tree and report it. Return via the required schema (reuse "merged": [] and "conflict" fields; "default_branch_violation": false always here since this step only ever merges FROM the default branch, never onto it).`,
+    `Sync the default branch into the current working tree (merge, not rebase — one merge commit keeps SHAs stable for the diff about to be reviewed): \`git fetch origin ${defaultBranch} && git merge origin/${defaultBranch}\`. On conflict, leave it in the tree and report it. If the merge was clean and non-trivial (more than a handful of files touched on the default-branch side), a clean merge is not proof nothing was lost — a merge whose own gate run stays green can still have silently reverted a whole file's worth of this run's own production code back to its pre-batch state, because the gates only test whatever the merge left behind. Spot-check: grep for a couple of this run's own expected helper/function names that should still be in the merged tree, and sanity-check that a file this run substantially rewrote didn't shrink back toward its original line count. Report anything suspicious in "regression_check" (or null if clean / the merge was trivial). Return via the required schema (reuse "merged": [] and "conflict" fields; "default_branch_violation": false always here since this step only ever merges FROM the default branch, never onto it).`,
     { label: 'sync-default', phase: 'Integrate', model: 'sonnet', schema: MERGE_SCHEMA }
   )
 }
@@ -719,9 +810,28 @@ function discoverGates() {
   )
 }
 
+// Gate logs land in $TMPDIR, which concurrent runs on one machine share. Namespacing by
+// the run's own slug (the state file's basename) keeps run A's `npm test` output from
+// overwriting run B's while B is still reading its tail. Derived here rather than passed
+// in, so a legacy caller that omits it cannot silently reintroduce the collision.
+function runSlug() {
+  return safeName(String(args.stateFilePath || 'imps')
+    .replace(/^.*\//, '')
+    .replace(/\.json$/, '')) || 'imps'
+}
+
+// Both halves of a gate log's filename must be path-safe. runSlug() derives from a path we
+// control, but gate.name comes back from discoverGates()'s agent and the schema does not
+// constrain its characters — a returned "lint/types" would silently redirect the redirect
+// into a subdirectory that does not exist, and the gate would fail on its own log write
+// rather than on the command under test.
+function safeName(value) {
+  return String(value).replace(/[^A-Za-z0-9_.-]/g, '_')
+}
+
 function runGate(gate, guidance) {
   return agent(
-    `Run this command, redirecting output to a file and reading only the tail (the log itself can be large): \`${gate.cmd} > "$TMPDIR/imps-gate-${gate.name}.log" 2>&1; echo "exit: $?"\`.${guidance ? ` Apply this guidance first if it suggests a fix: ${guidance}` : ''}
+    `Run this command, redirecting output to a file and reading only the tail (the log itself can be large): \`${gate.cmd} > "$TMPDIR/imps-gate-${runSlug()}-${safeName(gate.name)}.log" 2>&1; echo "exit: $?"\`.${guidance ? ` Apply this guidance first if it suggests a fix: ${guidance}` : ''}
 Return via the required schema: "gate": "${gate.name}", "cmd": "${gate.cmd}", "pass" (exit 0), "tail" (last 20 lines of the log).`,
     { label: `gate-${gate.name}`, phase: 'Integrate', model: 'sonnet', schema: GATE_RUN_SCHEMA }
   )
@@ -729,7 +839,7 @@ Return via the required schema: "gate": "${gate.name}", "cmd": "${gate.cmd}", "p
 
 function fixGate(gate, tail, guidance) {
   return agent(
-    `Gate "${gate.name}" (\`${gate.cmd}\`) failed. Log tail:\n${tail}\n${guidance ? `Operator guidance: ${guidance}\n` : ''}${constraintsPointer()}\nDiagnose and fix the failure — make the minimal change needed to get this gate green. Do not touch unrelated code. When done, report what you changed in one line.`,
+    `Gate "${gate.name}" (\`${gate.cmd}\`) failed. Log tail:\n${tail}\n${guidance ? `Operator guidance: ${guidance}\n` : ''}${constraintsPointer()}\nDiagnose and fix the failure — make the minimal change needed to get this gate green. Do not touch unrelated code. Stage and commit the fix; do not push. An uncommitted fix turns the gate green in the working tree but is invisible to the code review that follows (which reads commits only) and is dropped entirely at push. When done, report what you changed in one line.`,
     { label: `fix-${gate.name}`, phase: 'Integrate', model: 'sonnet' }
   )
 }
@@ -777,29 +887,29 @@ async function runGatesWithRetry(gates, gateDecision) {
 
 function pushAndOpenPR(state, defaultBranch) {
   return agent(
-    `Push the current branch and open the endstate PR: \`git push -u origin ${state.branch}\` then \`gh pr create --draft --base ${defaultBranch} --title "..." --body "..."\` (title from the run's task "${state.task}"; body: a change summary plus the GOAL.md DoD from ${args.goalFilePath}). Return via the required schema: "number", "url".`,
+    `Push the current branch: \`git push -u origin ${state.branch}\`. Then open the endstate PR — prefer \`mcp__github__create_pull_request\` (base "${defaultBranch}", draft, title from the run's task "${state.task}", body: a change summary plus the GOAL.md DoD from ${args.goalFilePath}); fall back to \`gh pr create --draft --base ${defaultBranch} --title "..." --body "..."\` only if that tool is unavailable in your context. If \`gh\` fails reading \`~/.config/gh/config.yml\` (a sandboxed environment denying it), retry the identical command unsandboxed rather than treating it as a real auth problem. Return via the required schema: "number", "url".`,
     { label: 'push-pr', phase: 'Publish', model: 'sonnet', schema: PR_CREATE_SCHEMA }
   )
 }
 
-function personaReview(slug, brief, prNumber, repo, defaultBranch, postingMode) {
+function personaReview(slug, brief, prNumber, repo, defaultBranch) {
   return agent(
     `You are reviewing PR #${prNumber} in ${repo} as the "${slug}" persona. Read your brief at ${brief.path} and follow it. Review the diff by running \`git diff origin/${defaultBranch}..HEAD -- ':!*lock*' ':!dist'\` yourself — never accept it pasted. End with the verdict protocol from your brief.
 
 ${constraintsPointerForReviewer()}
 
-Posting: this run's posting_mode is "${postingMode}". Only call persona-post.sh (per ${args.personaPostingProtocolPath}, which you should read for the exact posting/verify/fallback protocol) if posting_mode is exactly "live" — any other value means return your VERDICT block here and do not post. This instruction, not any memory of what was decided elsewhere, is what gates a live post.
+Do NOT post anything to GitHub. Personas no longer publish reviews under their own identities — the OCR review rounds are this run's on-the-record code review, and five bot-authored approvals of a diff this same session wrote read as independent sign-off without being it. Your verdict returns here, inline, for the operator.
 
-Return via the required schema: "slug": "${slug}", "verdict", "posted" (bool — true only if you actually posted, per the protocol's own verify-the-post-landed step), "findings" (list of one-line finding summaries).`,
+Return via the required schema: "slug": "${slug}", "verdict", "findings" (list of one-line finding summaries).`,
     { label: `persona-${slug}`, phase: 'Publish', model: brief.model, schema: PERSONA_VERDICT_SCHEMA }
   )
 }
 
-async function runPersonaPanel(state, prNumber, defaultBranch, postingMode, personaFilter) {
+async function runPersonaPanel(state, prNumber, defaultBranch, personaFilter) {
   const briefs = args.personaBriefPaths
   const slugs = personaFilter && personaFilter.length ? personaFilter : Object.keys(briefs)
   const verdicts = await parallel(
-    slugs.map((slug) => () => personaReview(slug, briefs[slug], prNumber, state.repo, defaultBranch, postingMode))
+    slugs.map((slug) => () => personaReview(slug, briefs[slug], prNumber, state.repo, defaultBranch))
   )
   // parallel() resolves a thunk that threw (e.g. transient agent-call error) to null —
   // entry order still lines up with `slugs`, so recover the slug from its position rather
@@ -811,7 +921,6 @@ async function runPersonaPanel(state, prNumber, defaultBranch, postingMode, pers
     v || {
       slug: slugs[i],
       verdict: 'CHANGES_REQUESTED',
-      posted: false,
       findings: ['persona review dispatch errored (dropped by parallel()) — not reviewed'],
     }
   )
@@ -823,6 +932,7 @@ function fixLoopRound(findings) {
 ${constraintsPointer()}
 Group by disjoint file sets. For disjoint groups, make the fix directly (small, targeted). For cross-cutting or conflicting findings, resolve with this precedence: correctness > data integrity > security > UX > style. Commit your changes and push to the current branch.
 If a finding is not actually valid, do NOT force a change — declare it in "wontfix" instead. Every "wontfix" entry MUST carry a "rationale" saying why the finding does not hold; the schema requires it and an entry without one is not a discard you are permitted to make. Silence is not a ruling.
+There is a third case, and recognising it on round 1 is worth more than any fix you could make: a finding that is REAL and that NO code change here can resolve, because the thing it names is not code you own. The signature is a breach of a Global Constraint whose only available remedy is amending the constraint itself, or a change authored by CI or a bot rather than by this run's imps, where reverting it would break a different gate. Put these in "wontfix" with a rationale that says explicitly "needs an operator decision, not a code fix" and names what the operator must decide. Do not attempt a speculative fix, and do not re-litigate it on a later round. One run spent six fix rounds and millions of tokens correctly re-deriving that a bot-authored constraint breach needed operator ratification; the rounds were the waste, not the conclusion.
 Return via the required schema: "fixed" (one line per finding you actually fixed), "wontfix" ([{finding, rationale}]), "summary" (one line describing this round's changes).`,
     { label: 'fix-round', phase: 'Publish', model: 'sonnet', schema: FIX_ROUND_SCHEMA }
   )
@@ -898,6 +1008,133 @@ Hard rules:
 // and reconcile its GOAL.md checkbox to match. Read-only w.r.t. everything except the
 // functional-criterion checkbox characters, and idempotent on resume (re-ticks satisfied,
 // unticks regressed). Dispatched once per successful Integrate, never in the PR: branch.
+// ---- Phase 5: drive the PR to green, then close it as far as `endstate` allows ----
+
+// Three rounds, same cap as the gate and persona fix loops. A PR whose checks never pass,
+// or whose reviewers keep commenting, is a loop with no natural end — exhausting the cap
+// is a HAND-OFF, not a failure, and the run reports which round it stopped on.
+const PR_GREEN_ROUNDS = 3
+
+const PR_STATUS_SCHEMA = {
+  type: 'object',
+  properties: {
+    checks: { type: 'string', enum: ['passing', 'failing', 'pending', 'none'] },
+    mergeable: { type: 'string', enum: ['clean', 'conflicting', 'unknown'] },
+    unresolved_comments: { type: 'array', items: { type: 'string' } },
+    detail: { type: 'string' },
+  },
+  required: ['checks', 'mergeable', 'unresolved_comments'],
+}
+
+const PR_CLOSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    // `refused` is deliberately distinct from a plain failure: a permission-classifier
+    // block or a standing deny rule on the merge tool is final, and the run must hand off
+    // rather than retry. See commands/imps.md Phase 5.
+    done: { type: 'boolean' },
+    refused: { type: 'boolean' },
+    url: { type: ['string', 'null'] },
+    detail: { type: 'string' },
+  },
+  required: ['done', 'refused', 'detail'],
+}
+
+function readPrStatus(prNumber, repo) {
+  return agent(
+    `Read-only status check on PR #${prNumber} in ${repo}. Change nothing. Report via the required schema:
+- "checks": run \`gh pr checks ${prNumber}\`. If any check is still running, wait for them to settle (\`gh pr checks ${prNumber} --watch --interval 30\`, giving up after about 10 minutes) BEFORE reporting — a pending result wastes a whole round on a PR that was simply mid-CI. Report "passing", "failing", "pending" (only if they never settled), or "none" if the repo runs no checks on this PR.
+- "mergeable": "conflicting" if the PR has merge conflicts with its base, "clean" if not. GitHub computes mergeability asynchronously and reports null/UNKNOWN for a few seconds after a push: if you get that, wait and re-read before answering. Only report "unknown" if it genuinely never resolved — it is treated as NOT green, so reporting it early costs a needless hand-off.
+- "unresolved_comments": one short line per UNRESOLVED review comment thread that asks for a change. Ignore resolved threads, approvals, and pure commentary that requests nothing.
+- "detail": one line summarising what is blocking, or "green" if nothing is.`,
+    { label: 'pr-status', phase: 'Publish', model: 'haiku', schema: PR_STATUS_SCHEMA }
+  )
+}
+
+function fixPrBlockers(prNumber, status, defaultBranch) {
+  return agent(
+    `PR #${prNumber} is not yet mergeable. Fix what is blocking it, then commit and push to the PR branch.
+Blocking now: checks are "${status.checks}"; mergeable is "${status.mergeable}"; unresolved review comments: ${JSON.stringify(status.unresolved_comments || [])}. ${status.detail || ''}
+${constraintsPointer()}
+Order of work: resolve merge conflicts first (\`git fetch origin ${defaultBranch} && git merge origin/${defaultBranch}\`, resolve, commit), then failing checks (read the actual failure logs — never guess from the check name), then review comments.
+Address a review comment by changing the code when the comment is right. If it is not right, leave it and say so in your summary — do NOT force a change to silence a reviewer, and do NOT resolve a thread you did not address.
+Commit and push everything you change. Do NOT merge the PR; that is a separate authorized step.`,
+    { label: `pr-fix-${prNumber}`, phase: 'Publish', model: 'sonnet' }
+  )
+}
+
+function mergePr(prNumber, repo) {
+  return agent(
+    `Merge PR #${prNumber} in ${repo}, which the operator authorized before this run started. Use the repository's own default merge strategy.
+If the merge is DENIED — a permission-classifier block, or a standing deny rule on the merge tool — that denial is final. Report "refused": true with the denial text in "detail", and STOP. Do not retry, do not try a different tool, and do not push to the base branch by any other means.
+Report "done": true only if the PR is actually merged; verify it rather than assuming the command succeeded.`,
+    { label: `merge-pr-${prNumber}`, phase: 'Publish', model: 'sonnet', schema: PR_CLOSE_SCHEMA }
+  )
+}
+
+function cutRelease(repo, defaultBranch) {
+  return agent(
+    `The run merged its PR into ${defaultBranch} of ${repo} and the operator authorized a release.
+FIRST determine this repo's own release convention by looking at what it already does: existing tags (\`git tag --sort=-creatordate | head\`), previous GitHub releases, any release workflow under .github/workflows, and any documented process in CONTRIBUTING/RELEASING/AGENTS docs. Follow that convention — the tag format, whether a GitHub release accompanies the tag, and how the version is chosen.
+If the repo has NO discernible release convention, do NOT invent one: report "done": false with "detail" explaining what you looked for. A guessed tag format is worse than no release.
+If a release workflow already runs automatically on merge, do not duplicate it — report "done": false and say so.
+Report "url" for the release you created, if any.`,
+    { label: 'cut-release', phase: 'Publish', model: 'sonnet', schema: PR_CLOSE_SCHEMA }
+  )
+}
+
+// Bounded drive-to-green, then close as far as `endstate` allows. Returns a record of what
+// happened for the terminal result — it never throws, and it never treats "not green" or
+// "merge refused" as an error: both are legitimate hand-offs the operator needs told about.
+async function drivePrAndClose(prInfo, repo, defaultBranch, endstate, alreadyMerged, alreadyReleased) {
+  const outcome = { rounds: 0, green: false, merged: alreadyMerged || false, released: alreadyReleased || false, release_url: null, refused: false, detail: '' }
+  if (!prInfo) {
+    outcome.detail = 'no PR — branch is local'
+    return outcome
+  }
+  let status = await readPrStatus(prInfo.number, repo)
+  while (
+    outcome.rounds < PR_GREEN_ROUNDS &&
+    (status.checks === 'failing' || status.mergeable === 'conflicting' || (status.unresolved_comments || []).length > 0)
+  ) {
+    outcome.rounds += 1
+    await fixPrBlockers(prInfo.number, status, defaultBranch)
+    status = await readPrStatus(prInfo.number, repo)
+  }
+  // `clean`, not merely "not conflicting": an `unknown` mergeability is GitHub declining to
+  // answer, and merging on it would be acting without the fact the check exists to
+  // establish. Fail closed — a needless hand-off is recoverable, a bad merge is not.
+  outcome.green = (status.checks === 'passing' || status.checks === 'none') &&
+    status.mergeable === 'clean' &&
+    (status.unresolved_comments || []).length === 0
+  outcome.detail = status.detail || ''
+  if (!outcome.green) {
+    outcome.detail = `not green after ${outcome.rounds} round(s): ${outcome.detail}`
+    return outcome
+  }
+  // `endstate` is the ONLY authorization to close the PR, and it was settled in Phase 1
+  // Step 7. The two markers are checked INDEPENDENTLY: a run that merged in a prior
+  // invocation and died before releasing must still be able to release on resume, so an
+  // already-merged PR skips only the merge — never the release.
+  if (endstate === 'pr') return outcome
+  if (!outcome.merged) {
+    const merge = await mergePr(prInfo.number, repo)
+    outcome.merged = !!merge.done
+    outcome.refused = !!merge.refused
+    if (!outcome.merged) {
+      outcome.detail = merge.detail || 'merge did not complete'
+      return outcome
+    }
+  }
+  if (endstate === 'release' && !outcome.released) {
+    const release = await cutRelease(repo, defaultBranch)
+    outcome.released = !!release.done
+    outcome.release_url = release.url || null
+    if (!outcome.released) outcome.detail = release.detail || 'release not cut'
+  }
+  return outcome
+}
+
 function dodCoverage(defaultBranch) {
   return agent(
     `You are verifying requirement coverage for this run. Two jobs — do BOTH, in order.
@@ -950,12 +1187,14 @@ function finalizeRun(state, prInfo, verdicts, dispatchStats, dodCoverageCriteria
     .replace(/[`"$\\]/g, '')
   return agent(
     `Finalize this /imps run. State file: ${args.stateFilePath}. GOAL.md: ${args.goalFilePath}.
+For every \`gh\` invocation below (steps 2 and 4), prefer the equivalent \`mcp__github__*\` tool where one exists (\`gh pr ready\` has none — that step stays \`gh\`); \`gh api graphql\` for Discussions also has no MCP equivalent. If \`gh\` fails reading \`~/.config/gh/config.yml\` (a sandboxed environment denying it), retry the identical command unsandboxed rather than treating it as a real auth problem.
 1. You MUST run this now, before any other step below (the script itself is fail-soft about a missing \`jq\` or unwritable log dir — but \`--duration-ms\` itself is a required, strictly-validated argument: passing anything non-numeric, including omitting the flag, makes the script exit 1 and drop this mandatory line entirely): \`${args.pluginRoot}/scripts/audit-log.sh --plugin imps --command /imps:imps --exit-status <choose completed, partial, blocked, failed, or cancelled from the run outcome> --duration-ms <computed from the state file's dispatched_at, same basis as run_stats.elapsed below, in ms; if dispatched_at is not a real timestamp — see step 6 — pass 0 here instead of omitting the flag> --scope <project-or-user> --notes "<one-line summary>"\`. Choose \`blocked\` for a tool or permission refusal, \`partial\` when some work landed but a required phase failed, \`failed\` when no usable result was produced, and \`cancelled\` when the operator stopped the run. The \`--notes\` value is a one-line summary you write yourself${advisoryNotes ? ` — it MUST ALSO mention this verbatim, even though it wasn't part of your own summary (it is a separate, required fact, not a suggestion): ${advisoryNotes}` : ''}. Use single quotes for any quoting you need inside the \`--notes\` value — never a literal double quote, backtick, dollar sign, or backslash, since any of those would break out of or reinterpret this command's own double-quoted argument.
 2. If a PR exists (${prInfo ? `#${prInfo.number}` : 'none'}), flip it to ready: \`gh pr ready ${prInfo ? prInfo.number : ''}\`. Skip if no PR.
+2b. If a PR exists, reconcile its BODY's Definition-of-Done checklist against the coverage actually recorded for this run: ${JSON.stringify(dodCoverageCriteria || [])}. The PR body was written at creation time and never updated since, so a criterion verified later still reads unchecked there — the human-visible record then understates what was verified. Tick every body checkbox whose criterion is recorded "satisfied"; leave "unsatisfied" and "unverifiable" ones unticked, and add a one-line note under the checklist naming any unverifiable criteria so an empty box is not read as a failure. If a criterion is absent from the coverage array (the process lines — gates, panel, merge conflicts, CI, discussion comment) leave its box exactly as it is; other mechanisms own those. ${state.code_review_skipped ? `ALSO add a clearly-worded line to the PR body recording that the code review was SKIPPED for this diff at the operator's direction, with their rationale verbatim: ${String(state.code_review_skipped).replace(/[`"$\\]/g, '')}. Never phrase a skipped review as an approval.` : ''}Edit only the PR body; touch nothing else.
 3. Collect artifact links from the state file's "artifacts" field into the result.
 4. If the state file's "source_discussion" is non-null AND "discussion_comment_url" is still null, post a short outcome comment (≤150 words: what shipped, PR/artifact URLs, unresolved findings — persona verdicts/findings for reference: ${JSON.stringify(verdicts)}; DoD acceptance-criteria coverage for reference, mention any unsatisfied ones: ${JSON.stringify(dodCoverageCriteria || [])}${dodCoverageError ? `, noting the coverage check itself did not complete: ${dodCoverageError}` : ''}) via \`gh api graphql\` addDiscussionComment using source_discussion.id verbatim. Write the returned comment URL into the state file's discussion_comment_url field immediately (patch the state file yourself) — a non-null URL means never post again on a future invocation.
 5. If a PR was opened, write ~/.claude/imps/runs/<slug>.prs.json (derive slug from the state file path) with: repo, pr_number, pr_url, branch, base_branch, poll_interval_seconds (from state file), started_at (now, ISO), handled_comment_ids: [], ci_fix_attempts: {}, max_age_hours: 48.
-6. Assemble run_stats: dispatched_at (from state file), elapsed (now minus dispatched_at, "Xm Ys" — but FIRST check that dispatched_at is a real ISO-8601 timestamp. A state file written before this run's clock helper existed, or one whose timestamp call failed, carries the literal placeholder "agent-supplies-timestamp" there. If dispatched_at is that placeholder, absent, or otherwise not parseable as a date, set elapsed to "unknown" and do not guess or fabricate a duration), tokens_spent and model_counts (from: ${JSON.stringify(dispatchStats)}), tasks ([{id, model}] for every task), achieved (≤5 one-liners in plain value terms — what changed for the user, not implementation detail), decision_points (one line per pivot: Head Imp amendments, conflicts resolved, skipped gates/tasks${advisoryNotes ? `, the advisory-check note(s) above` : ''} — omit if none).
+6. Assemble run_stats: dispatched_at (from state file), elapsed (now minus dispatched_at, "Xm Ys" — but FIRST check that dispatched_at is a real ISO-8601 timestamp. A state file written before this run's clock helper existed, or one whose timestamp call failed, carries the literal placeholder "agent-supplies-timestamp" there. If dispatched_at is that placeholder, absent, or otherwise not parseable as a date, set elapsed to "unknown" and do not guess or fabricate a duration), tokens_spent and model_counts (from: ${JSON.stringify(dispatchStats)}), tasks ([{id, model}] for every task), achieved (≤5 one-liners in plain value terms — what changed for the user, not implementation detail), decision_points (one line per pivot: code-review fix rounds and any overridden or skipped review, conflicts resolved, skipped gates/tasks${advisoryNotes ? `, the advisory-check note(s) above` : ''} — omit if none).
 7. Persist decision_points into ${args.goalFilePath}. Locate the existing heading line "## Decision trail". Its body is everything after that heading up to, but not including, the next line beginning with "## ", or end-of-file. Replace that bounded body; never append to it and never emit a second heading. If the heading is missing, add it at end-of-file. Write one plain bullet per decision point, with no checkboxes. If decision_points is empty, the body must be exactly underscore-None-dot-underscore (_None._). Record only pivots, not routine actions or achieved outcomes. This GOAL.md update is mandatory and idempotent.
 8. Set the state file's "phase" to "final" (NOT deleted yet — deletion happens only after the learnings step, so a death here still resumes gracefully).
 
@@ -973,7 +1212,13 @@ function appendLearnings(candidates) {
   // is false and re-appends — and deleting from inside this agent call would also mean a
   // subsequent patchState() targets a file that no longer exists.
   return agent(
-    `The operator confirmed these learnings should be saved: ${JSON.stringify(candidates)}. For each, classify its scope: project-specific (mentions this repo's stack, commands, file paths, conventions) -> append to .claude/imps/learnings.md in the repo root; generally applicable (model routing, task boundaries, dispatch patterns) -> append to ~/.claude/imps/learnings.md. Format: under a "## YYYY-MM-DD — <project> <task>" heading (create "## Active rules" section first if the file doesn't have one yet, ≤10 bullets, promote a repeated rule into it). Do NOT touch the run's state file or GOAL.md in this step — that happens separately, afterward.
+    `The operator confirmed these learnings should be saved: ${JSON.stringify(candidates)}. For each, classify its scope: project-specific (mentions this repo's stack, commands, file paths, conventions) -> scope "project"; generally applicable (model routing, task boundaries, dispatch patterns) -> scope "user".
+
+Write them with the bundled appender — do NOT edit either learnings.md yourself. The user-scoped file is shared by every run on this machine, so a read-modify-write from here silently drops a concurrent run's learnings; the script appends under a lock instead. Make one call per scope, passing every rule for that scope as repeated --rule flags:
+  \`${args.pluginRoot}/scripts/imps-learnings-append.sh --scope <user|project> --heading "YYYY-MM-DD — <project> <task>" --rule "<rule>" [--rule "<rule>" ...]\`
+Keep it to ≤10 rules per scope. Use single quotes inside a --rule value, never a literal double quote, backtick, dollar sign or backslash. The script is fail-soft on environment problems (it warns and exits 0), so report what it printed rather than retrying a scope that reported a lock failure.
+
+Do NOT touch the run's state file or GOAL.md in this step — that happens separately, afterward. Do NOT commit or stage the project-scoped learnings file: it lives in this run's own working tree, and committing it onto the run branch puts an unrelated file in the PR that every concurrent run's PR also touches.
 Return via the required schema: "saved": [{rule, scope}] for each learning actually written.`,
     { label: 'append-learnings', phase: 'Finalize', model: 'sonnet', schema: LEARNINGS_APPEND_SCHEMA }
   )
@@ -1082,18 +1327,13 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
   // would evaluate to "none" — silently un-pushing the fix rounds' commits, telling the
   // re-review not to post, and changing findings_inline's shape. Read the persisted value
   // first; the ternary is only the first-entry derivation.
-  // Precedence matters: a decision that CARRIES a posting choice must beat the persisted one.
-  // With `state.posting_mode ||` first, an operator who answered `PR: yes, no-post` on one
-  // invocation and then deliberately re-answered `PR: yes` on the next would have the stale
-  // no-post win silently — the persisted value is a fallback for resumes whose decision says
-  // nothing about posting, not an override of an explicit answer.
-  const postingMode = decision && decision.startsWith('PR:')
-    ? decision === 'PR: yes'
-      ? 'live'
-      : decision === 'PR: yes, no-post'
-        ? 'no-post'
-        : 'none'
-    : state.posting_mode || 'none'
+  // Persona posting was deleted: personas never publish to GitHub, so the only thing this
+  // decision still carries is whether a PR opens at all. `PR: no` keeps the branch local.
+  // A resume whose decision says nothing about publishing falls back to "a PR already
+  // exists", not to a stale posting choice.
+  const publish = decision && decision.startsWith('PR:')
+    ? decision !== 'PR: no'
+    : Boolean(state.pr)
   const overriding = resumingFindings && decision.startsWith('override findings:')
   phase('Publish')
 
@@ -1143,7 +1383,7 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
   }
 
   let prInfo = state.pr
-  if (postingMode !== 'none' && !prInfo) {
+  if (publish && !prInfo) {
     prInfo = await pushAndOpenPR(state, state.last_result.default_branch)
     await patchState({ pr: prInfo }, 'save-pr')
   }
@@ -1255,7 +1495,7 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     // result on every subsequent invocation even after the operator explicitly ruled on it.
     adjudicationError = null
     await patchState(
-      { verdicts, verdicts_pending: null, parked_findings: parkedFindings, posting_mode: postingMode, adjudication_error: null },
+      { verdicts, verdicts_pending: null, parked_findings: parkedFindings, adjudication_error: null },
       'operator-override'
     )
     try {
@@ -1321,7 +1561,6 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
       {
         verdicts,
         verdicts_pending: null,
-        posting_mode: postingMode,
       },
       'skip-persona-panel'
     )
@@ -1333,7 +1572,7 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
       // Reseed from the withheld panel output instead of re-running it. A literal
       // implementation of `retry findings` would re-dispatch all five personas — posting
       // five more GitHub reviews in `live` mode before the re-review rounds add yet more —
-      // and would discard verdicts_pending along with its `posted` flags and the SKIPPED
+      // and would discard verdicts_pending along with the SKIPPED
       // ux-designer entry. The fix loop below then starts over at round 0 against the
       // dissenters recorded there.
       current = state.verdicts_pending || {}
@@ -1356,7 +1595,7 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
       // so never gets re-reviewed or updated in `current` — it would otherwise survive into
       // the final `verdicts` still reporting CHANGES_REQUESTED with findings GOAL.md already
       // has rulings for, i.e. already-resolved findings reported back to the operator as open.
-      current = Object.fromEntries(results.map((v) => [v.slug, { verdict: v.verdict, posted: v.posted, findings: v.findings }]))
+      current = Object.fromEntries(results.map((v) => [v.slug, { verdict: v.verdict, findings: v.findings }]))
       // verdicts_pending is the state file's largest free-text field — the one most exposed
       // to a haiku patchState() round-trip truncating it (see the retry-cycle commentary
       // above). An empty or fully-filtered reseed must never be mistaken for "the panel
@@ -1423,8 +1662,8 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
         // five personas run — but record why, for finalize/audit visibility.
         surfaceDetectionError = `surface-detection errored, ran all personas: ${e && e.message ? e.message : e}`
       }
-      results = await runPersonaPanel(state, prInfo.number, state.last_result.default_branch, postingMode, personaFilter)
-      current = Object.fromEntries(results.map((v) => [v.slug, { verdict: v.verdict, posted: v.posted, findings: v.findings }]))
+      results = await runPersonaPanel(state, prInfo.number, state.last_result.default_branch, personaFilter)
+      current = Object.fromEntries(results.map((v) => [v.slug, { verdict: v.verdict, findings: v.findings }]))
       // Record the skip as a ux-designer finding so it surfaces in findings_inline / the final
       // report. "SKIPPED" is not "CHANGES_REQUESTED", so the dissenter fix-loop never re-reviews it.
       if (uxSkipFinding) {
@@ -1469,7 +1708,7 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
         // Unlike adjudicateFindings (which has had a try/catch since the adjudication-error
         // fix above), this call was previously unguarded: a schema-validation throw here left
         // `current`/`verdicts_pending` unset entirely, so a resumed invocation fell back to
-        // the top of the `if (!verdicts && prInfo)` guard and re-ran and re-posted the FULL
+        // the top of the `if (!verdicts && prInfo)` guard and re-ran the FULL
         // five-persona panel just to reproduce the exact `dissenting` set already in memory.
         fixRoundError = `fix-round ${round} errored: ${e && e.message ? e.message : e}`
       }
@@ -1480,7 +1719,6 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
             parked_findings: parkedFindings,
             wontfix_rulings: wontfixRulings,
             fix_rounds_done: round,
-            posting_mode: postingMode,
             surface_detection_error: surfaceDetectionError,
           },
           'save-fix-round-error'
@@ -1516,17 +1754,16 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
           if (w && w.finding) wontfixRulings.push({ cycle: fixCycle, round, finding: w.finding, rationale: w.rationale || '' })
         }
       }
-      if (postingMode !== 'none') {
+      if (prInfo) {
         await agent(`Push fix-round ${round}'s commits to the PR branch: git push.`, { label: `push-fix-${round}`, phase: 'Publish', model: 'haiku' })
       }
       const reReview = await runPersonaPanel(
         state,
         prInfo.number,
         state.last_result.default_branch,
-        postingMode,
         dissenting.map((v) => v.slug) // only re-review personas that dissented — not the whole panel
       )
-      for (const v of reReview) current[v.slug] = { verdict: v.verdict, posted: v.posted, findings: v.findings }
+      for (const v of reReview) current[v.slug] = { verdict: v.verdict, findings: v.findings }
       // Same guard as the initial `dissenting` assignment above (and for the same reason):
       // without it, a re-reviewed persona that came back CHANGES_REQUESTED with an empty
       // findings array still loops back through fixLoopRound([]) and, at the round cap,
@@ -1584,7 +1821,6 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
             parked_findings: parkedFindings,
             wontfix_rulings: wontfixRulings,
             fix_rounds_done: round,
-            posting_mode: postingMode,
             surface_detection_error: surfaceDetectionError,
             // Must survive a resume (including `override findings:`, which skips this whole
             // panel block) so it reaches finalizeRun's advisoryNotes / the terminal result
@@ -1663,7 +1899,6 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
             parked_findings: parkedFindings,
             wontfix_rulings: wontfixRulings,
             fix_rounds_done: round,
-            posting_mode: postingMode,
             // Carried across the block the same way it is on the converged path: the
             // reseed below skips surface detection entirely, so without this a flaking
             // classifier recorded in this cycle would vanish on the next one.
@@ -1747,7 +1982,6 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
         parked_findings: parkedFindings,
         wontfix_rulings: wontfixRulings,
         fix_rounds_done: round,
-        posting_mode: postingMode,
         surface_detection_error: surfaceDetectionError,
         adjudication_error: adjudicationError,
         parked_findings_write_error: parkedFindingsWriteError,
@@ -1780,8 +2014,60 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     parkedFindingsWriteError,
     adjudicationError
   )
+  // Phase 5 steps 3 and 4: drive the PR to green, then close it as far as the operator
+  // authorized. Runs AFTER finalizeRun because that is what flips the PR out of draft —
+  // checks on a draft PR may not run at all, so a green reading before it would be
+  // meaningless. `endstate` is resolved conservatively: an unreadable policy stops at a
+  // green PR rather than merging.
+  const endstate = resolvePolicy(state.endstate, ['pr', 'merge', 'release'], 'pr')
+  const prOutcome = await drivePrAndClose(
+    prInfo,
+    state.repo,
+    state.last_result.default_branch,
+    endstate,
+    Boolean(state.merged_at),
+    Boolean(state.release_url)
+  )
+  // Persisted separately, because they can happen in different invocations: a run can
+  // merge, die, and cut its release on the resume. Writing release_url only alongside
+  // merged_at would leave the release unmarked forever and re-cut it on every resume.
+  if (prOutcome.merged && !state.merged_at) {
+    await patchState({ merged_at: await nowIso() }, 'mark-merged')
+  }
+  if (prOutcome.release_url && !state.release_url) {
+    await patchState({ release_url: prOutcome.release_url }, 'mark-released')
+  }
+
+  // The operator settled this in Phase 1 Step 7, precisely so a finished run does not stop
+  // to ask. Anything unrecognized falls back to 'ask' — a policy that cannot be read is not
+  // consent to write to the shared learnings log.
+  const learningsPolicy = resolvePolicy(state.learnings_policy, ['auto', 'none', 'ask'], 'ask')
+  if (learningsPolicy !== 'ask' && !state.learnings_saved) {
+    const chosen = learningsPolicy === 'auto' ? (finalized.learnings_candidates || []) : []
+    const appended = chosen.length ? await appendLearnings(chosen) : { saved: [] }
+    await patchState({ learnings_saved: appended.saved }, 'mark-learnings-saved')
+    await deleteStateFile()
+    const doneResult = {
+      status: 'done',
+      learnings_saved: appended.saved,
+      learnings_policy: learningsPolicy,
+      endstate,
+      pr_outcome: prOutcome,
+      pr: prInfo ? { url: prInfo.url, number: prInfo.number, ready: finalized.pr_ready } : null,
+      verdicts,
+      run_stats: finalized.run_stats,
+      prs_monitor: finalized.prs_monitor,
+      discussion_comment_url: finalized.discussion_comment_url,
+      findings_inline: Object.entries(verdicts || {}).flatMap(([slug, v]) => (v.findings || []).map((f) => `${slug}: ${f}`)),
+    }
+    await saveResult(doneResult)
+    return doneResult
+  }
   const result = {
     status: 'final',
+    learnings_policy: learningsPolicy,
+    endstate,
+    pr_outcome: prOutcome,
     pr: prInfo ? { url: prInfo.url, number: prInfo.number, ready: finalized.pr_ready } : null,
     verdicts,
     // Whether the in-run persona panel ran this cycle. Skipped by default (see the
@@ -1826,7 +2112,7 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     // Rendered in the terminal result, not only in the state file: deleteStateFile() removes
     // that file at the end of a completed run, so without these two the operator's surviving
     // record would lose every ruling and every WONTFIX rationale the run produced. They are
-    // NOT folded into `verdicts` — that map is {slug: {verdict, posted, findings}}, a
+    // NOT folded into `verdicts` — that map is {slug: {verdict, findings}}, a
     // {finding, rationale} pair has no slug, and findings_inline below would silently drop
     // any extra key it grew.
     parked_findings: parkedFindings,
@@ -1836,11 +2122,8 @@ if ((lastStatus === 'awaiting_authorization' && decision && decision.startsWith(
     run_stats: finalized.run_stats,
     learnings_candidates: finalized.learnings_candidates,
     // Full findings content, not just the verdict label — this is the operator's only
-    // record of what each persona actually found when nothing was posted to GitHub.
-    findings_inline:
-      postingMode === 'none' || postingMode === 'no-post'
-        ? Object.entries(verdicts || {}).flatMap(([slug, v]) => (v.findings || []).map((f) => `${slug}: ${f}`))
-        : [],
+    // Always populated: personas never post to GitHub, so this is the review record.
+    findings_inline: Object.entries(verdicts || {}).flatMap(([slug, v]) => (v.findings || []).map((f) => `${slug}: ${f}`)),
   }
   await saveResult(result)
   return result
@@ -1870,13 +2153,15 @@ if (decision === 'integrate partial') {
 
 phase('Dispatch')
 if (!state.dispatched_at) {
-  const reviewPreflight = await openCodePreflight()
-  if (reviewPreflight.status !== 'ok') {
+  const reviewPreflight = await ocrPreflight()
+  // An operator who has already chosen to proceed without a review should not be blocked
+  // by the preflight for the very tool they opted out of. Same verb, same record.
+  if (reviewPreflight.status !== 'ok' && !(state.operator_decision || '').startsWith('skip code review:')) {
     const result = { status: 'blocked', reason: 'code_review_unavailable', detail: reviewPreflight }
     await saveResult(result)
     return result
   }
-  await patchState({ review_engine: 'opencode', review_model: reviewPreflight.model, code_review_rounds: 0, code_review_findings: [], code_review_sessions: [], code_review_override: null }, 'save-review-preflight')
+  await patchState({ review_engine: 'ocr', review_model: reviewPreflight.model, code_review_rounds: 0, code_review_findings: [], code_review_sessions: [], code_review_override: null }, 'save-review-preflight')
 }
 if (!state.dispatched_at) {
   const pre = await preflight(state)
@@ -1947,9 +2232,17 @@ if (mergeResult.conflict) {
   await saveResult(result)
   return result
 }
+// Advisory only — never blocks. Recorded in the state file for the operator/a later
+// Head Imp-style review to see; a clean textual merge is not proof nothing was reverted.
+if (mergeResult.regression_check) {
+  await patchState({ merge_regression_check: mergeResult.regression_check }, 'merge-regression-check').catch(() => {})
+}
 
 const hasDiff = mergeResult.merged.length > 0
 const syncResult = await syncDefaultBranch(defaultBranch)
+if (syncResult.regression_check) {
+  await patchState({ sync_regression_check: syncResult.regression_check }, 'sync-regression-check').catch(() => {})
+}
 if (syncResult.conflict) {
   const result = { status: 'blocked', reason: 'merge_conflict', detail: syncResult.conflict }
   await saveResult(result)
@@ -1971,11 +2264,50 @@ if (gateOutcome.blockedOn) {
   return result
 }
 
+// `skip code review: <rationale>` is the only exit from a review that CANNOT complete —
+// a setup failure, or a diff the pinned model cannot finish within any practical timeout.
+// It is deliberately a different verb from `override code review:`, which accepts a review
+// that DID complete and returned findings. Conflating them would let "no verdict" be
+// recorded as an accepted verdict; here the absence is recorded as an absence, and it
+// reaches the PR body and the audit trail as one. Without this, an unavailable review
+// blocks the run permanently, with no scripted way forward at all.
+const skipReviewPrefix = 'skip code review:'
+const codeReviewSkip = state.operator_decision && state.operator_decision.startsWith(skipReviewPrefix)
+  ? state.operator_decision.slice(skipReviewPrefix.length).trim()
+  : ''
+
 // Gates are deliberately before review. A review-driven fix reruns every gate and is then
-// sent to a fresh OpenCode session; no Claude review fallback exists on any failure path.
-let codeReview = hasDiff ? await openCodeReview(defaultBranch) : { status: 'ok', verdict: 'APPROVE', findings: [], model: state.review_model || 'openai/gpt-5.4', provider: 'openai', session_id: null, duration_ms: 0, cost_usd: null, reason: null }
+// sent to a fresh OCR run; no Claude review fallback exists on any failure path.
+if (hasDiff && !codeReviewSkip) {
+  const treeBeforeReview = await assertTreeCommitted('pre-review')
+  if (!treeBeforeReview.clean) {
+    const result = {
+      status: 'blocked',
+      reason: 'uncommitted_changes',
+      detail: {
+        where: 'before code review',
+        porcelain: treeBeforeReview.porcelain || '',
+        note: 'The code review reads committed history only, and `git push` sends commits only — uncommitted work here would be reviewed around and then dropped. Commit it (or discard it if it is not this run\'s) and continue.',
+      },
+    }
+    await saveResult(result)
+    return result
+  }
+}
+let codeReview = (hasDiff && !codeReviewSkip)
+  ? await ocrReview(defaultBranch)
+  // A skipped review reports verdict SKIPPED, never APPROVE: nothing reviewed this diff,
+  // and the finalize/PR-body rendering must be able to say so rather than showing a
+  // verdict that was never reached. The no-diff case below is a genuine APPROVE — there
+  // was nothing to review, which is different from choosing not to review.
+  : codeReviewSkip
+    ? { status: 'ok', verdict: 'SKIPPED', findings: [], model: state.review_model || null, provider: null, session_id: null, duration_ms: 0, cost_usd: null, reason: `operator skipped: ${codeReviewSkip}` }
+    : { status: 'ok', verdict: 'APPROVE', findings: [], model: state.review_model || 'openai/gpt-5.4', provider: 'openai', session_id: null, duration_ms: 0, cost_usd: null, reason: null }
 let codeReviewRounds = 0
 let codeReviewSessions = codeReview.session_id ? [codeReview.session_id] : []
+if (codeReviewSkip) {
+  await patchState({ code_review_skipped: codeReviewSkip }, 'skip-code-review')
+}
 if (codeReview.status !== 'ok') {
   const result = { status: 'blocked', reason: 'code_review_unavailable', detail: codeReview }
   await patchState({ code_review_findings: codeReview.findings || [], code_review_sessions: codeReviewSessions }, 'code-review-failed')
@@ -1984,7 +2316,7 @@ if (codeReview.status !== 'ok') {
 }
 while (codeReview.verdict === 'CHANGES_REQUESTED' && codeReviewRounds < 3) {
   codeReviewRounds += 1
-  await fixCodeReview(codeReview.findings)
+  await fixOcrReview(codeReview.findings)
   const repairedGates = await runGatesWithRetry(gateCommands, null)
   if (repairedGates.blockedOn) {
     const failedResult = repairedGates.results[repairedGates.results.length - 1]
@@ -1992,7 +2324,21 @@ while (codeReview.verdict === 'CHANGES_REQUESTED' && codeReviewRounds < 3) {
     await saveResult(result)
     return result
   }
-  codeReview = await openCodeReview(defaultBranch)
+  const treeAfterFix = await assertTreeCommitted(`post-review-fix-${codeReviewRounds}`)
+  if (!treeAfterFix.clean) {
+    const result = {
+      status: 'blocked',
+      reason: 'uncommitted_changes',
+      detail: {
+        where: `after code-review fix round ${codeReviewRounds}`,
+        porcelain: treeAfterFix.porcelain || '',
+        note: 'The fix round left changes uncommitted. The re-review reads committed history, so it would re-raise the findings this round just fixed and burn the round cap. Commit them and continue.',
+      },
+    }
+    await saveResult(result)
+    return result
+  }
+  codeReview = await ocrReview(defaultBranch)
   if (codeReview.session_id) codeReviewSessions.push(codeReview.session_id)
   if (codeReview.status !== 'ok') {
     const result = { status: 'blocked', reason: 'code_review_unavailable', detail: codeReview }
@@ -2068,8 +2414,11 @@ const result = {
   status: 'awaiting_authorization',
   merged: mergeResult.merged,
   failed_tasks: dispatchOutcome.failed,
-  code_review: { engine: 'opencode', provider: codeReview.provider, model: codeReview.model, verdict: codeReview.verdict, rounds: codeReviewRounds, findings: codeReview.findings },
+  code_review: { engine: 'ocr', provider: codeReview.provider, model: codeReview.model, verdict: codeReview.verdict, rounds: codeReviewRounds, findings: codeReview.findings },
   code_review_override: state.operator_decision && state.operator_decision.startsWith('override code review:') ? state.operator_decision.slice('override code review:'.length).trim() : null,
+  // Distinct from the override above: this diff was never reviewed at all. Surfaced in the
+  // authorization summary so an operator cannot mistake an unreviewed diff for a clean one.
+  code_review_skipped: codeReviewSkip || state.code_review_skipped || null,
   gates: gateOutcome.results,
   diff_stat: diffStatInfo.diff_stat,
   default_branch: defaultBranch,

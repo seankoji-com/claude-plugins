@@ -4,6 +4,11 @@
     "opencode": "full",
     "reason": "Discovery, ranking and synthesis prose ports cleanly. Its Claude Workflow dispatch mechanics do not exist on either target, so they are replaced by per-platform dispatch prose in build/overrides/ape/."
   },
+  "babysitter": {
+    "agy": "excluded",
+    "opencode": "excluded",
+    "reason": "Its defining mechanic is a live event stream: the plugin arms Claude Code's Monitor tool with pr-events.sh and acts on each line as it lands. docs/platform-matrix.md measures no equivalent on either target, and build/README.md's porting rule is that a fact not in the matrix does not get used — so a port would have to invent a polling harness and present it as if it worked. Its concurrent model-routed dispatch (haiku, escalating to sonnet on a blocked return) hits the same wall the imps Workflow script does, without imps' prose dispatch loop to replace it. Revisit if the matrix gains a measured event-stream primitive: the bundled shell scripts are already platform-neutral, so only the command prose would need porting."
+  },
   "claude-tuneup": {
     "agy": "excluded",
     "opencode": "excluded",

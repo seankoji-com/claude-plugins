@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "Review rule for the /imps code-review gate (scripts/run-ocr.sh).",
+    "",
+    "OCR has no severity field in its output — every comment is just {path, line, body}.",
+    "The imps review contract requires one, so the rule below instructs the reviewer to",
+    "prefix each comment with [blocker], [major], [minor] or [nit]; run-ocr.sh parses that",
+    "prefix off the body. An untagged comment is treated as `major`, so a model that",
+    "ignores this instruction blocks the run rather than silently passing it.",
+    "",
+    "Rule order is significant: FIRST MATCH WINS. The catch-all must stay last."
+  ],
+  "exclude": [
+    "**/{package-lock.json,pnpm-lock.yaml,yarn.lock,bun.lockb,composer.lock,Cargo.lock,Gemfile.lock,poetry.lock,Pipfile.lock,go.sum,Chart.lock}",
+    "**/.terraform.lock.hcl",
+    "**/*.tfstate*",
+    "**/{dist,build,out,.next,.nuxt,.output,.svelte-kit,.wrangler,.vercel,node_modules,vendor,__snapshots__}/**",
+    "**/*.{png,jpg,jpeg,gif,webp,avif,ico,svg,pdf,woff,woff2,ttf,otf,eot,mp4,mov,zip,gz,tar,bin}",
+    "**/*.min.{js,css}"
+  ],
+  "rules": [
+    {
+      "path": "**/*.{sh,bash,zsh}",
+      "merge_system_rule": true,
+      "rule": "Shell review. Start every comment with [blocker], [major], [minor] or [nit]. Prioritise: unquoted expansions that break on spaces or globs; `set -e` assumptions that do not hold inside pipelines, command substitutions or `if` conditions; exit codes swallowed by a pipe; temp files created without cleanup traps; and secrets reaching argv or logs. Do not comment on style a formatter would fix."
+    },
+    {
+      "path": "**/*.{js,mjs,cjs,ts}",
+      "merge_system_rule": true,
+      "rule": "JavaScript/TypeScript review. Start every comment with [blocker], [major], [minor] or [nit]. Prioritise: unawaited promises; errors caught and discarded; state mutated across async boundaries; and control flow that can return without satisfying its documented contract. Do not comment on formatting."
+    },
+    {
+      "path": "**/*.py",
+      "merge_system_rule": true,
+      "rule": "Python review. Start every comment with [blocker], [major], [minor] or [nit]. Prioritise: exceptions caught too broadly; mutable default arguments; iteration over a structure being modified; and I/O whose failure mode is a silent empty result rather than an error. Do not comment on formatting."
+    },
+    {
+      "path": "**/*.{yml,yaml}",
+      "merge_system_rule": true,
+      "rule": "YAML/workflow review. Start every comment with [blocker], [major], [minor] or [nit]. Prioritise: GitHub Actions expressions evaluated in a context where they are empty; permissions broader than the job needs; secrets exposed to untrusted triggers; and job-level conditions that silently skip rather than fail. Do not comment on indentation."
+    },
+    {
+      "path": "**/*.md",
+      "merge_system_rule": false,
+      "rule": "Documentation review. Start every comment with [blocker], [major], [minor] or [nit]. Comment only where the prose contradicts the code in this same diff, documents a flag or path that does not exist, or states a factual claim the diff disproves. Do not comment on wording, tone or structure."
+    },
+    {
+      "path": "**/*",
+      "merge_system_rule": true,
+      "rule": "Start every comment with [blocker], [major], [minor] or [nit]. A [blocker] or [major] must name a concrete breaking input or scenario AND a concrete fix — if you cannot name both, it is at most [minor]. Judge the diff against the acceptance criteria supplied as background. Do not manufacture findings: returning no comments is the correct output for a clean diff."
+    }
+  ]
+}

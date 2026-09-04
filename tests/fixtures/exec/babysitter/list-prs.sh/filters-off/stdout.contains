@@ -1,0 +1,6 @@
+"repo":"acme/app","number":1,.*"author":"stubuser"
+"repo":"acme/app","number":2,.*"author":"dependabot\[bot\]".*"bot":true
+"repo":"acme/app","number":3,.*"author":"otherhuman"
+"repo":"acme/app","number":4,.*"draft":true
+"repo":"acme/lib","number":5,.*"fork":true
+"repo":"acme/lib","number":6,.*"mergeable":"CONFLICTING"

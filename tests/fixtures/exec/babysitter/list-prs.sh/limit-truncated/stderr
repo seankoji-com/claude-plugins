@@ -1,0 +1,1 @@
+list-prs.sh: org:acme has 6 open PRs before this script's author/draft/fork filters, and only the first 2 were fetched — the snapshot below is drawn from a partial page. Raise --limit (max 100) or narrow the scope. 6 is not the size of the eligible roster; the line count below is.

@@ -1,0 +1,8 @@
+--command
+/babysitter:org
+--kind
+repo
+--scope
+owner/name
+--note
+clone remote is SSH only

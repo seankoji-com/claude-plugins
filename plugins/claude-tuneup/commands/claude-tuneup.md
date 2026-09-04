@@ -103,7 +103,7 @@ NEVER allowlist a pattern that grants arbitrary code execution. A wildcard on an
 
 - Interpreters: `python`/`python3`, `node`, `bun`, `deno`, `ruby`, `perl`, `php`, `lua`
 - Shells: `bash`, `sh`, `zsh`, `fish`, `eval`, `exec`, `ssh` (the bare form — narrow rules like `ssh nas 'ls *` are fine)
-- Same-class-as-interpreter commands: `awk` (has `system()`/`getline | "cmd"` — arbitrary exec), `find * -exec *`, `sed -e 's/.../e'` (the `e` substitution flag executes its match), `xargs` without a safe-flag check (can invoke anything downstream)
+- Same-class-as-interpreter commands: `awk` (has `system()`/`getline | "cmd"` — arbitrary exec), `find * -exec *`, `sed -e 's/.../e'` (the `e` substitution flag executes its match), `xargs` without a safe-flag check (can invoke anything downstream), `source`/`.` (executes an arbitrary file's contents in-shell), `op run` (executes a command with secrets injected — the command it runs is the arbitrary part)
 - Package runners: `npx`, `bunx`, `uvx`, `uv run`
 - Package installers (run build/lifecycle scripts at install time): `pip install *` / `pip3 install *`, `npm install *` / `npm ci *`, `yarn add *`, `pnpm add *`, `gem install *`, `cargo install *` — the bare argless `npm install` / `npm ci` (install from a committed lockfile) are fine
 - Task-runner wildcards: `npm run *`, `yarn run *`, `pnpm run *`, `bun run *`, `make *`, `just *`, `cargo run *`, `go run *` — exact forms (e.g. `Bash(bun run typecheck)`) are fine
@@ -312,8 +312,8 @@ Walk through these checks against this run. Each is one bullet in the log entry;
 - **De-dupe misses**: how many Phase 1 candidates turned out to be already covered by a prefix-match of an existing allow rule (i.e. the user would never have been prompted in practice)? The frequency scanner counts raw invocations and doesn't subtract patterns the harness was already auto-allowing via existing rules — surface that gap.
 - **Mode mismatch**: was `AskUserQuestion` skipped because the user signaled autonomous mode ("work without stopping", `--yes`, etc.)? List which decisions were applied via safe-default heuristics instead of explicit confirmation.
 - **Risk-class candidates**: did any proposed candidate match a class that arguably belongs on the safety-block list — e.g. `awk *` (has `system()` and `getline | "cmd"`), `find * -exec *`, `sed` with the `e` substitution flag, `xargs` without `--no-run-if-empty` + safe-flag check? Note each.
-- **Stale entries in global**: did the audit notice MCP rules (or other entries) in the global allow list that aren't backed by any currently-connected server? The skill flags these manually right now — log so they can become a first-class step later.
-- **Intra-allowlist redundancy**: did the audit catch any rule that's fully subsumed by another rule's prefix-match within the SAME list (e.g. `Bash(ssh nas 'which docker)` next to `Bash(ssh nas 'which *)`)? This isn't a 3a/3b/3c step today; log occurrences.
+- **Stale entries in global**: 3f already makes this a first-class step — note whether it caught everything, or whether a stale rule slipped past it (e.g. a case-drift variant 3f's server-name lookup didn't match).
+- **Intra-allowlist redundancy**: 3a's cross-file prefix-subsumption check ("any rule whose prefix is already covered by a broader rule in ANY allow file") already covers same-file redundancy incidentally — note whether it actually caught an intra-list case, or whether one slipped past.
 
 **8b. Improvement log**
 

@@ -249,9 +249,11 @@ Each agent runs in an isolated worktree (`isolation: 'worktree'`) and:
    `{ "issue": N, "pr": M, "status": "ok|failed", "tests": "pass|fail|none", "files": [...], "notes": "≤50 words" }`
 
 **Never merge from inside an agent.** The orchestrator merges serially:
-`gh pr merge --squash`; on `mergeable=UNKNOWN` sleep 15–20s and re-check
-(protocol note 9). On conflict: spawn a sonnet agent in that PR's worktree to
-rebase onto the holding branch, resolve, and force-push — the orchestrator never
+`gh pr merge --squash` (prefer `mcp__github__merge_pull_request` if available; if `gh`
+fails reading `~/.config/gh/config.yml` in a sandboxed environment, retry the identical
+command unsandboxed rather than treating it as a real auth problem); on `mergeable=UNKNOWN`
+sleep 15–20s and re-check (protocol note 9). On conflict: spawn a sonnet agent in that PR's
+worktree to rebase onto the holding branch, resolve, and force-push — the orchestrator never
 pulls conflicted files into its own context.
 
 **Model sizing:** assign by reasoning complexity — mechanical → haiku, judgment →

@@ -42,7 +42,24 @@ GENERATION_MANIFEST_PATH = BUILD_DIR / "generation-manifest.json"
 # Sorted, so iteration order never depends on the table's key order.
 PLATFORMS = ("agy", "opencode")
 
+# Anchored at column 0, deliberately, even though CommonMark allows a heading up to 3
+# spaces in. Relaxing it to `^ {0,3}#` makes imps.md's task-table header row
+# " #  Task   Model   Type   Depends On" a heading, which truncates `## Task table`
+# right after its own heading line and leaks the Claude-side rows into dist/ — the
+# exact corruption class this module already guards against. Section starts are held
+# to the same column-0 rule (see find_section) so both ends of a span agree.
 HEADING_RE = re.compile(r"^#{1,6} ")
+# A fenced-code delimiter: ``` or ~~~ (3+), optionally indented, with an info string.
+# Needed because HEADING_RE happily matches a column-0 `# comment` inside a ```bash
+# block; anything deciding "is this line a heading?" must mask such regions first.
+FENCE_RE = re.compile(r"^(?P<indent> {0,3})(?P<marker>`{3,}|~{3,})(?P<info>.*)$")
+# ...but only fences in a *non-markdown* language are masked. A fence with no info string,
+# or one tagged markdown/md, holds markdown whose headings are real: overrides across this
+# repo target headings inside ```markdown templates (imps.md's GOAL.md skeleton — `## Task
+# table`, `## Status`, `## Parked findings` — is stitched together by exactly that), and
+# masking those would break 20+ live directives. A `# ` line inside ```bash is a shell
+# comment and never a heading, which is the case that silently corrupted dist/.
+MARKDOWN_FENCE_INFO = frozenset({"", "markdown", "md"})
 FRONTMATTER_KEY_RE = re.compile(r"^([A-Za-z0-9_.-]+):")
 
 # The invariants dist/ must hold. Checked here so a porting mistake fails at generation
@@ -209,7 +226,7 @@ class Override:
 
     def __init__(self, path: Path | None = None):
         self.path = path
-        self.replacements: list[tuple[str, str | None]] = []
+        self.replacements: list[tuple[str, str | None, bool]] = []
         self.frontmatter: list[tuple[str, str]] = []
         self.used: set[str] = set()
 
@@ -224,11 +241,19 @@ def parse_override(path: Path) -> Override:
     Directives, each on its own line:
         <!-- REPLACE-SECTION: <exact heading line> -->  ... <!-- END-SECTION -->
         <!-- DROP-SECTION: <exact heading line> -->
+        <!-- REPLACE-SUBTREE: <exact heading line> -->  ... <!-- END-SECTION -->
+        <!-- DROP-SUBTREE: <exact heading line> -->
         <!-- SET-FRONTMATTER: <key>: <value> -->
 
     A "section" runs from its heading line up to the next heading line of any level, or
     end of file. Replacement text is inserted verbatim: the platform mapping does not run
     over it, so write `__PLUGIN_ROOT__` and platform paths directly.
+
+    A "subtree" (REPLACE-SUBTREE / DROP-SUBTREE) is the depth-aware counterpart: it runs
+    from its heading line up to the next heading of level <= the target's own level (or
+    end of file), so nested child headings are swallowed along with it. Opt-in and
+    additive -- see find_subtree()'s docstring and find_section()'s docstring for why the
+    plain SECTION directives keep their any-level-ends-it behavior unchanged.
     """
     override = Override(path)
     lines = read_text(path).split("\n")
@@ -237,8 +262,17 @@ def parse_override(path: Path) -> Override:
         line = lines[index].strip()
         replace = re.fullmatch(r"<!--\s*REPLACE-SECTION:\s*(.+?)\s*-->", line)
         drop = re.fullmatch(r"<!--\s*DROP-SECTION:\s*(.+?)\s*-->", line)
+        replace_subtree = re.fullmatch(r"<!--\s*REPLACE-SUBTREE:\s*(.+?)\s*-->", line)
+        drop_subtree = re.fullmatch(r"<!--\s*DROP-SUBTREE:\s*(.+?)\s*-->", line)
         setfm = re.fullmatch(r"<!--\s*SET-FRONTMATTER:\s*([A-Za-z0-9_-]+):\s*(.*?)\s*-->", line)
-        if replace:
+        if replace or replace_subtree:
+            directive = replace or replace_subtree
+            is_subtree = replace_subtree is not None
+            heading = directive.group(1)
+            if is_subtree and not HEADING_RE.match(heading):
+                raise GenerateError(
+                    f"{rel(path)}: REPLACE-SUBTREE target {heading!r} is not a heading line"
+                )
             body: list[str] = []
             index += 1
             while index < len(lines) and not re.fullmatch(
@@ -247,12 +281,22 @@ def parse_override(path: Path) -> Override:
                 body.append(lines[index])
                 index += 1
             if index >= len(lines):
+                name = "REPLACE-SUBTREE" if is_subtree else "REPLACE-SECTION"
                 raise GenerateError(
-                    f"{rel(path)}: REPLACE-SECTION for {replace.group(1)!r} has no END-SECTION"
+                    f"{rel(path)}: {name} for {heading!r} has no END-SECTION"
                 )
-            override.replacements.append((replace.group(1), "\n".join(body).strip("\n")))
-        elif drop:
-            override.replacements.append((drop.group(1), None))
+            override.replacements.append(
+                (heading, "\n".join(body).strip("\n"), is_subtree)
+            )
+        elif drop or drop_subtree:
+            directive = drop or drop_subtree
+            is_subtree = drop_subtree is not None
+            heading = directive.group(1)
+            if is_subtree and not HEADING_RE.match(heading):
+                raise GenerateError(
+                    f"{rel(path)}: DROP-SUBTREE target {heading!r} is not a heading line"
+                )
+            override.replacements.append((heading, None, is_subtree))
         elif setfm:
             override.frontmatter.append((setfm.group(1), setfm.group(2)))
         elif line and not line.startswith("<!--"):
@@ -273,6 +317,41 @@ def load_overrides(plugin: str, platform: str, kind: str) -> dict[str, Override]
     return {path.stem: parse_override(path) for path in sorted(directory.glob("*.md"))}
 
 
+def heading_indices(lines: list[str]) -> set[int]:
+    """Indices of the lines that are real markdown headings.
+
+    HEADING_RE alone is not enough: it matches any line starting with `# `, and a shell
+    comment at column 0 inside a ```bash fence looks exactly like an h1. Treating one as a
+    heading ends the enclosing section early, so everything after it leaks into dist/
+    unreplaced — a silent corruption that only ever surfaced as an unrelated lint failure.
+    Fences tagged with a non-markdown language are masked out here (see
+    MARKDOWN_FENCE_INFO for why untagged and ```markdown fences stay transparent), so
+    every caller gets the same answer.
+    """
+    found: set[int] = set()
+    fence: str | None = None
+    opaque = False
+    for index, line in enumerate(lines):
+        match = FENCE_RE.match(line)
+        if match:
+            marker, info = match.group("marker"), match.group("info")
+            if fence is None:
+                # An opening fence's info string may not contain a backtick.
+                if marker[0] == "`" and "`" in info:
+                    continue
+                fence = marker
+                lang = (info.strip().split() or [""])[0].lower()
+                opaque = lang not in MARKDOWN_FENCE_INFO
+                continue
+            # A closing fence is the same character, at least as long, and bare.
+            if marker[0] == fence[0] and len(marker) >= len(fence) and not info.strip():
+                fence, opaque = None, False
+            continue
+        if not opaque and HEADING_RE.match(line):
+            found.add(index)
+    return found
+
+
 def find_section(body_lines: list[str], heading: str) -> tuple[int, int] | None:
     """Span of the section introduced by `heading`, as [start, end).
 
@@ -291,11 +370,54 @@ def find_section(body_lines: list[str], heading: str) -> tuple[int, int] | None:
     AND its subtree". The fix for that is a separate opt-in directive rather than a change
     here, so no existing directive's meaning moves.
     """
+    headings = heading_indices(body_lines)
+    for start, line in enumerate(body_lines):
+        # A section start must be a heading by the same rule that ends one (column 0, not
+        # inside an opaque fence), so a span can never begin somewhere it could not end.
+        # Without this, a `## X` line inside a ```bash fence would still match as a start.
+        if start not in headings or line.strip() != heading:
+            continue
+        end = start + 1
+        while end < len(body_lines) and end not in headings:
+            end += 1
+        return start, end
+    return None
+
+
+def _heading_level(line: str) -> int | None:
+    """Number of leading '#' characters if `line` is a heading, else None."""
+    if not HEADING_RE.match(line):
+        return None
+    return len(line) - len(line.lstrip("#"))
+
+
+def find_subtree(body_lines: list[str], heading: str) -> tuple[int, int] | None:
+    """Span of the subtree introduced by `heading`, as [start, end).
+
+    Depth-aware counterpart to find_section(): this ends the span at the next heading
+    whose level is <= the target heading's own level (or end of file), so any nested
+    child headings are included in the span rather than surviving it. Backs
+    REPLACE-SUBTREE / DROP-SUBTREE, the opt-in directives for "replace/drop this section
+    AND everything nested under it" -- see find_section()'s docstring for why the plain
+    SECTION directives deliberately keep their shallower, any-level-ends-it behavior.
+    Headings inside fenced code blocks are ignored (do not terminate the span).
+    """
+    level = _heading_level(heading)
     for start, line in enumerate(body_lines):
         if line.strip() != heading:
             continue
         end = start + 1
-        while end < len(body_lines) and not HEADING_RE.match(body_lines[end]):
+        in_fence = False
+        while end < len(body_lines):
+            line_text = body_lines[end].strip()
+            # Track fenced code block state (``` or ~~~ toggle fence state)
+            if line_text.startswith("```") or line_text.startswith("~~~"):
+                in_fence = not in_fence
+            # Only treat a heading as a terminator if it's not inside a fence
+            elif not in_fence:
+                child_level = _heading_level(body_lines[end])
+                if child_level is not None and child_level <= level:
+                    break
             end += 1
         return start, end
     return None
@@ -304,9 +426,23 @@ def find_section(body_lines: list[str], heading: str) -> tuple[int, int] | None:
 def apply_override(body: str, override: Override, where: str) -> tuple[str, list[str]]:
     """Swap overridden sections for sentinels so the mapping cannot rewrite them."""
     held: list[str] = []
-    for heading, replacement in override.replacements:
+    source_lines = body.split("\n")
+
+    def source_position(item: tuple[str, str | None, bool]) -> int:
+        """Where this section starts in the *unmodified* body."""
+        heading = item[0]
+        is_subtree = item[2]
+        span = find_subtree(source_lines, heading) if is_subtree else find_section(source_lines, heading)
+        # A heading that is not there sorts last; the loop below raises on it either way.
+        return span[0] if span else len(source_lines)
+
+    # Applied in source order, not directive order. A sentinel is not a heading, so
+    # replacing section B before the section A that immediately precedes it makes A's
+    # span run past B's now-vanished heading and swallow B's sentinel — silently
+    # discarding B's replacement text. Sorting first makes the two orders agree.
+    for heading, replacement, is_subtree in sorted(override.replacements, key=source_position):
         lines = body.split("\n")
-        span = find_section(lines, heading)
+        span = find_subtree(lines, heading) if is_subtree else find_section(lines, heading)
         if span is None:
             raise GenerateError(
                 f"{override.label}: heading {heading!r} not found in {where}. Override "
@@ -323,9 +459,17 @@ def apply_override(body: str, override: Override, where: str) -> tuple[str, list
     return body, held
 
 
-def restore_overrides(text: str, held: list[str]) -> str:
+def restore_overrides(text: str, held: list[str], where: str = "<unknown>") -> str:
     for index, replacement in enumerate(held):
-        text = text.replace(SENTINEL_OVERRIDE % index, replacement)
+        token = SENTINEL_OVERRIDE % index
+        if token not in text:
+            raise GenerateError(
+                f"{where}: a replaced section vanished from the generated output before "
+                f"its replacement could be restored. Its placeholder was swallowed by an "
+                f"adjacent section's span. Replacement text began:\n"
+                f"    {replacement.splitlines()[0] if replacement else '<empty>'!r}"
+            )
+        text = text.replace(token, replacement)
     return text
 
 
@@ -547,7 +691,7 @@ def render_markdown(
     body, held = apply_override(body, override, source_rel)
     text = render_frontmatter(blocks) + "\n" + body.lstrip("\n")
     text = apply_mapping(text, platform_conf, invocation_pairs, source_rel)
-    text = restore_overrides(text, held)
+    text = restore_overrides(text, held, source_rel)
     if not text.endswith("\n"):
         text += "\n"
     return text
@@ -659,14 +803,33 @@ def clear_paths(paths) -> None:
             path.unlink()
 
 
-def plugin_output_targets(plugin: str, platform_table: dict) -> list[Path]:
+def plugin_for_command_file(filename: str, plugins: list[str]) -> str | None:
+    """
+    Determine which plugin owns a command file using longest-name-first matching.
+    Mirrors the algorithm in build/npm/lib/installer.js pluginForCommandFile().
+    """
+    base = filename.removesuffix(".md")
+    # Sort plugins by length descending (longest first) so a shorter plugin name
+    # doesn't shadow a longer one (e.g., "imps" shouldn't match "imps-lite-cmd.md")
+    sorted_plugins = sorted(plugins, key=len, reverse=True)
+    for plugin in sorted_plugins:
+        if base == plugin or base.startswith(f"{plugin}-"):
+            return plugin
+    return None
+
+
+def plugin_output_targets(plugin: str, platform_table: dict, all_plugins: list[str] | None = None) -> list[Path]:
     targets = [DIST_DIR / "agy" / plugin]
     asset_root = platform_table["opencode"]["layout"]["asset_root"].replace("<plugin>", plugin)
     targets.append(DIST_DIR / "opencode" / asset_root)
     commands_dir = DIST_DIR / "opencode" / platform_table["opencode"]["layout"]["commands_dir"]
     if commands_dir.is_dir():
+        # Use longest-name-first matching to correctly identify which plugin owns each file
+        if all_plugins is None:
+            all_plugins = [plugin]
         for path in sorted(commands_dir.glob("*.md")):
-            if path.name == f"{plugin}.md" or path.name.startswith(f"{plugin}-"):
+            matched_plugin = plugin_for_command_file(path.name, all_plugins)
+            if matched_plugin == plugin:
                 targets.append(path)
     return targets
 
@@ -725,6 +888,11 @@ def main(argv=None) -> int:
             raise GenerateError(f"{rel(PLATFORM_TABLE_PATH)}: missing platform {platform!r}")
 
     ready, skipped = generatable(manifest)
+    # Filter to only OpenCode-full plugins for command-file matching.
+    # The installer only knows about OpenCode-full plugins; including Agy-only
+    # plugins in the candidate set could cause a longer Agy-only name to shadow
+    # an OpenCode plugin's command file.
+    opencode_ready = [p for p in ready if manifest[p].get("opencode") == "full"]
 
     if args.only:
         plugin = args.only
@@ -737,7 +905,7 @@ def main(argv=None) -> int:
             reason = dict(skipped)[plugin]
             raise GenerateError(f"--only {plugin}: not generatable — {reason}")
         plugins = [plugin]
-        clear_paths(plugin_output_targets(plugin, platform_table))
+        clear_paths(plugin_output_targets(plugin, platform_table, opencode_ready))
     else:
         plugins = ready
         clear_paths([DIST_DIR])
