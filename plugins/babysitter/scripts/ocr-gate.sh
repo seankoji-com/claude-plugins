@@ -3,11 +3,16 @@
 # ocr-gate.sh — review the babysitter's own work before it is pushed.
 #
 # Every fix this plugin makes lands on someone's open PR, where a bad change costs a
-# whole extra review round-trip. Running OpenCodeReview (`ocr`) over the diff first
-# turns that round-trip into a local loop: the agent reads the findings, fixes them,
-# and pushes once.
+# whole extra review round-trip. Running a review over the diff first turns that
+# round-trip into a local loop: the agent reads the findings, fixes them, and pushes
+# once.
 #
 # Tool selection, in order:
+#   0. codex adversarial-review — tried first when the Codex plugin is installed and
+#      usable. A completed verdict (approve or needs-attention) is authoritative and
+#      is reported immediately; anything else (not installed, crashed, timed out, no
+#      usable verdict) falls through to the chain below without comment — Codex is a
+#      best-effort first opinion, not a required one.
 #   1. ocr-pre-pr.sh — the user's own wrapper, if installed. Preferred because it
 #      writes the HEAD-keyed cache entry their before-PR gate reads, so a babysitter
 #      push and a hand-made push are gated by the same record.
@@ -18,9 +23,9 @@
 #
 # Case 4 is deliberately fail-soft, which is the opposite of this repo's usual
 # fail-closed rule, and the reason is the same one that exempts audit-log.sh: `ocr`
-# is an optional third-party CLI, not a bundled dependency. Hard-failing here would
-# make the entire plugin unusable for anyone who has not installed it. What is NOT
-# soft is the reporting — status=skipped is stated in the summary line so no agent
+# (and now Codex) are optional third-party tools, not bundled dependencies. Hard-failing
+# here would make the entire plugin unusable for anyone who has not installed them. What
+# is NOT soft is the reporting — status=skipped is stated in the summary line so no agent
 # can report a push as "reviewed" when nothing reviewed it.
 #
 # Case 3 exists because of a specific, observed failure. `ocr` talks to an LLM gateway
@@ -123,6 +128,69 @@ delegate_or_die() {
   exit 2
 }
 
+# Codex is a separate, independently installed plugin — its script root isn't knowable
+# ahead of time, so it's resolved at runtime from Claude Code's own install manifest
+# (the same file every plugin is actually recorded in), preferring a user-scope install.
+# `/codex:adversarial-review` itself can't be invoked here: its command frontmatter sets
+# `disable-model-invocation: true`, which blocks the SlashCommand tool from calling it
+# programmatically. This calls the same underlying runtime the slash command wraps
+# (`codex-companion.mjs adversarial-review`) directly instead.
+#
+# Returns 1 (never exits) on anything short of a completed verdict, so the caller falls
+# through to the existing ocr-pre-pr.sh / ocr / delegate chain untouched. Exits directly
+# (0 clean, 1 findings) only once Codex has actually produced a verdict — that verdict is
+# authoritative and is never double-checked by also running OCR.
+try_codex() {
+  local manifest="${BABYSITTER_CLAUDE_PLUGINS_MANIFEST:-$HOME/.claude/plugins/installed_plugins.json}"
+  local codex_root="${BABYSITTER_CODEX_PLUGIN_ROOT:-}"
+  if [ -z "$codex_root" ]; then
+    [ -f "$manifest" ] || return 1
+    codex_root="$(jq -r '
+      (.plugins // {}) | to_entries[]
+      | select(.key | startswith("codex@"))
+      | .value[]? | select(.scope == "user") | .installPath
+    ' "$manifest" 2>/dev/null | head -n1)"
+    if [ -z "$codex_root" ]; then
+      codex_root="$(jq -r '
+        (.plugins // {}) | to_entries[]
+        | select(.key | startswith("codex@"))
+        | .value[0].installPath // empty
+      ' "$manifest" 2>/dev/null | head -n1)"
+    fi
+  fi
+  local companion="${codex_root:-}/scripts/codex-companion.mjs"
+  [ -n "$codex_root" ] && [ -f "$companion" ] || return 1
+  command -v node >/dev/null 2>&1 || return 1
+  command -v codex >/dev/null 2>&1 || return 1
+  command -v perl >/dev/null 2>&1 || return 1
+
+  local result="${OUT}.codex.json" errfile="${OUT}.codex.err"
+  set +e
+  perl -e '$SIG{ALRM} = sub { exit 124 }; alarm shift @ARGV; exec @ARGV or exit 127' \
+    "${BABYSITTER_CODEX_TIMEOUT:-300}" \
+    node "$companion" adversarial-review --json --base "origin/${BASE_REF}" --cwd "$(pwd)" \
+    >"$result" 2>"$errfile"
+  local rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || return 1
+  jq -e '(.result != null) and ((.parseError // "") == "")' "$result" >/dev/null 2>&1 || return 1
+
+  local verdict findings
+  verdict="$(jq -r '.result.verdict // ""' "$result")"
+  findings="$(jq -r '.result.findings | length' "$result" 2>/dev/null || echo unknown)"
+  case "$verdict" in
+  approve)
+    echo "OCR status=clean findings=0 result=${result} tool=codex-adversarial-review"
+    exit 0
+    ;;
+  needs-attention)
+    echo "OCR status=findings findings=${findings} result=${result} tool=codex-adversarial-review"
+    exit 1
+    ;;
+  *) return 1 ;;
+  esac
+}
+
 [ -n "$BASE_REF" ] || die "--base <base-ref> is required"
 command -v git >/dev/null 2>&1 || die "git not found on PATH"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not inside a git worktree"
@@ -156,6 +224,9 @@ if [ "$MERGE_BASE" = "$HEAD_SHA" ] || git diff --quiet "$MERGE_BASE" "$HEAD_SHA"
   echo "OCR status=clean findings=0 result=- tool=-"
   exit 0
 fi
+
+# ---- Codex first, best-effort --------------------------------------------------
+try_codex || true
 
 # ---- no tool installed -------------------------------------------------------
 if ! command -v ocr-pre-pr.sh >/dev/null 2>&1 && ! command -v ocr >/dev/null 2>&1; then

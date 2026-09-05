@@ -72,7 +72,7 @@ runs — the remaining text is what mode detection and every phase below operate
 flag anywhere in the argument string counts; order does not matter.
 
 - **`--personas`** — opt into the in-run five-persona review panel. **Default: OFF.**
-  Without it, the Head Imp reviews the plan and read-only OCR reviews the merged diff.
+  Without it, the Head Imp reviews the plan and a read-only Codex-first, OCR-fallback gate reviews the merged diff.
   With it, the full panel + fix-loop + adjudication runs exactly as before.
 
 Derive a single boolean `PERSONA_PANEL` (`true` only if `--personas` was present) and
@@ -154,9 +154,11 @@ code block). It is purely cosmetic — skip silently if absent.
 ## The Head Imp — opus adversarial reviewer
 
 The Head Imp is a reusable one-shot `model: opus` agent that reviews plans adversarially.
-OCR reviews the merged diff in a read-only snapshot after gates pass. A missing setup,
-timeout, malformed output, or unresolved major finding blocks rather than falling back
-to Claude. See `references/ocr-review.md` for endpoint configuration, pinning, and rules.
+The merged diff is reviewed in a read-only snapshot after gates pass, by a gate that tries
+a Codex adversarial review first and falls back to OCR when Codex is unavailable — see
+`references/codex-review.md` for that fallback rule. A missing setup, timeout, malformed
+output, or unresolved major finding blocks rather than falling back to Claude. See
+`references/ocr-review.md` for OCR's own endpoint configuration, pinning, and rules.
 
 Invoke it like this (swap in the actual reference and role):
 
@@ -181,8 +183,8 @@ agent(
 ```
 
 **Phase 2 (plan review):** pass the absolute path of GOAL.md — the Head Imp Reads it.
-The **diff review** happens later through `scripts/run-ocr.sh` — you never invoke
-the Head Imp on a diff yourself. See `references/ocr-review.md`.
+The **diff review** happens later through `scripts/run-code-review.sh` — you never invoke
+the Head Imp on a diff yourself. See `references/codex-review.md` and `references/ocr-review.md`.
 
 **Keep the `agentId` the `Agent` call returns.** If the user requests amendments after
 this review, don't dispatch a fresh Head Imp for the revised GOAL.md — `SendMessage`
@@ -668,7 +670,7 @@ quote or reason about its contents. Then:
   nothing left to split — do not invent a multi-task table just to populate rows. Write a
   **single-row task table** and skip straight to Step 2. This is not a lighter path around
   the process, it's the same process with a smaller DAG: Head Imp reviews the plan
-  (Step 3) and OCR later reviews the merged diff; the one task still dispatches through the Workflow script
+  (Step 3) and Codex or OCR later reviews the merged diff; the one task still dispatches through the Workflow script
   exactly like any other stage, which is what offloads the actual work into an isolated
   worktree agent, out of this session's context; gates, the persona panel (when
   `--personas` is set), and the endstate PR all still run unchanged. The only thing skipped is manufacturing parallel work units
@@ -747,7 +749,7 @@ discussion body. Never a paraphrase; this section exists to be checked against.>
 - [ ] <acceptance criterion 1>
 - [ ] <acceptance criterion 2 — one line each from discovery>
 - [ ] Gates green (build · lint · test · type — per GATE_CMDS)
-- [ ] Head Imp reviewed the plan; OCR reviewed the merged diff; all blocker/major findings addressed
+- [ ] Head Imp reviewed the plan; Codex or OCR reviewed the merged diff; all blocker/major findings addressed
 - [ ] No merge conflicts with the default branch
 
 ## Global Constraints
@@ -1032,7 +1034,7 @@ The imps do the work. Phase 3 hands the approved plan to the Workflow script, wh
 dispatches the task DAG as staged `agent()` calls — each code task in its own isolated
 worktree — and returns when it needs a decision. Phases 3, 4 and 5 are all the *same*
 script: one body of real control flow spanning git preflight, dispatch, merge, gates, the
-OCR diff review, the PR, the persona panel and finalize. They are separate phases here
+code-review gate, the PR, the persona panel and finalize. They are separate phases here
 because they are separate things happening, not separate programs.
 
 **These phase names are not the script's `phase()` labels, and the two are not meant to
@@ -1043,7 +1045,7 @@ group `agent()` calls rather than operator-facing stages. Read across:
 | This command | Script `phase()` | Why they differ |
 | --- | --- | --- |
 | Guard, Phases 1–2 | — | Runs in this session; the script has not started |
-| 🔨 3 Build | `Preflight`, `Dispatch` | Preflight also covers the state read, its integrity check, and the OCR preflight |
+| 🔨 3 Build | `Preflight`, `Dispatch` | Preflight also covers the state read, its integrity check, and the code-review preflight |
 | 🔗 4 Consolidate | `Integrate` | One-to-one: merge, gates, review, coverage |
 | 🚢 5 PR | `Publish`, `Finalize` | Publish covers open/panel/green/close; Finalize is Step 5, Land |
 
@@ -1143,7 +1145,7 @@ hardcoded slug check to the Workflow script.
 
 **`personaPanel` gates whether the panel runs at all.** It is `false` by default (no
 `--personas` flag): the script skips the entire panel + fix-loop + adjudication block and
-finalizes on the Head Imp plan review and OCR diff review, which is the intended default for
+finalizes on the Head Imp plan review and the Codex/OCR diff review, which is the intended default for
 repos whose PRs already draw persona reviews from a GitHub-side automation. Pass the
 `PERSONA_PANEL` boolean derived in **Runtime flags**. `personaBriefPaths` is always
 supplied regardless — the script only reads it when `personaPanel` is `true`, so there is
@@ -1194,12 +1196,13 @@ are named here to make a blocked result legible rather than because you drive th
 | --- | --- | --- |
 | 🔀 **1 — Merge** | imp branches onto the run branch, default branch synced in | `merge_conflict`, `branch_mismatch` |
 | 🚦 **2 — Gate** | build · lint · test · type, with a fix round per failure | `gate_red` |
-| 🔬 **3 — Review** | OCR on the merged diff, up to 3 fix rounds | `code_review_red`, `code_review_unavailable`, `uncommitted_changes` |
+| 🔬 **3 — Review** | Codex or OCR on the merged diff, up to 3 fix rounds | `code_review_red`, `code_review_unavailable`, `uncommitted_changes` |
 | 📊 **4 — Cover** | each functional DoD criterion graded against the diff | never blocks; degrades to a warning |
 | 🔑 **5 — Authorize** | publish decision, derived from `endstate` | returns `awaiting_authorization` |
 
 Gates run **before** review deliberately: a review-driven fix re-runs every gate and is
-then sent to a fresh OCR run, so the review never sees a tree the gates would reject.
+then sent through the code-review gate again, so the review never sees a tree the gates
+would reject.
 
 The relay mechanism described here is shared with Phase 5; it is documented once, in this
 phase, because this is where the first result arrives.
@@ -1304,18 +1307,21 @@ the decision, re-invoke:
   unrelated concurrent session — then either commit them or, if they are not this run's,
   hand them back to their owner. Never stash: the stash stack is shared across every
   worktree on the machine. Persist `resolved, continue` once the tree is clean.
-- `code_review_red` — OCR reviewed the merged diff, returned CHANGES_REQUESTED, and three
-  fix rounds did not clear it. `detail.findings` carries what survived, with the model and
-  provider that produced them. Agree a path: fix the findings and persist
-  `resolved, continue`, or accept them on the record with
+- `code_review_red` — Codex or OCR reviewed the merged diff, returned
+  CHANGES_REQUESTED, and three fix rounds did not clear it. `detail.findings` carries what
+  survived, with the model and provider that produced them (`provider` distinguishes which
+  engine actually reviewed it — see `references/codex-review.md` for when Codex's verdict
+  is authoritative versus when the gate fell back to OCR). Agree a path: fix the findings
+  and persist `resolved, continue`, or accept them on the record with
   `override code review: <rationale>`. Treat a *clean* pass on a large diff with less
   confidence than it invites — repeated OCR runs over one large diff have produced
   different finding sets each time, so absence of a finding on one pass is not evidence it
   was addressed, only that it wasn't sampled.
-- `code_review_unavailable` — the review could not run *at all*: a setup/endpoint failure,
-  or a diff too large for the pinned model to finish. This is not a red verdict, it is no
-  verdict, and it can arrive from the pre-dispatch preflight as well as from the review
-  itself. Fix the cause and persist `resolved, continue`, or — when the review genuinely
+- `code_review_unavailable` — the review could not run *at all*: neither Codex nor OCR
+  produced a verdict — a setup/endpoint failure, or a diff too large for the pinned model
+  to finish. This is not a red verdict, it is no verdict, and it can arrive from the
+  pre-dispatch preflight as well as from the review itself. Fix the cause and persist
+  `resolved, continue`, or — when the review genuinely
   cannot complete for this diff — persist `skip code review: <rationale>`. That verb
   records the review as *never run*, distinct from `override code review:`, which accepts
   one that ran and returned findings. Both reach the PR body and the audit trail; neither
@@ -1421,10 +1427,10 @@ after it's already open.
 
 Then the publish decision:
 
-**Push & PR.** This is the right moment: branches are merged, OCR reviewed the merged
-diff, gates are green — and nothing has been pushed yet. (The Head Imp reviews the *plan*,
-in Phase 2, and never the code; the diff review is OCR's, on the consolidated imp commits
-on the run branch.)
+**Push & PR.** This is the right moment: branches are merged, Codex or OCR reviewed the
+merged diff, gates are green — and nothing has been pushed yet. (The Head Imp reviews the
+*plan*, in Phase 2, and never the code; the diff review is the code-review gate's, on the
+consolidated imp commits on the run branch.)
 
 **Self-review disclosure.** Print this whenever it applies. It is no longer attached to a
 question, so it is the only thing standing between a self-reviewed diff and a published
@@ -1461,7 +1467,7 @@ not less. If any DoD criterion is `unsatisfied`, say so prominently; if
 **The persona panel never posts.** Its verdicts return in
 `run_complete.findings_inline` for you to read. Personas used to publish real GitHub
 reviews under their own App identities, which made posting a separate authorization; that
-is gone. The OCR rounds are this run's on-the-record code review, and five bot-authored
+is gone. The Codex/OCR rounds are this run's on-the-record code review, and five bot-authored
 approvals of a diff this same session wrote read as independent sign-off without being it.
 
 Pushing and opening is all this decision covers. Whether the run then *merges* is
@@ -1687,7 +1693,7 @@ in the prompts above stand for those current IDs.
 - Never create GitHub PRs without user instruction — the Push & PR gate in Phase 4 is
   that instruction for the endstate PR.
 - Personas never post to GitHub. The panel's verdicts return inline in
-  `run_complete.findings_inline`, always — the OCR review rounds are this run's
+  `run_complete.findings_inline`, always — the Codex/OCR review rounds are this run's
   on-the-record code review, and bot-authored approvals of a diff this same session wrote
   would read as independent sign-off without being it.
 - If a task touches a production system, pause and confirm before that task runs.

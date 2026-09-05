@@ -27,9 +27,10 @@ Use these maintained resources when relevant:
 - Bugs, regressions, flakes, and failing gates: `IMPS_PLUGIN_ROOT/references/diagnosis-loop.md`
 - Checklist audits: `IMPS_PLUGIN_ROOT/references/checklist-mode.md`
 - Discussion parsing and reply shape: `IMPS_PLUGIN_ROOT/references/discussion-mode.md`
-- Independent diff review: `IMPS_PLUGIN_ROOT/references/ocr-review.md`
+- Independent diff review: `IMPS_PLUGIN_ROOT/references/codex-review.md` (Codex-first,
+  falls back to OCR — see `IMPS_PLUGIN_ROOT/references/ocr-review.md` for the fallback)
 - Review roles: `IMPS_PLUGIN_ROOT/personas/`
-- Read-only review helper: `IMPS_PLUGIN_ROOT/scripts/run-ocr.sh`
+- Read-only review helper: `IMPS_PLUGIN_ROOT/scripts/run-code-review.sh`
 - Shared structured audit appender: `IMPS_PLUGIN_ROOT/scripts/audit-log.sh`
 
 ## Invocation
@@ -201,23 +202,27 @@ failure, dispatch one bounded repair task from the current integration `HEAD`, m
 and rerun the failing gate followed by the full relevant suite. Record pre-existing
 failures separately; do not relabel them as success.
 
-After gates pass, run the OCR helper with the integration worktree, immutable
+After gates pass, run the code-review helper with the integration worktree, immutable
 base commit, and run record as the goal file:
 
 ```text
-IMPS_PLUGIN_ROOT/scripts/run-ocr.sh \
+IMPS_PLUGIN_ROOT/scripts/run-code-review.sh \
   --repo <integration-worktree> \
   --base <base-commit> \
   --goal <run-record>
 ```
 
-Read the OCR review reference first. The helper is read-only and fail-closed. Missing
-authentication, an unavailable model, timeout, malformed output, or unresolved findings
-blocks publication. For `CHANGES_REQUESTED`, dispatch a repair worker, rerun deterministic
-gates, and start a fresh review. **Every repair must be committed before that re-review.**
-The helper reviews committed history, and a push sends commits, so an uncommitted repair
-is reviewed around and then silently dropped — with every gate still green. Stop after three failed review rounds unless the user
-provides the exact override instruction and rationale.
+Read the Codex review reference first, then the OCR review reference for its fallback.
+The helper tries a Codex adversarial review first and falls back to OCR only on an
+availability failure (missing setup, timeout, malformed output) — a completed Codex
+verdict, clean or not, is never re-run through OCR. It is read-only and fail-closed either
+way. Missing authentication, an unavailable model, timeout, malformed output, or
+unresolved findings blocks publication. For `CHANGES_REQUESTED`, dispatch a repair worker,
+rerun deterministic gates, and start a fresh review. **Every repair must be committed
+before that re-review.** The helper reviews committed history, and a push sends commits,
+so an uncommitted repair is reviewed around and then silently dropped — with every gate
+still green. Stop after three failed review rounds unless the user provides the exact
+override instruction and rationale.
 
 When `--personas` is present, review the approved diff with the applicable persona briefs.
 Use separate read-only subagents, dispatching in waves. Skip the UX persona when the diff

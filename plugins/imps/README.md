@@ -234,7 +234,7 @@ VERDICT: APPROVE | CHANGES_REQUESTED @ <sha>
 nits are recorded but never block. **The panel never posts to GitHub.** Every verdict
 returns inline in `run_complete.findings_inline` for the operator to read, or post by
 hand. Personas previously published real PR reviews under dedicated GitHub App
-identities; that was removed once the OCR review rounds became this run's on-the-record
+identities; that was removed once the Codex/OCR review rounds became this run's on-the-record
 code review, since five bot-authored approvals of a diff the same session wrote read as
 independent sign-off without being it.
 
