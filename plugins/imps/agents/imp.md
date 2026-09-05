@@ -53,9 +53,11 @@ executable. Rephrasing, simplifying, or splitting the command will not satisfy i
 remedy it suggests (re-run it from the worktree you are already in) is not actionable.
 
 **Do not run gates.** Lint, typecheck, test and build run in the orchestrator against the
-holding branch after merge — never in your worktree, which has no installed dependencies in
-any case. If your task looks like it needs a gate, commit your change and report; the
-orchestrator gates it.
+holding branch after merge — never in your worktree. This isn't only because a fresh
+worktree has no installed dependencies: the refusal above fires unconditionally on any
+package-manager, build-tool or toolchain invocation regardless of what's installed, so
+provisioning dependencies would not make gates runnable here. If your task looks like it
+needs a gate, commit your change and report; the orchestrator gates it.
 
 If any command is refused, return `blocked` with the command and the refusal verbatim. Never
 write a wrapper script, invoke a binary by an alternate path, or assemble a command name by

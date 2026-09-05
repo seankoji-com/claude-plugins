@@ -4,7 +4,7 @@ description: Explicit Codex command for substantial implementation work that sho
 metadata:
   version: "0.1.0"
   source-command: "plugins/imps/commands/imps.md"
-  source-version: "0.3.55"
+  source-version: "0.3.56"
 ---
 
 # Imps for Codex

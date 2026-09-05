@@ -25,7 +25,7 @@
     },
     {
       "name": "imps",
-      "version": "0.3.55",
+      "version": "0.3.56",
       "source": "./plugins/imps",
       "description": "Swarm orchestration with model-routed execution, deterministic gates, whole-repo audits, PR monitoring, and proof-led blast-radius analysis."
     },
