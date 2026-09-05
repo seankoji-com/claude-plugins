@@ -359,6 +359,19 @@ else
   skip "imps/tests/run-ocr.sh" "missing or not executable: $imps_ocr_review"
 fi
 
+imps_code_review="$ROOT/plugins/imps/tests/run-code-review.sh"
+if [ -x "$imps_code_review" ]; then
+  code_review_out="$(bash "$imps_code_review" 2>&1)"
+  code_review_rc=$?
+  if [ "$code_review_rc" -eq 0 ]; then
+    report "imps/tests/run-code-review.sh" 1
+  else
+    report "imps/tests/run-code-review.sh" 0 "$code_review_out"
+  fi
+else
+  skip "imps/tests/run-code-review.sh" "missing or not executable: $imps_code_review"
+fi
+
 # /imps concurrency invariants — the slug derivation that keeps two runs against one repo
 # from sharing a state file, plus the learnings-append lock. Pure git + bash, no network.
 imps_concurrency="$ROOT/plugins/imps/tests/concurrency.sh"

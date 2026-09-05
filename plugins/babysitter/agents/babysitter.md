@@ -149,10 +149,18 @@ ${CLAUDE_PLUGIN_ROOT}/scripts/ocr-gate.sh --base <base-ref>
 
 It prints one line: `OCR status=<clean|findings|delegate|skipped|error> findings=<n|unknown> result=<path> tool=<name>`.
 
+`tool=` names whichever engine actually produced the result. When the Codex plugin is
+installed and usable, the gate tries a Codex adversarial review first
+(`tool=codex-adversarial-review`) and only falls through to `ocr-pre-pr.sh` / `ocr` /
+`ocr delegate` when Codex is unavailable, crashed, timed out, or produced no usable
+verdict — a completed Codex verdict is reported directly and nothing else runs.
+
 - `clean` — push. (You will also see this when the diff is empty, which means you have
   nothing to push; return `noop`.)
-- `findings` — read the JSON at `result=` (findings are under `.comments`), fix what is
-  real, commit, re-run. Do this at most **twice**; if findings remain after the second
+- `findings` — read the JSON at `result=` and fix what is real, commit, re-run. Findings
+  live at `.comments` for `tool=ocr` / `ocr-pre-pr.sh`, or at `.result.findings` for
+  `tool=codex-adversarial-review` (each with `severity`, `file`, `line_start`/`line_end`,
+  and `recommendation`). Do this at most **twice**; if findings remain after the second
   pass, push anyway and list the ones you left in `notes` with your reason. The gate
   exists to save review rounds, not to become one. `findings=unknown` means the count
   could not be read, not that there are none — the result file is authoritative.

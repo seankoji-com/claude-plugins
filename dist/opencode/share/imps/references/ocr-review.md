@@ -1,6 +1,6 @@
 # OCR diff review
 
-`/imps` uses `scripts/run-ocr.sh` after the merged diff passes its deterministic gates. This is the only code-review gate: do not invoke Head Imp or another same-lineage subagent on the code or diff.
+`/imps` calls `scripts/run-code-review.sh` after the merged diff passes its deterministic gates, which tries a Codex adversarial review first and falls back to `scripts/run-ocr.sh` — documented here — when Codex is unavailable, times out, or produces no usable verdict. See `references/codex-review.md` for the Codex leg and the fallback rule. Between the two, this is the only code-review gate: do not invoke Head Imp or another same-lineage subagent on the code or diff.
 
 The engine is **OpenCodeReview** — the `ocr` CLI from `@alibaba-group/open-code-review`. It is **not** the OpenCode agent, despite the names. This gate used to run OpenCode and was named for it; see [Why OCR](#why-ocr).
 

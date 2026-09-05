@@ -106,18 +106,23 @@ All three commands show you the full roster and wait for a yes before anything i
 
 ## Pre-push review
 
-Before every push the agent runs the diff through OpenCodeReview (`ocr`) and fixes what
-comes back, up to two rounds. The point is to spend a local loop instead of a reviewer's
-round-trip.
+Before every push the agent runs the diff through a review and fixes what comes back, up
+to two rounds. The point is to spend a local loop instead of a reviewer's round-trip.
 
-`scripts/ocr-gate.sh` picks the tool: `ocr-pre-pr.sh` if you have that wrapper (it writes
-the HEAD-keyed cache entry a pre-PR gate reads, so babysitter pushes and hand-made pushes
-are recorded the same way), otherwise `ocr review`.
+`scripts/ocr-gate.sh` tries a Codex adversarial review first, when the Codex plugin is
+installed and usable (`node`, `codex`, and a `codex@*` entry in Claude Code's own
+`installed_plugins.json`) — reported as `tool=codex-adversarial-review`. A completed
+verdict, clean or not, is authoritative and reported directly; nothing else runs. Only
+when Codex is unavailable, crashed, timed out, or produced no usable verdict does it fall
+through to OpenCodeReview (`ocr`): `ocr-pre-pr.sh` if you have that wrapper (it writes the
+HEAD-keyed cache entry a pre-PR gate reads, so babysitter pushes and hand-made pushes are
+recorded the same way), otherwise `ocr review`.
 
-**If neither is installed the gate reports `status=skipped` and the push proceeds.** That
-is deliberately fail-soft, unlike the rest of this repo: `ocr` is an optional third-party
-CLI, not a bundled dependency, and hard-failing would make the plugin unusable for anyone
-who has not installed it. What is not soft is the reporting — a skipped review is
+**If none of Codex, `ocr-pre-pr.sh`, or `ocr` is installed, the gate reports
+`status=skipped` and the push proceeds.** That is deliberately fail-soft, unlike the rest
+of this repo: these are optional third-party tools, not bundled dependencies, and
+hard-failing would make the plugin unusable for anyone who has not installed any of them.
+What is not soft is the reporting — a skipped review is
 reported as skipped, and the agent sets `"reviewed": false`, so no push is ever described
 as reviewed when nothing reviewed it.
 
@@ -238,7 +243,8 @@ notes are usually the ones that should become plugin changes rather than run-tim
 | `gh` | required, authenticated (`gh auth status`) |
 | `jq` | required |
 | `git` | required |
-| `ocr` or `ocr-pre-pr.sh` | optional — without it the pre-push review is skipped and reported as skipped |
+| the `codex` plugin (`node`, `codex` CLI) | optional — tried first for the pre-push review when installed; see [Pre-push review](#pre-push-review) |
+| `ocr` or `ocr-pre-pr.sh` | optional — the pre-push review's fallback; if none of it, `ocr-pre-pr.sh`, or Codex is present, the review is skipped and reported as skipped |
 
 ## Scripts
 
@@ -247,7 +253,7 @@ notes are usually the ones that should become plugin changes rather than run-tim
 | `list-prs.sh` | The only GitHub reader. `--org X`, `--repo X`, or `--repo X --pr N`. One GraphQL call (retried twice on failure — an org-wide query draws a 504 often enough to be routine), one JSON object per line, open PRs only. Exit 2 bad arguments, 3 query failed. Warns on stderr when a sweep is truncated by `--limit` (GitHub caps a search page at 100 and it does not paginate). |
 | `pr-events.sh` | Monitor event stream. Forwards unknown flags to `list-prs.sh` so the watch and the sweep can never disagree about scope. |
 | `pr-workspace.sh` | Cache clone + per-PR worktree. Also makes the clone pushable on every run: `origin` forced to HTTPS, credential helper pinned to `gh`, `push.default=upstream`. Prints the path on stdout, progress on stderr. Exit 3 git failure, 4 dirty worktree left alone. |
-| `ocr-gate.sh` | Pre-push review, with a no-LLM `ocr delegate` fallback. Prints one summary line. Exit 0 clean/skipped, 1 findings, 2 could not review at all, 3 delegated to the agent. |
+| `ocr-gate.sh` | Pre-push review — Codex first, then OCR, with a no-LLM `ocr delegate` fallback. Prints one summary line. Exit 0 clean/skipped, 1 findings, 2 could not review at all, 3 delegated to the agent. |
 | `merge-pr.sh` | Attempts the actual `gh pr merge` equivalent once a PR is driven to "mergeable", fixing only the branch-protection blockers that need no judgment: a branch fallen `BEHIND` its base (server-side `update-branch`, no worktree needed) and a review thread already answered with a `[babysitter]` reply but never marked resolved (`resolveReviewThread` — a reply is not the same action as GitHub's own conversation-resolution flag). Every `BLOCKED` outcome also tries arming GitHub's native auto-merge (`enablePullRequestAutoMerge`) as a courtesy, so a PR blocked only on something outside this script's authority — a pending required check, a review still needed — finishes on its own once that clears, with no further call needed; reported as `automerge=armed` or `automerge=unavailable` (the repo has it turned off, or GitHub declined). Never passes `--admin`; a required human reviewer, a code-scanning alert threshold, or an org ruleset it cannot satisfy comes back as `BLOCKED ... reason=branch_protection` for a human to read, not to bypass. Prints `MERGED <repo>#<n> via <method>` or `BLOCKED <repo>#<n> reason=<category> detail=<...> automerge=<armed|unavailable>`. Exit 0 merged, 2 bad arguments, 3 query failed, 4 blocked. |
 | `audit-log.sh` | Shared appender for `~/.claude/audit.jsonl`; identical in every plugin that bundles it. |
 | `run-note.sh` | Appends one timestamped observation to the run's notes ledger. `--command`, `--kind env\|github\|process\|repo\|policy`, `--note`, optional `--scope`. Prints the ledger path. Fail-soft: an unwritable notes directory warns and exits 0. |

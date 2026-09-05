@@ -64,7 +64,7 @@ runs — the remaining text is what mode detection and every phase below operate
 flag anywhere in the argument string counts; order does not matter.
 
 - **`--personas`** — opt into the in-run five-persona review panel. **Default: OFF.**
-  Without it, the Head Imp reviews the plan and read-only OCR reviews the merged diff.
+  Without it, the Head Imp reviews the plan and a read-only Codex-first, OCR-fallback gate reviews the merged diff.
   With it, the full panel + fix-loop + adjudication runs exactly as before.
 
 Derive a single boolean `PERSONA_PANEL` (`true` only if `--personas` was present) and
@@ -399,7 +399,7 @@ discussion body. Never a paraphrase; this section exists to be checked against.>
 - [ ] <acceptance criterion 1>
 - [ ] <acceptance criterion 2 — one line each from discovery>
 - [ ] Gates green (build · lint · test · type — per GATE_CMDS)
-- [ ] Head Imp reviewed the plan; OCR reviewed the merged diff; all blocker/major findings addressed
+- [ ] Head Imp reviewed the plan; Codex or OCR reviewed the merged diff; all blocker/major findings addressed
 - [ ] No merge conflicts with the default branch
 
 ## Global Constraints

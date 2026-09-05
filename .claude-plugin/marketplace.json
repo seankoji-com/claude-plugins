@@ -25,7 +25,7 @@
     },
     {
       "name": "imps",
-      "version": "0.3.55",
+      "version": "0.3.56",
       "source": "./plugins/imps",
       "description": "Swarm orchestration with model-routed execution, deterministic gates, whole-repo audits, PR monitoring, and proof-led blast-radius analysis."
     },
@@ -37,7 +37,7 @@
     },
     {
       "name": "babysitter",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "source": "./plugins/babysitter",
       "description": "Keeps open pull requests unblocked and lands them — sweep a whole org, one repository, or one PR; each gets a worktree-isolated agent that clears review comments, merge conflicts, failing checks and base-branch drift, then an immediate merge attempt (or GitHub auto-merge where the repo allows it) finishes the job, and a live watch picks up new pull requests and new events as they land."
     },
