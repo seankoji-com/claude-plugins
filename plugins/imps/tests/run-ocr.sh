@@ -130,7 +130,7 @@ if [ -z "$(find "$ROOT/tmp" -mindepth 1 -maxdepth 1 -name 'imps-ocr-review.*' -p
 # OpenCode stores the endpoint as a bare root; OCR needs the OpenAI-compatible base.
 # Getting this wrong 404s every request, so assert the normalisation directly.
 if [ "$(configured custom_providers.imps-litellm.url)" = "http://endpoint.invalid:4000/v1" ]; then ok 'base URL normalised to /v1'; else bad 'base URL normalised to /v1' "got $(configured custom_providers.imps-litellm.url)"; fi
-if [ "$(configured model)" = "deepseek-v4-flash" ]; then ok 'default model reaches OCR'; else bad 'default model reaches OCR' "got $(configured model)"; fi
+if [ "$(configured model)" = "deepseek-v4.1-flash" ]; then ok 'default model reaches OCR'; else bad 'default model reaches OCR' "got $(configured model)"; fi
 
 STUB_CASE=major run_review >"$out" 2>"$err"; rc=$?
 if [ "$rc" = 0 ] && jq -e '.verdict == "CHANGES_REQUESTED" and .findings[0].severity == "major" and .findings[0].path == "lib/a.js" and (.findings[0].message | test("^\\[?major") | not)' "$out" >/dev/null; then ok 'tagged major blocks and strips its tag'; else bad 'tagged major blocks and strips its tag' "rc=$rc $(cat "$out")"; fi

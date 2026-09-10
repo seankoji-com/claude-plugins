@@ -12,7 +12,7 @@ Override any of it:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `IMPS_OCR_MODEL` | `deepseek-v4-flash` | Model id sent to the endpoint |
+| `IMPS_OCR_MODEL` | `deepseek-v4.1-flash` | Model id sent to the endpoint |
 | `IMPS_OCR_URL` | from `opencode.json` | OpenAI-compatible base URL |
 | `IMPS_OCR_TOKEN` | from `opencode.json` | Credential |
 | `IMPS_OCR_VERSION` | `1.11.3` | Pinned `ocr` release |
