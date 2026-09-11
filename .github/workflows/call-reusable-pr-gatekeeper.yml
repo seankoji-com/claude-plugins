@@ -84,13 +84,13 @@ jobs:
           fi
           python3 - "$@" <<'PY'
           #!/usr/bin/env python3
-          """Aggregator gate: one check run that blocks on ANY red check, not just the
-          hand-listed required ones.
+          """Aggregator gate: one check run that blocks on ANY red check.
 
-          Every repo's required-checks list is a hand-maintained subset of what actually
-          runs, so a check that fails without being listed lets the PR merge with a red X
-          (seankoji-com/icc-demo#63). This posts a single check run,
-          `gatekeeper / all-checks-passed`, that a org ruleset requires everywhere.
+          Before #191 each repo listed its own required checks — a hand-maintained subset
+          of what actually runs, so a check that failed without being listed let the PR
+          merge with a red X (seankoji-com/icc-demo#63). Those per-repo lists are retired;
+          this posts the single check run, `gatekeeper / all-checks-passed`, that the org
+          `PR gatekeeper` ruleset requires everywhere.
 
           The decision lives in `evaluate()`, which is pure: it takes the three API
           payloads and returns the check-run fields to post. All I/O is in `main()`, so
