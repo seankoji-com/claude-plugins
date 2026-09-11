@@ -126,13 +126,13 @@ usage() {
   cat >&2 <<'USAGE'
 Usage: run-codex-review.sh --repo <path> --base <sha-or-ref> --goal <GOAL.md>
                             [--head <sha-or-ref>] [--model <model-id>]
-                            [--timeout <seconds>] [--concurrency <n>] [--check]
+                            [--timeout <seconds>] [--check]
 USAGE
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --repo|--base|--head|--goal|--model|--timeout|--concurrency) [ "$#" -ge 2 ] && [ -n "$2" ] || bad_arguments "missing value for $1" ;;
+    --repo|--base|--head|--goal|--model|--timeout) [ "$#" -ge 2 ] && [ -n "$2" ] || bad_arguments "missing value for $1" ;;
   esac
   case "$1" in
     --repo) REPO="${2:-}"; shift 2 ;;
@@ -141,7 +141,6 @@ while [ "$#" -gt 0 ]; do
     --goal) GOAL="${2:-}"; shift 2 ;;
     --model) MODEL="${2:-}"; shift 2 ;;
     --timeout) TIMEOUT_SECONDS="${2:-}"; shift 2 ;;
-    --concurrency) shift 2 ;; # accepted for arg-forwarding parity with run-ocr.sh; unused
     --check) CHECK_ONLY=1; shift ;;
     -h|--help) usage; STATUS="skip"; REASON="help"; exit 0 ;;
     *) usage; bad_arguments "unknown argument: $1" ;;
