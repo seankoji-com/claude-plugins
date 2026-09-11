@@ -176,8 +176,8 @@ write_config "$GOOD_CONFIG"
 STUB_CASE=approve IMPS_OCR_URL="http://override.invalid:8080/v1" IMPS_OCR_TOKEN=tok IMPS_OCR_MODEL=other-model run_review >"$out" 2>"$err"; rc=$?
 if [ "$rc" = 0 ] && [ "$(configured custom_providers.imps-litellm.url)" = "http://override.invalid:8080/v1" ] && jq -e '.model == "other-model"' "$out" >/dev/null; then ok 'env overrides win and /v1 is not doubled'; else bad 'env overrides win and /v1 is not doubled' "rc=$rc got $(configured custom_providers.imps-litellm.url)"; fi
 
-STUB_CASE=approve run_review --concurrency 0 >"$out" 2>"$err"; rc=$?
-if [ "$rc" != 0 ] && jq -e '.reason == "bad_arguments"' "$out" >/dev/null; then ok 'rejects non-positive --concurrency'; else bad 'rejects non-positive --concurrency' "rc=$rc"; fi
+STUB_CASE=approve run_review --concurrency 4 >"$out" 2>"$err"; rc=$?
+if [ "$rc" != 0 ] && jq -e '.reason == "bad_arguments"' "$out" >/dev/null; then ok 'rejects the removed --concurrency flag'; else bad 'rejects the removed --concurrency flag' "rc=$rc"; fi
 
 STUB_CASE=approve run_review --check >"$out" 2>"$err"; rc=$?
 if [ "$rc" = 0 ] && jq -e '.status == "ok" and .verdict == null' "$out" >/dev/null; then ok '--check preflight passes without reviewing'; else bad '--check preflight passes without reviewing' "rc=$rc $(cat "$out")"; fi
