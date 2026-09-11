@@ -1,8 +1,13 @@
 # Public export from seankoji-com/.github; distributed by scripts/render_caller.py.
 name: Dependabot Auto-Merge
 
+# pull_request_target, not pull_request: Dependabot-triggered pull_request runs
+# get a read-only GITHUB_TOKEN, so `gh pr merge --auto` fails and the red check
+# blocks every Dependabot PR via the gatekeeper aggregate. pull_request_target
+# runs in the base-repo context with a write-capable token. This workflow never
+# checks out or executes PR code, so it is safe on that trigger.
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
 
 permissions:
