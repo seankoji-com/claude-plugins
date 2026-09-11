@@ -38,11 +38,21 @@ permissions:
 
 # Keyed on the head SHA, never `github.sha`: on a workflow_run run `github.sha`
 # is the DEFAULT BRANCH sha, which would pool every open PR in the repo into a
-# single group. Never cancel — a cancelled run leaves the gate mid-evaluation
-# and there is no seed to re-post it.
+# single group.
+#
+# `cancel-in-progress: false` alone is NOT enough. It protects only the RUNNING
+# run; the default `queue: single` still cancels the existing *pending* run the
+# moment a newer trigger enters the group. Every workflow completion fires a
+# trigger and the reconciler's recovery dispatch joins the same group, so on a
+# backlogged self-hosted fleet each recovery evaluation was cancelled before it
+# ever reached a runner — leaving the gate frozen at a mid-flight `in_progress`
+# with no later run left to post the terminal state. `queue: max` lets up to 100
+# pending runs wait in FIFO order instead, so the run triggered by the final
+# check-completion does eventually execute and post.
 concurrency:
   group: pr-gatekeeper-${{ github.event.workflow_run.head_sha || inputs.head_sha }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   gatekeeper:
@@ -74,13 +84,13 @@ jobs:
           fi
           python3 - "$@" <<'PY'
           #!/usr/bin/env python3
-          """Aggregator gate: one check run that blocks on ANY red check, not just the
-          hand-listed required ones.
+          """Aggregator gate: one check run that blocks on ANY red check.
 
-          Every repo's required-checks list is a hand-maintained subset of what actually
-          runs, so a check that fails without being listed lets the PR merge with a red X
-          (seankoji-com/icc-demo#63). This posts a single check run,
-          `gatekeeper / all-checks-passed`, that a org ruleset requires everywhere.
+          Before #191 each repo listed its own required checks — a hand-maintained subset
+          of what actually runs, so a check that failed without being listed let the PR
+          merge with a red X (seankoji-com/icc-demo#63). Those per-repo lists are retired;
+          this posts the single check run, `gatekeeper / all-checks-passed`, that the org
+          `PR gatekeeper` ruleset requires everywhere.
 
           The decision lives in `evaluate()`, which is pure: it takes the three API
           payloads and returns the check-run fields to post. All I/O is in `main()`, so
@@ -162,6 +172,7 @@ jobs:
                   if current is None or _latest_key(run) >= _latest_key(current):
                       latest[key] = run
               return sorted(latest.values(), key=lambda r: (r.get("name") or "", r.get("id") or 0))
+
 
 
           def evaluate(
