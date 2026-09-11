@@ -14,7 +14,7 @@
 # timed out against a self-hosted OpenAI-compatible endpoint once a diff got large — a
 # 2,752-line diff killed it twice, at 99s and at 120s (exit 143), producing no verdict.
 # A review that cannot return is a gate that cannot pass. OCR is a purpose-built diff
-# reviewer: it chunks per file and fans out with --concurrency, so review cost scales
+# reviewer: it chunks per file and fans out across files, so review cost scales
 # with the widest file rather than with the whole changeset.
 #
 # OCR reviews `--from <base> --to <head>` against the real repository and has no tool
@@ -38,7 +38,6 @@ HEAD="HEAD"
 GOAL=""
 MODEL="${IMPS_OCR_MODEL:-deepseek-v4.1-flash}"
 PROVIDER="litellm"
-CONCURRENCY="${IMPS_OCR_CONCURRENCY:-4}"
 TIMEOUT_SECONDS="${IMPS_OCR_TIMEOUT:-900}"
 CHECK_ONLY=0
 
@@ -111,13 +110,13 @@ usage() {
   cat >&2 <<'USAGE'
 Usage: run-ocr.sh --repo <path> --base <sha-or-ref> --goal <GOAL.md>
                   [--head <sha-or-ref>] [--model <model-id>]
-                  [--concurrency <n>] [--timeout <seconds>] [--check]
+                  [--timeout <seconds>] [--check]
 USAGE
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --repo|--base|--head|--goal|--model|--timeout|--concurrency) [ "$#" -ge 2 ] && [ -n "$2" ] || fail bad_arguments "missing value for $1" ;;
+    --repo|--base|--head|--goal|--model|--timeout) [ "$#" -ge 2 ] && [ -n "$2" ] || fail bad_arguments "missing value for $1" ;;
   esac
   case "$1" in
     --repo) REPO="${2:-}"; shift 2 ;;
@@ -125,7 +124,6 @@ while [ "$#" -gt 0 ]; do
     --head) HEAD="${2:-}"; shift 2 ;;
     --goal) GOAL="${2:-}"; shift 2 ;;
     --model) MODEL="${2:-}"; shift 2 ;;
-    --concurrency) CONCURRENCY="${2:-}"; shift 2 ;;
     --timeout) TIMEOUT_SECONDS="${2:-}"; shift 2 ;;
     --check) CHECK_ONLY=1; shift ;;
     -h|--help) usage; REASON="help"; exit 0 ;;
@@ -134,7 +132,6 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$TIMEOUT_SECONDS" in ''|0|*[!0-9]*) fail bad_arguments "--timeout must be a positive integer" ;; esac
-case "$CONCURRENCY" in ''|0|*[!0-9]*) fail bad_arguments "--concurrency must be a positive integer" ;; esac
 [ -n "$MODEL" ] || fail bad_arguments "--model must not be empty"
 
 command -v jq >/dev/null 2>&1 || fail jq_missing "jq is required"
@@ -293,7 +290,6 @@ run_with_timeout "$OCR_BIN" review \
   --from "$MERGE_BASE" --to "$HEAD_SHA" \
   --provider imps-litellm --model "$MODEL" \
   --format json \
-  --concurrency "$CONCURRENCY" \
   --rule "$RULE_PATH" \
   --background-file "$BACKGROUND_FILE"
 RUN_RC=$?

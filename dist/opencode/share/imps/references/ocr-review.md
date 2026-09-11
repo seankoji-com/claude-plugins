@@ -16,7 +16,6 @@ Override any of it:
 | `IMPS_OCR_URL` | from `opencode.json` | OpenAI-compatible base URL |
 | `IMPS_OCR_TOKEN` | from `opencode.json` | Credential |
 | `IMPS_OCR_VERSION` | `1.11.3` | Pinned `ocr` release |
-| `IMPS_OCR_CONCURRENCY` | `4` | Files reviewed in parallel |
 | `IMPS_OCR_TIMEOUT` | `900` | Wall-clock cap on the whole review |
 | `IMPS_OCR_LLM_TIMEOUT` | `180` | Per-request cap inside OCR |
 | `IMPS_OCR_RULE` | `references/ocr-review-rule.json` | Review rules |
@@ -56,6 +55,6 @@ issues as they surface rather than treating any single pass (clean or not) as co
 
 The previous engine was the OpenCode agent, issuing one completion covering the entire diff. That reliably timed out against a self-hosted OpenAI-compatible endpoint once a diff got large: a 2,752-line diff killed it twice, at 99s and at 120s (exit 143), producing no verdict either time. A review that cannot return is a gate that cannot pass — and the failure got worse exactly as changes got bigger, which is backwards.
 
-OCR is a purpose-built diff reviewer. It chunks per file and fans out with `--concurrency`, so review cost scales with the widest file rather than with the whole changeset, and a slow endpoint degrades throughput instead of hitting a wall.
+OCR is a purpose-built diff reviewer. It chunks per file and fans out across files, so review cost scales with the widest file rather than with the whole changeset, and a slow endpoint degrades throughput instead of hitting a wall.
 
 The names remain an ongoing hazard: the OpenCode agent and the `open-code-review` package are unrelated projects, and "opencode" appears in both. Prefer "OCR" for the review tool and "the OpenCode agent" for the other, and keep filenames unambiguous.
