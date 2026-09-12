@@ -83,7 +83,7 @@ jobs:
         # allowance, billing net $0 — careynas.net#2431). A quota failure must
         # not fail the scan job; findings are already in the step summary.
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: semgrep-results
           path: semgrep-results.json
@@ -147,7 +147,7 @@ jobs:
         # Non-gating: same artifact-service quota bug (careynas.net#2431).
         # Findings are already in the step summary above.
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: zizmor-results
           path: |
