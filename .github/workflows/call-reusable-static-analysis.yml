@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
@@ -78,6 +78,11 @@ jobs:
 
       - name: Upload results artifact
         if: always()
+        # Non-gating. The org artifact service intermittently returns a bogus
+        # "Artifact storage quota has been hit" (Team plan, storage far under
+        # allowance, billing net $0 — careynas.net#2431). A quota failure must
+        # not fail the scan job; findings are already in the step summary.
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: semgrep-results
@@ -91,7 +96,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
@@ -139,6 +144,9 @@ jobs:
 
       - name: Upload results artifact
         if: always()
+        # Non-gating: same artifact-service quota bug (careynas.net#2431).
+        # Findings are already in the step summary above.
+        continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: zizmor-results
