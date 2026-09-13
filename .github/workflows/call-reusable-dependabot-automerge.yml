@@ -18,7 +18,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Metadata collection is deliberately its own least-privilege job. The
+  # third-party action only needs to read the PR and repo, so it never shares a
+  # token with the write path; the merge job below is the only place a
+  # write-capable github.token exists, and it runs no third-party action.
+  metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      update-type: ${{ steps.metadata.outputs.update-type }}
+    steps:
+      - name: Read Dependabot update metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ github.token }}
+
+      # Fail closed: an empty update-type means the action's output contract
+      # drifted (v3 renamed or dropped it). Without this the merge step would
+      # simply be skipped on every Dependabot PR and the run would go green
+      # while doing nothing. Fail loudly instead.
+      - name: Refuse to evaluate an empty update-type
+        if: steps.metadata.outputs.update-type == ''
+        run: |
+          echo "::error::fetch-metadata produced no update-type output; refusing to evaluate auto-merge."
+          exit 1
+
   auto-merge:
+    needs: metadata
     runs-on: ubuntu-latest
     timeout-minutes: 5
     if: >-
@@ -28,16 +61,10 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Read Dependabot update metadata
-        id: metadata
-        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2
-        with:
-          github-token: ${{ github.token }}
-
       - name: Enable auto-merge for patch and minor updates
         if: >-
-          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+          needs.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          needs.metadata.outputs.update-type == 'version-update:semver-minor'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
