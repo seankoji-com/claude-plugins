@@ -33,3 +33,8 @@ GOAL.md
 # .gitignore exists on disk — exclude it at the repo level so a future `opencode run`
 # from this repo's root can never end up one `git add -A` away from committing it.
 .opencode/
+
+# Local/CI coverage output
+.coverage*
+!.coveragerc
+coverage.xml
