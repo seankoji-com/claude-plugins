@@ -65,10 +65,11 @@ duration_ms() {
 }
 
 json_number() {
-  case "${1:-}" in
-    ''|*[!0-9.]*) printf 'null' ;;
-    *) printf '%s' "$1" ;;
-  esac
+  if [[ "${1:-}" =~ ^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$ ]]; then
+    printf '%s' "$1"
+  else
+    printf 'null'
+  fi
 }
 
 emit_contract() {
@@ -88,7 +89,7 @@ emit_contract() {
     --arg reason "$REASON" \
     --argjson duration_ms "$(duration_ms)" \
     --argjson cost_usd "$(json_number "$COST_USD")" \
-    '{status:$status, verdict:(if $verdict == "" then null else $verdict end), findings:$findings, model:(if $model == "" then null else $model end), provider:$provider, session_id:(if $session_id == "" then null else $session_id end), duration_ms:$duration_ms, cost_usd:$cost_usd, reason:(if $reason == "" then null else $reason end)}' >&3
+    '{status:$status, verdict:(if $verdict == "" then null else $verdict end), findings:$findings, model:(if $model == "" then null else $model end), provider:(if $status == "skip" then null else $provider end), session_id:(if $session_id == "" then null else $session_id end), duration_ms:$duration_ms, cost_usd:$cost_usd, reason:(if $reason == "" then null else $reason end)}' >&3
 }
 
 cleanup() { [ -z "$TMP_ROOT" ] || rm -rf "$TMP_ROOT"; }
