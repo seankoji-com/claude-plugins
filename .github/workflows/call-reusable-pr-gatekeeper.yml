@@ -74,6 +74,7 @@ jobs:
       - name: Evaluate and post the gate
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          PERSONA_REVIEW_REQUIRED: ${{ vars.PERSONA_REVIEW_REQUIRED }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha || inputs.head_sha }}
           RECONCILE_OPEN: ${{ github.event_name == 'schedule' }}
         run: |
@@ -136,6 +137,8 @@ jobs:
           # The check-run name, verbatim. The org ruleset matches this string exactly;
           # any variation here is an unsatisfiable required context on 33 repos.
           GATE_CHECK_NAME = "gatekeeper / all-checks-passed"
+          PERSONA_USER_ID = 283599686  # bot-grumpy-engineer[bot], not a display-name match
+          PERSONA_CHECK_NAME = "persona / grumpy-engineer"
 
           # Allowlist, deliberately. A denylist of failure values would let a conclusion
           # GitHub adds tomorrow pass silently; anything unrecognised must block.
@@ -396,11 +399,71 @@ jobs:
               return _collect_for_ref(repo, ref, token)
 
 
+          def persona_verdict(reviews: list[dict], sha: str) -> tuple[str, str | None]:
+              """Only a submitted verdict from Grumpy on this exact head can satisfy us."""
+              matching = [r for r in reviews
+                          if (r.get("user") or {}).get("id") == PERSONA_USER_ID
+                          and (r.get("user") or {}).get("type") == "Bot"
+                          and r.get("commit_id") == sha and r.get("submitted_at")
+                          and r.get("state") != "PENDING"]
+              latest = max(matching, key=lambda r: (r["submitted_at"], r["id"]), default={})
+              if latest.get("state") == "APPROVED":
+                  return "completed", "success"
+              if latest.get("state") == "CHANGES_REQUESTED":
+                  return "completed", "failure"
+              return "in_progress", None
+
+
+          def persona_marker(number: int, verdict: tuple[str, str | None]) -> str:
+              return f"<!-- grumpy-review:{number}:{verdict[0]}:{verdict[1] or 'waiting'} -->"
+
+
+          def _list_all(path: str, token: str) -> list[dict]:
+              items, page = [], 1
+              separator = "&" if "?" in path else "?"
+              while True:
+                  batch = _get(f"{path}{separator}per_page=100&page={page}", token)
+                  if not isinstance(batch, list) or not all(isinstance(i, dict) for i in batch):
+                      raise ValueError("invalid paginated list response")
+                  items.extend(batch)
+                  if len(batch) < 100:
+                      return items
+                  page += 1
+
+
+          def collect_persona_checks(repo: str, sha: str, token: str) -> list[dict]:
+              """Central Actions runs are invisible on target commits; read actual reviews.
+
+              No draft, fork, author or skip-review exemption. Every open PR sharing the
+              commit must have its own review. Non-PR workflow commits keep normal gating.
+              API errors propagate to report(), which posts a blocking diagnostic.
+              """
+              checks = []
+              for pr in _list_all(f"/repos/{repo}/pulls?state=open", token):
+                  if pr["head"]["sha"] != sha:
+                      continue
+                  reviews = _list_all(f"/repos/{repo}/pulls/{pr['number']}/reviews", token)
+                  status, conclusion = persona_verdict(reviews, sha)
+                  checks.append({"name": f"{PERSONA_CHECK_NAME} (PR #{pr['number']})",
+                                 "status": status, "conclusion": conclusion,
+                                 "marker": persona_marker(pr['number'], (status, conclusion))})
+              return checks
+
+
           def report(repo: str, sha: str, token: str, dry_run: bool = False) -> int:
               try:
                   runs, statuses, suites = collect(repo, sha, token)
+                  persona_checks = []
+                  # Ship disabled, validate the fleet, then enable the org Actions variable.
+                  # An absent review must hold the existing required gate pending.
+                  if os.environ.get("PERSONA_REVIEW_REQUIRED") == "true":
+                      persona_checks = collect_persona_checks(repo, sha, token)
+                      runs = runs + persona_checks
                   status, conclusion, title, summary = evaluate(runs, statuses, suites)
-              except (urllib.error.URLError, OSError, ValueError, TypeError, AttributeError) as exc:
+                  if persona_checks:
+                      summary += "\n\nGrumpy Engineer review of the current PR head is required.\n"
+                      summary += "\n".join(c["marker"] for c in persona_checks)
+              except (urllib.error.URLError, OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
                   # The job lives on main, so put read/shape failures on the PR too.
                   status, conclusion = "completed", "failure"
                   title = "Could not read check state"
