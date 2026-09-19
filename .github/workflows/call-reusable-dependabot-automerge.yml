@@ -1,11 +1,18 @@
-# Public export from seankoji-com/.github; distributed by scripts/render_caller.py.
+# Dependabot Auto-Merge — synced from seankoji-com/.github (panel/call-reusable-dependabot-automerge.yml)
+# Enables auto-merge for dependabot PRs after CI + reviews pass.
+# Major version bumps are excluded (require human approval).
+# Uses the org-wide SEANKOJI_CI_APP_ID / SEANKOJI_CI_PRIVATE_KEY App identity
+# (Contents:Write and PullRequests:Write) — no per-repo secrets required.
 name: Dependabot Auto-Merge
 
-# pull_request_target, not pull_request: Dependabot-triggered pull_request runs
-# get a read-only GITHUB_TOKEN, so `gh pr merge --auto` fails and the red check
-# blocks every Dependabot PR via the gatekeeper aggregate. pull_request_target
-# runs in the base-repo context with a write-capable token. This workflow never
-# checks out or executes PR code, so it is safe on that trigger.
+# Trigger is pull_request_target, NOT pull_request. Dependabot-triggered
+# `pull_request` runs get a read-only GITHUB_TOKEN and cannot read Actions
+# secrets, so the reusable workflow's create-github-app-token step failed with
+# "private-key ... must be set to a non-empty string". That red check was then
+# propagated by gatekeeper / all-checks-passed, blocking every Dependabot PR in
+# the fleet. pull_request_target runs in the base-repo context with secrets
+# available. This workflow never checks out or executes PR code, so it is safe
+# on that trigger.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
@@ -13,77 +20,17 @@ on:
 permissions:
   contents: read
 
+# A rebase or retry push to an open Dependabot PR fires another `synchronize`
+# run before the prior one finishes. Without this, both runs evaluate
+# auto-merge eligibility independently and the stale one can still act on an
+# outdated diff after the newer push landed.
 concurrency:
   group: dependabot-automerge-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  # Metadata collection is deliberately its own least-privilege job. The
-  # third-party action only needs to read the PR and repo, so it never shares a
-  # token with the write path; the merge job below is the only place a
-  # write-capable github.token exists, and it runs no third-party action.
-  metadata:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: >-
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      update-type: ${{ steps.metadata.outputs.update-type }}
-    steps:
-      - name: Read Dependabot update metadata
-        id: metadata
-        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
-        with:
-          github-token: ${{ github.token }}
-
-      # Fail closed: an empty update-type means the action's output contract
-      # drifted (v3 renamed or dropped it). Without this the merge step would
-      # simply be skipped on every Dependabot PR and the run would go green
-      # while doing nothing. Fail loudly instead.
-      - name: Refuse to evaluate an empty update-type
-        if: steps.metadata.outputs.update-type == ''
-        run: |
-          echo "::error::fetch-metadata produced no update-type output; refusing to evaluate auto-merge."
-          exit 1
-
   auto-merge:
-    needs: metadata
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: >-
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: Enable auto-merge for patch and minor updates
-        if: >-
-          needs.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          needs.metadata.outputs.update-type == 'version-update:semver-minor'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: |
-          set -euo pipefail
-          enabled="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.allow_auto_merge == true')"
-          if [ "$enabled" != true ]; then
-            echo "Auto-merge is disabled for this repository; leaving the PR for manual review."
-            exit 0
-          fi
-          # --auto can merge immediately on unprotected branches. Only arm it
-          # when a ruleset requires checks; unknown/legacy protection needs
-          # manual review instead of silently broadening merge authority.
-          encoded_ref="$(jq -rn --arg ref "$BASE_REF" '$ref | @uri')"
-          rules="$(gh api "repos/$GITHUB_REPOSITORY/rules/branches/$encoded_ref")"
-          if ! jq -e 'any(.[]; .type == "required_status_checks" and (.parameters.required_status_checks | length) > 0)' <<< "$rules" >/dev/null; then
-            echo "Auto-merge not enabled: no required-check ruleset on the target branch."
-            exit 0
-          fi
-          gh pr merge --auto --squash --match-head-commit "$PR_HEAD" "$PR_URL"
+    uses: seankoji-com/.github/.github/workflows/reusable-dependabot-automerge.yml@main
+    with:
+      runner-json: '["ubuntu-latest"]'
+    secrets: inherit
