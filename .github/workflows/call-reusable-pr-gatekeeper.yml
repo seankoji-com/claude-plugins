@@ -17,6 +17,19 @@ on:
     types: [completed]
   pull_request_review:
     types: [submitted, edited, dismissed]
+  # Seed the required context the moment a PR opens or its head moves.
+  # pull_request_target, NOT pull_request: on a fork, pull_request hands the
+  # reusable a read-only token, the check-run POST 403s, and this job goes red —
+  # pinning the required context red permanently, which nothing can clear.
+  # pull_request_target runs this base-branch workflow with the base repo's
+  # write token and executes no PR code: the reusable checks nothing out, it
+  # only curls the evaluator from this org's raw URL at the reusable's own
+  # commit. The caller job's own composite check run already carries the
+  # required name and the evaluator drops every run with that name, so the
+  # seed cannot block on itself. The queued job's check run is what makes the
+  # gate visible before any evaluation, even with every runner busy.
+  pull_request_target:
+    types: [opened, synchronize, reopened]
   # The reconciler's path, for a PR the event route never noticed.
   workflow_dispatch:
     inputs:
@@ -60,8 +73,11 @@ jobs:
     #     would burn workflow_run's three-level chain cap.
     #   - `pull_requests` is empty on fork runs, so the event allowlist is what
     #     keeps fork PRs gated rather than ignored.
+    #   - On `pull_request_target` the job's own queued composite check run is
+    #     the pending seed: it carries the required name with no runner needed.
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request_target' ||
       (github.event_name == 'workflow_run' &&
        (github.event.workflow_run.name != 'PR Gatekeeper' ||
         github.event.workflow_run.event == 'pull_request_review') &&
