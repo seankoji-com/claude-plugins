@@ -5,9 +5,14 @@ on: [push, pull_request]
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -277,6 +282,7 @@ jobs:
 
   behavioral-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -311,6 +317,7 @@ jobs:
         run: bash tests/run-js.sh
   macos-syntax:
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -341,6 +348,7 @@ jobs:
   # machine from every contributor's dev box by construction.
   cross-platform-regen:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       # fetch-depth: 0 matches the `validate` job's checkout above; kept for parity and
       # because it's cheap on this repo's history, even though dist-lint.sh's
