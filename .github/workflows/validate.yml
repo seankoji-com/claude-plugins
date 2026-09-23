@@ -1,13 +1,23 @@
 name: Validate
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [master]
+  pull_request:
 
 permissions:
   contents: read
 
+# Superseded PR heads may cancel; every default-branch run keeps its own slot.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # Recent successful execution: 25-34s; allow network/setup headroom.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -277,6 +287,7 @@ jobs:
 
   behavioral-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -288,9 +299,14 @@ jobs:
       - name: Run tests/run-python.sh
         run: bash tests/run-python.sh
 
+      - name: Run tests/run-js.sh
+        run: bash tests/run-js.sh
+
+      # Recent successful job: 23-44s, including 19s advisory coverage.
       # Keep the original tests enforcing. Reporting is advisory during rollout.
       - name: Measure Python coverage (advisory)
         id: python-coverage
+        timeout-minutes: 3
         continue-on-error: true
         run: |
           python3 -m pip install 'coverage==7.16.1'
@@ -298,6 +314,7 @@ jobs:
           coverage combine
           coverage xml
       - name: Retain Python coverage (advisory)
+        timeout-minutes: 1
         if: steps.python-coverage.outcome == 'success'
         continue-on-error: true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -307,10 +324,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Run tests/run-js.sh
-        run: bash tests/run-js.sh
   macos-syntax:
     runs-on: macos-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -341,6 +357,7 @@ jobs:
   # machine from every contributor's dev box by construction.
   cross-platform-regen:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       # fetch-depth: 0 matches the `validate` job's checkout above; kept for parity and
       # because it's cheap on this repo's history, even though dist-lint.sh's
