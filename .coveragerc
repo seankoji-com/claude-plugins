@@ -1,0 +1,23 @@
+# Measure all repository Python, including unimported namespace-package files.
+# Exclude test code, local environments, and (plugins only) generated distributions.
+[run]
+branch = True
+relative_files = True
+source = .
+patch = subprocess
+omit =
+    */tests/*
+    */test_*.py
+    */.venv/*
+    */dist/*
+
+[report]
+omit =
+    */tests/*
+    */test_*.py
+    */.venv/*
+    */dist/*
+include_namespace_packages = True
+
+[xml]
+output = coverage.xml
