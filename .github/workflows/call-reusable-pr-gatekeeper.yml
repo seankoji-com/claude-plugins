@@ -37,6 +37,14 @@ on:
         description: 'Commit SHA to evaluate and report the gate against.'
         required: true
         type: string
+      persona_state:
+        description: 'Private controller signal for the Grumpy review job.'
+        type: string
+        default: ''
+      persona_pr:
+        description: 'PR number for the exact-head persona signal.'
+        type: string
+        default: ''
 
 # Deliberately NOT `contents: read` alone. A reusable workflow can never be
 # granted more than its caller holds, so narrowing here would 403 the check-run
@@ -58,6 +66,21 @@ concurrency:
   queue: max
 
 jobs:
+  recover-persona:
+    # An independent event path; the reusable sends only PR identity to the
+    # private controller and never checks out PR code.
+    if: github.event_name == 'pull_request_target' && secrets.SEANKOJI_CI_PRIVATE_KEY != ''
+    continue-on-error: true
+    permissions:
+      contents: read
+    uses: seankoji-com/.github/.github/workflows/reusable-persona-recovery-request.yml@main
+    with:
+      target_repository: ${{ github.repository }}
+      pr_number: ${{ format('{0}', github.event.pull_request.number) }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
+    secrets:
+      SEANKOJI_CI_PRIVATE_KEY: ${{ secrets.SEANKOJI_CI_PRIVATE_KEY }}
+
   review-event:
     # Reviews on forks have read-only tokens. This signal finishes without
     # fetching PR code; workflow_run then evaluates with default-branch code.
@@ -89,3 +112,5 @@ jobs:
       review_run_id: ${{ github.event.workflow_run.event == 'pull_request_review' && format('{0}', github.event.workflow_run.id) || '' }}
       runner-json: '["ubuntu-latest"]'
       seed: ${{ github.event_name == 'pull_request_target' }}
+      persona_state: ${{ inputs.persona_state || '' }}
+      persona_pr: ${{ inputs.persona_pr || '' }}
