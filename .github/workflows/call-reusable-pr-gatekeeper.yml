@@ -69,8 +69,11 @@ jobs:
   recover-persona:
     # An independent event path; the reusable sends only PR identity to the
     # private controller and never checks out PR code.
-    if: github.event_name == 'pull_request_target' && secrets.SEANKOJI_CI_PRIVATE_KEY != ''
-    continue-on-error: true
+    # No continue-on-error and no secrets in this `if`: GitHub rejects both on
+    # a reusable-workflow caller job, and the whole file then fails to parse,
+    # so the required gate never posts. The reusable skips itself when the
+    # key is absent and marks every step advisory, so this job cannot go red.
+    if: github.event_name == 'pull_request_target'
     permissions:
       contents: read
     uses: seankoji-com/.github/.github/workflows/reusable-persona-recovery-request.yml@main
