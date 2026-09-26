@@ -74,8 +74,12 @@ jobs:
     # so the required gate never posts. The reusable skips itself when the
     # key is absent and marks every step advisory, so this job cannot go red.
     if: github.event_name == 'pull_request_target'
+    # Must cover the called job's own grant (contents + pull-requests read): a
+    # called workflow can only downgrade permissions, so a narrower caller is
+    # also a load-time failure that actionlint cannot see for a remote reusable.
     permissions:
       contents: read
+      pull-requests: read
     uses: seankoji-com/.github/.github/workflows/reusable-persona-recovery-request.yml@main
     with:
       target_repository: ${{ github.repository }}
