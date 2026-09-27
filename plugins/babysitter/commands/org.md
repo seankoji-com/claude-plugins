@@ -383,6 +383,9 @@ and returns the outcome — this orchestrator never runs the merge. Handle what 
   changes. **Never chase this with `--admin` or any other override.** Report it by name
   — `repo#number: <detail>` — and move on. A rule like this exists on purpose; only a
   human can satisfy or waive it.
+- `merge:checks_pending` / `merge:not_clean` — checks still running or `mergeStateStatus`
+  not CLEAN, and auto-merge could not be armed. Wait for the next event; never merge it
+  directly, since an org-admin token bypasses the rulesets without `--admin`.
 - `merge:conflict` — stale state; treat as a fresh `CONFLICT` event (Step 8).
 - `merge:failing_checks` — a required check went red; treat as a fresh `CHECKS-FAILED`
   event (Step 8).

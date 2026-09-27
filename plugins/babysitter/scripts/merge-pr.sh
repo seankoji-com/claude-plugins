@@ -25,28 +25,50 @@
 # repository accepts — GitHub's own error names any method the repo disallows, which
 # is simpler and more current than caching each repo's `allowed_merge_methods` here.
 #
+# The REST merge call is only attempted when GitHub reports mergeStateStatus CLEAN
+# and the head commit's check rollup is SUCCESS. Any other state — a check still
+# PENDING/EXPECTED, no rollup yet (a fresh head whose checks have not registered),
+# a BLOCKED/UNSTABLE/HAS_HOOKS/UNKNOWN merge state — is reported as blocked
+# (checks_pending / not_clean / branch_protection) instead of merged, and auto-merge
+# is armed where GitHub allows it. See "What this script will NOT do" below for why
+# that gate cannot be left to GitHub.
+#
 # Eligible BLOCKED outcomes also try arming GitHub's native auto-merge before it
 # reports — the courtesy costs one extra mutation and means a PR blocked only on
 # something outside this script's authority (a pending required check, a review
 # still needed) finishes on its own the moment that condition clears, with no further
-# call to this script needed. Arming it changes nothing about whether THIS run
-# considers the PR blocked; the exit code and reason are unaffected.
+# call to this script needed. Auto-merge fires only once GitHub's merge requirements
+# are met (it does not act on the arming user's bypass), so it is the safe hand-off
+# for a not-yet-CLEAN PR. GitHub refuses to arm it on a PR that is already CLEAN or
+# UNSTABLE; that is reported as automerge=unavailable. Arming it changes nothing about whether THIS run considers the PR blocked; the
+# exit code and reason are unaffected.
 #
 # Exit codes:
 #   0 — merged, or explicit resolution mode printed "RESOLVED <repo>#<pr> ..."
 #   2 — precondition failed (missing gh/curl/jq, bad arguments)
 #   3 — the GitHub query itself failed (network, rate limit, permissions)
 #   4 — blocked on something this script will not act on unasked: a required human
-#       approval, a code-scanning threshold, an unresolved thread with no
+#       approval, a code-scanning threshold, a check still running, a merge state
+#       other than CLEAN, an unresolved thread with no
 #       verified resolution yet, or a merge conflict. Never retried, never
 #       overridden with admin/force. (stdout: "BLOCKED <repo>#<pr> reason=<category>
 #       detail=<...> automerge=<armed|unavailable>")
 #
 # What this script will NOT do, on purpose:
-#   - Never passes `--admin` to bypass branch protection. A required check, a
-#     required reviewer, or an org ruleset exists on purpose; the fix for a PR that
-#     cannot satisfy one is either satisfying it for real or a human's call to waive
-#     it, never a flag this script reaches for on its own.
+#   - Never merges past branch protection or a ruleset. Not passing `--admin` is
+#     NOT enough to guarantee that: when the caller's token belongs to someone on a
+#     ruleset's bypass list with bypass mode "always" (org admins on seankoji-com's
+#     "Universal rules" and "PR gatekeeper" rulesets), GitHub applies the bypass
+#     implicitly to a plain REST merge — no flag, no warning — and accepts it while
+#     required checks are still pending. seankoji-com/careynas.net#2635 merged that
+#     way at 08:49:42 UTC (18:49 AEST, Sun 27 Sep 2026) with its rollup PENDING. The
+#     guard is this script's own: merge only when mergeStateStatus is CLEAN and the
+#     rollup is SUCCESS (the rollup does not depend on who is asking), and hand
+#     everything else to auto-merge. The merge PUT pins the checked head SHA, so a new
+#     commit is refused (409); a check re-queued on the SAME head between the read and
+#     the PUT is a residual window REST merge cannot close. A required check, a required reviewer, or an org ruleset exists on
+#     purpose; the fix for a PR that cannot satisfy one is either satisfying it for
+#     real or a human's call to waive it, never something this script does on its own.
 #   - Never resolves review threads as part of merging. Resolution requires the
 #     separate --resolve-thread action and the agent's --verified-head assertion.
 #   - Never rebases or force-pushes the PR branch itself. `--method rebase` is
@@ -213,7 +235,7 @@ curl_rest() {
 fetch_state() {
   local query resp
   query=$(jq -n --arg owner "$OWNER" --arg name "$NAME" --argjson number "$PR_NUMBER" '{
-    query: "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ id state headRefOid mergeable mergeStateStatus baseRefName headRefName autoMergeRequest{ enabledAt } reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ id isResolved } } commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } } } } }",
+    query: "query($owner:String!,$name:String!,$number:Int!){ repository(owner:$owner,name:$name){ pullRequest(number:$number){ id state headRefOid mergeable mergeStateStatus reviewDecision baseRefName headRefName autoMergeRequest{ enabledAt } reviewThreads(first:100){ pageInfo{ hasNextPage } nodes{ id isResolved } } commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } } } } }",
     variables: { owner: $owner, name: $name, number: $number }
   }')
   resp="$(curl_graphql_retry "$query")" || { echo "merge-pr.sh: state query failed: $resp" >&2; return 1; }
@@ -391,16 +413,41 @@ expected_head="$(jq -r '.data.repository.pullRequest.headRefOid' <<<"$state")"
 # drift or an unanswered thread can be the reason a required check never ran at all
 # (queued behind the branch update), so re-reading it now — not the possibly-stale
 # copy from the very first fetch_state call — is what makes this an accurate report
-# instead of a guess. FAILURE and ERROR are the only rollup states worth naming
-# specifically; PENDING is still running and gets folded into the generic
-# branch_protection report below rather than a separate reason, since retrying
-# immediately would not help either way.
-checks_state="$(jq -r '.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.state // "UNKNOWN"' <<<"$state")"
+# instead of a guess.
+#
+# This is the gate that stops the implicit admin bypass (see the header): GitHub
+# would accept a merge here for a ruleset-bypass actor whatever the rollup says, so
+# nothing short of CLEAN + SUCCESS reaches try_merge. A null rollup is treated as
+# pending, not green: right after update-branch (or any push) the new head has no
+# check suites yet, and a bypass-capable token must not merge into that gap.
+checks_state="$(jq -r '.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.state // "NONE"' <<<"$state")"
+merge_state="$(jq -r '.data.repository.pullRequest.mergeStateStatus // "UNKNOWN"' <<<"$state")"
+if [ "$merge_state" = "DIRTY" ]; then
+  blocked "conflict" "mergeStateStatus=DIRTY; resolve in a worktree first, not here"
+fi
 case "$checks_state" in
 FAILURE | ERROR)
   blocked "failing_checks" "required status checks are red (rollup=${checks_state}) — that is a code/CI fix, not something this script can resolve"
   ;;
+PENDING | EXPECTED | NONE)
+  blocked "checks_pending" "checks have not finished (rollup=${checks_state}, mergeStateStatus=${merge_state}); not merging until they pass"
+  ;;
+SUCCESS) ;;
+*)
+  blocked "checks_pending" "unrecognised check rollup (rollup=${checks_state}, mergeStateStatus=${merge_state}); not merging until it reads SUCCESS"
+  ;;
 esac
+review_decision="$(jq -r '.data.repository.pullRequest.reviewDecision // "NONE"' <<<"$state")"
+if [ "$merge_state" = "BLOCKED" ]; then
+  case "$review_decision" in
+  REVIEW_REQUIRED | CHANGES_REQUESTED)
+    blocked "branch_protection" "mergeStateStatus=BLOCKED with reviewDecision=${review_decision}; a required human review is outstanding"
+    ;;
+  esac
+fi
+if [ "$merge_state" != "CLEAN" ]; then
+  blocked "not_clean" "mergeStateStatus=${merge_state} (rollup=${checks_state}); merging now could apply a ruleset bypass, so only CLEAN is merged directly"
+fi
 
 methods=("$METHOD")
 [ -z "$METHOD" ] && methods=(squash merge rebase)
