@@ -57,14 +57,6 @@ permissions:
   pull-requests: read
   contents: read
 
-# Head, merge, and review-event evaluations publish to overlapping commits.
-# Serialize repository-wide so an older approval cannot overtake a dismissal.
-# queue:max preserves completion events when several PRs finish together.
-concurrency:
-  group: pr-gatekeeper-${{ github.repository }}
-  cancel-in-progress: false
-  queue: max
-
 jobs:
   recover-persona:
     # An independent event path; the reusable sends only PR identity to the
@@ -97,6 +89,15 @@ jobs:
     uses: seankoji-com/.github/.github/workflows/reusable-review-event.yml@main
 
   gatekeeper:
+    # Head, merge, and review-event evaluations publish to overlapping commits.
+    # Serialize repository-wide so an older approval cannot overtake a dismissal.
+    # queue:max preserves completion events when several PRs finish together.
+    # Only gate writers enter this queue. Skipped workflow events and independent
+    # recovery/review signals must not occupy the bounded writer queue.
+    concurrency:
+      group: pr-gatekeeper-${{ github.repository }}
+      cancel-in-progress: false
+      queue: max
     # Guarding at the job level, not inside a step: an in-job early exit still
     # claims a self-hosted runner first, and fleet capacity is scarce.
     #   - Skipping the gate's own runs stops it re-triggering itself, which
