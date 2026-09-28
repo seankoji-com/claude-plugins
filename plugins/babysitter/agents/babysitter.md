@@ -259,6 +259,12 @@ Then handle the reason:
   and run the merge again.
 - `reason=failing_checks` — re-run the failed job once if it looks like a flake;
   otherwise diagnose per step 3, fix, gate, push, and run the merge again.
+- `reason=checks_pending` / `reason=not_clean` — checks are still running, or GitHub
+  does not report `mergeStateStatus` CLEAN. The script refuses to merge these because an
+  org-admin token would silently bypass the rulesets; it arms auto-merge instead. With
+  `automerge=armed` or `preexisting`, return `done` with `merge.automerge_armed: true`.
+  Otherwise return `blocked` with `blocked_on: "merge:<reason>"` and the detail in `notes`.
+  **Do not retry to force it through.**
 - `reason=branch_protection` — a required human reviewer, a code-scanning alert, or an
   org ruleset. **Do not retry and do not reach for `--admin`.** Return `blocked` with
   `blocked_on: "merge:branch_protection"` and the script's detail in `notes`.

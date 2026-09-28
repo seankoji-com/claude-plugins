@@ -268,6 +268,9 @@ and returns the outcome — this orchestrator never runs the merge. Handle what 
   a code-scanning alert at or above the org's threshold, a ruleset requiring approval from
   someone other than the author. **Never chase this with `--admin` or any other override** —
   report it by number and move on.
+- `merge:checks_pending` / `merge:not_clean` — checks still running or `mergeStateStatus`
+  not CLEAN, and auto-merge could not be armed. Wait for the next event; never merge it
+  directly, since an org-admin token bypasses the rulesets without `--admin`.
 - `merge:conflict` — stale state; treat as a fresh `CONFLICT` event.
 - `merge:failing_checks` — a required check went red; treat as a fresh `CHECKS-FAILED` event.
 
