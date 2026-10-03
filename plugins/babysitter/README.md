@@ -129,6 +129,17 @@ falls back to `ocr delegate`, which needs no LLM: it emits a review spec (the fi
 the refs, and the resolved rules) and the agent performs the review itself, then comes
 back through the gate. Reported as `status=delegate`, exit 3.
 
+**A partial review is not a clean review.** When only some requests fail (a gateway 5xx on
+one file, an exhausted token budget), `ocr` publishes what it has and exits 0 with a
+well-formed, possibly empty `comments` array. The gate reads `manifest.coverage.failed` and
+reports `clean` only when no file went unreviewed; otherwise it takes the same path as a
+review that could not run (`status=delegate`, then `status=error`).
+
+**There is no waiver.** Every failure above exits non-zero, and no environment variable
+turns one into a pass. The only switches tighten the gate: `BABYSITTER_REVIEW_REQUIRED=1`
+(see the bottom of this file) and `BABYSITTER_REVIEW_TIMEOUT`. A person who has judged a
+failure benign pushes it themselves; an agent does not get to.
+
 **And if even that fails, the push does not happen.** `status=error` means the agent
 returns `blocked` with its fix committed but unpushed, for the orchestrator to retry.
 This is the one place the plugin is strict, because it is the place where being lax is
@@ -247,7 +258,7 @@ notes are usually the ones that should become plugin changes rather than run-tim
 | `list-prs.sh` | The only GitHub reader. `--org X`, `--repo X`, or `--repo X --pr N`. One GraphQL call (retried twice on failure — an org-wide query draws a 504 often enough to be routine), one JSON object per line, open PRs only. Exit 2 bad arguments, 3 query failed. Warns on stderr when a sweep is truncated by `--limit` (GitHub caps a search page at 100 and it does not paginate). |
 | `pr-events.sh` | Monitor event stream. Forwards unknown flags to `list-prs.sh` so the watch and the sweep can never disagree about scope. |
 | `pr-workspace.sh` | Cache clone + per-PR worktree. Also makes the clone pushable on every run: `origin` forced to HTTPS, credential helper pinned to `gh`, `push.default=upstream`. Prints the path on stdout, progress on stderr. Exit 3 git failure, 4 dirty worktree left alone. |
-| `ocr-gate.sh` | Pre-push review, with a no-LLM `ocr delegate` fallback. Prints one summary line. Exit 0 clean/skipped, 1 findings, 2 could not review at all, 3 delegated to the agent. |
+| `ocr-gate.sh` | Pre-push review, with a no-LLM `ocr delegate` fallback. Prints one summary line. Exit 0 clean/skipped, 1 findings, 2 could not review (or the review was incomplete) and could not be delegated, or skipped under `BABYSITTER_REVIEW_REQUIRED=1`, 3 delegated to the agent. |
 | `merge-pr.sh` | Updates a behind branch and merges with the checked head SHA. Requires complete review state and explicitly resolved threads; a `[babysitter]` comment never resolves a thread. Stops on head changes and unknown API outcomes. Explicit `--resolve-thread ID --verified-head SHA` resolves one verified thread after checking ownership/head, without merging. Eligible blockers may arm GitHub auto-merge with a head precondition at arming time; unresolved/truncated review state and head changes do not. Use `--no-auto` for a flow that must not arm future merges; it rejects an already-armed request. GitHub auto-merge can follow future eligible commits. Exit 0 merged or explicitly resolved, 2 bad arguments, 3 query/transport failed, 4 blocked. |
 | `audit-log.sh` | Shared appender for `~/.claude/audit.jsonl`; identical in every plugin that bundles it. |
 | `run-note.sh` | Appends one timestamped observation to the run's notes ledger. `--command`, `--kind env\|github\|process\|repo\|policy`, `--note`, optional `--scope`. Prints the ledger path. Fail-soft: an unwritable notes directory warns and exits 0. |

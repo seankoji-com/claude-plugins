@@ -37,6 +37,19 @@
 # on. `ocr delegate` needs no LLM at all, so it survives that failure and turns a
 # skipped review into one the agent performs itself.
 #
+# A review that ran but did not cover everything is not clean either. `ocr` publishes
+# partial results and exits 0 when only some files failed (a gateway 5xx on one request,
+# an exhausted token budget), with a well-formed `comments` array that says nothing about
+# the files it never reviewed. The files it could not review are listed under
+# `manifest.coverage.failed`, so a "clean" verdict is only issued when that list is empty;
+# otherwise the run is handled exactly like one that could not run (case 3, then exit 2).
+#
+# There is no flag that waives a failed gate: every failure above exits non-zero. The
+# only switches tighten it. BABYSITTER_REVIEW_REQUIRED=1 turns case 4 from skipped
+# (exit 0) into blocked (exit 2) for hosts that must not push without a review tool, and
+# BABYSITTER_REVIEW_TIMEOUT (default 300s) bounds each external tool call; a call that
+# times out is a failed call, not a clean one.
+#
 # Run this from inside the PR worktree.
 #
 # Usage:
@@ -48,7 +61,8 @@
 # Exit codes (0/1/2 match ocr-pre-pr.sh so the two are interchangeable to a caller):
 #   0 — clean, or skipped because ocr is not installed
 #   1 — the review produced findings; address them before pushing
-#   2 — the review could not run and could not be delegated either
+#   2 — the review could not run (or was incomplete) and could not be delegated either;
+#       also case 4 when BABYSITTER_REVIEW_REQUIRED=1
 #   3 — the review could not run, but result= holds a delegation spec: review it
 #       yourself before pushing. Not a licence to push unreviewed.
 
@@ -132,6 +146,30 @@ delegate_or_die() {
 
   echo "OCR status=error findings=0 result=- tool=${tool} head=${HEAD_SHA:-unknown} base_fresh=${BASE_FRESH:-false} base=${MERGE_BASE:-unknown}"
   exit 2
+}
+
+# Called before a result is reported clean. A result can be well-formed, exit 0, and still
+# describe a review that did not cover the diff (see the header): such a result goes down
+# the same path as a review that could not run. Never returns when coverage is incomplete
+# or cannot be read, and when the coverage field is present but not an array (malformed
+# data is not evidence of completeness). A field that is absent altogether (an older ocr, a
+# wrapper that writes its own format) counts as complete: nothing contradicts the verdict.
+require_full_coverage() {
+  local tool="$1" result="$2" errfile="$3" reason
+  if ! reason="$(jq -r '
+      if (.status // "") == "failed" or (.manifest.terminal_state // "") == "failed" then "the run reported failure"
+      else .manifest.coverage.failed as $f
+        | if $f == null then empty
+          elif ($f | type) != "array" then "coverage data is malformed"
+          elif ($f | length) > 0 then "\($f | length) file(s) not reviewed"
+          else empty end
+      end' "$result" 2>/dev/null)"; then
+    reason="coverage could not be read from the result"
+  fi
+  if [ -n "$reason" ]; then
+    echo "ocr-gate.sh: ${tool} produced an incomplete review (${reason}); a partial review is not a clean review" >&2
+    delegate_or_die "$tool" "$errfile"
+  fi
 }
 
 # Codex is a separate, independently installed plugin — its script root isn't knowable
@@ -240,7 +278,8 @@ if command -v ocr-pre-pr.sh >/dev/null 2>&1; then
   esac
   assert_revision
   if [ "$status" = clean ] && ! jq -e '.comments | type == "array"' "$OUT" >/dev/null 2>&1; then
-    die "wrapper returned success without a valid findings array"
+    echo "ocr-gate.sh: ocr-pre-pr.sh returned success without a valid findings array" >&2
+    delegate_or_die "ocr-pre-pr.sh" "${OUT}.err"
   fi
   findings="$(jq -r '.comments | length' "$OUT" 2>/dev/null || true)"
   case "$findings" in
@@ -254,6 +293,7 @@ if command -v ocr-pre-pr.sh >/dev/null 2>&1; then
     findings="unknown"
   fi
   if [ "$status" = clean ] && [ "$findings" != 0 ]; then status=findings; fi
+  if [ "$status" = clean ]; then require_full_coverage "ocr-pre-pr.sh" "$OUT" "${OUT}.err"; fi
   echo "OCR status=${status} findings=${findings} result=${OUT} tool=ocr-pre-pr.sh head=${HEAD_SHA:-unknown} base_fresh=${BASE_FRESH:-false} base=${MERGE_BASE:-unknown}"
   if [ "$status" = "clean" ]; then
     exit 0
@@ -291,6 +331,7 @@ case "$findings" in
 esac
 
 if [ "$findings" -eq 0 ]; then
+  require_full_coverage "ocr" "$OUT" "${OUT}.err"
   echo "OCR status=clean findings=0 result=${OUT} tool=ocr head=${HEAD_SHA:-unknown} base_fresh=${BASE_FRESH:-false} base=${MERGE_BASE:-unknown}"
   exit 0
 fi
