@@ -129,6 +129,17 @@ falls back to `ocr delegate`, which needs no LLM: it emits a review spec (the fi
 the refs, and the resolved rules) and the agent performs the review itself, then comes
 back through the gate. Reported as `status=delegate`, exit 3.
 
+**A partial review is not a clean review.** When only some requests fail (a gateway 5xx on
+one file, an exhausted token budget), `ocr` publishes what it has and exits 0 with a
+well-formed, possibly empty `comments` array. The gate reads `manifest.coverage.failed` and
+reports `clean` only when no file went unreviewed; otherwise it takes the same path as a
+review that could not run (`status=delegate`, then `status=error`).
+
+**There is no waiver.** Every failure above exits non-zero, and no environment variable
+turns one into a pass. The only switches tighten the gate: `BABYSITTER_REVIEW_REQUIRED=1`
+(see the bottom of this file) and `BABYSITTER_REVIEW_TIMEOUT`. A person who has judged a
+failure benign pushes it themselves; an agent does not get to.
+
 **And if even that fails, the push does not happen.** `status=error` means the agent
 returns `blocked` with its fix committed but unpushed, for the orchestrator to retry.
 This is the one place the plugin is strict, because it is the place where being lax is
