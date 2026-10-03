@@ -151,14 +151,19 @@ delegate_or_die() {
 # Called before a result is reported clean. A result can be well-formed, exit 0, and still
 # describe a review that did not cover the diff (see the header): such a result goes down
 # the same path as a review that could not run. Never returns when coverage is incomplete
-# or cannot be read; anything absent from the result (an older ocr, a wrapper that writes
-# its own format) counts as complete, since there is nothing to contradict the verdict.
+# or cannot be read, and when the coverage field is present but not an array (malformed
+# data is not evidence of completeness). A field that is absent altogether (an older ocr, a
+# wrapper that writes its own format) counts as complete: nothing contradicts the verdict.
 require_full_coverage() {
   local tool="$1" result="$2" errfile="$3" reason
   if ! reason="$(jq -r '
       if (.status // "") == "failed" or (.manifest.terminal_state // "") == "failed" then "the run reported failure"
-      elif ((.manifest.coverage.failed // []) | length) > 0 then "\((.manifest.coverage.failed) | length) file(s) not reviewed"
-      else empty end' "$result" 2>/dev/null)"; then
+      else .manifest.coverage.failed as $f
+        | if $f == null then empty
+          elif ($f | type) != "array" then "coverage data is malformed"
+          elif ($f | length) > 0 then "\($f | length) file(s) not reviewed"
+          else empty end
+      end' "$result" 2>/dev/null)"; then
     reason="coverage could not be read from the result"
   fi
   if [ -n "$reason" ]; then

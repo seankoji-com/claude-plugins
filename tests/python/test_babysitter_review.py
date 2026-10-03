@@ -48,6 +48,13 @@ PARTIAL_REVIEWS = (
                                       'coverage': {'failed': [{'path': 'code'}]}}}) + "'"),
     ('terminal state failed', "printf '%s\\n' '" + json.dumps({
         'comments': [], 'manifest': {'terminal_state': 'failed'}}) + "'"),
+    # Malformed coverage is not evidence of completeness: each of these has a zero `length`.
+    *(('coverage.failed is ' + json.dumps(value), "printf '%s\\n' '" + json.dumps({
+        'comments': [], 'manifest': {'coverage': {'failed': value}}}) + "'")
+      for value in ('', 0, False, {})),
+    ('manifest is a string', "printf '%s\\n' '" + json.dumps({'comments': [], 'manifest': 'x'}) + "'"),
+    ('coverage is a string', "printf '%s\\n' '" + json.dumps({
+        'comments': [], 'manifest': {'coverage': 'x'}}) + "'"),
 )
 
 # `ocr delegate preview` bodies.
