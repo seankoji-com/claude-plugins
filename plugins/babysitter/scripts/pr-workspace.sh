@@ -147,9 +147,14 @@ if [ ! -d "$CLONE/.git" ]; then
   # fail on a non-empty target, so it goes first.
   clone_once() {
     if [ "$GH_READY" = "1" ]; then
-      gh repo clone "$REPO" "$CLONE" -- --quiet >/dev/null 2>&1
+      gh repo clone "https://github.com/${REPO}.git" "$CLONE" -- --quiet \
+        --config "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
+        --config "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" >/dev/null 2>&1
     else
-      git clone --quiet "https://github.com/${REPO}.git" "$CLONE"
+      git clone --quiet \
+        --config "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
+        --config "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" \
+        "https://github.com/${REPO}.git" "$CLONE" 2>/dev/null
     fi
   }
   if ! clone_once; then
@@ -190,8 +195,17 @@ fi
 #      `upstream` is unsafe when another worktree tracks the default branch.
 #      `nothing` refuses every implicit push, regardless of upstream names or
 #      remotes; callers must use the explicit HEAD:<head> push documented above.
-git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" ||
+git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null ||
   die "cannot configure HTTPS origin in ${CLONE}" 3
+
+# Exact per-clone identity mappings neutralize common inherited shorter SSH
+# rewrites without editing global configuration. The resolved push URL below
+# remains authoritative and refuses ambiguous exact rewrites/pushurl overrides.
+for rewrite in insteadOf pushInsteadOf; do
+  git -C "$CLONE" config --local --replace-all \
+    "url.https://github.com/${REPO}.git.${rewrite}" "https://github.com/${REPO}.git" ||
+    die "cannot scope HTTPS transport to this clone" 3
+done
 
 # Only when gh can actually serve credentials: clearing the chain and pointing it at a
 # gh that is not authenticated would replace a helper that might work with one that
@@ -205,10 +219,13 @@ fi
 # Remote push refspecs and mirror mode take precedence over push.default.
 # Refuse inherited or reused settings rather than silently changing their meaning.
 verify_push_policy() {
-  local location="$1" status mirror destination
-  destination=$(git -C "$location" remote get-url --push --all origin) ||
+  local location="$1" status mirror destination fetch_destination
+  destination=$(git -C "$location" remote get-url --push --all origin 2>/dev/null) ||
     die "cannot inspect origin push destination" 3
-  if [ "$destination" != "https://github.com/${REPO}.git" ]; then
+  fetch_destination=$(git -C "$location" remote get-url --all origin 2>/dev/null) ||
+    die "cannot inspect origin fetch destination" 3
+  if [ "$destination" != "https://github.com/${REPO}.git" ] ||
+    [ "$fetch_destination" != "https://github.com/${REPO}.git" ]; then
     # Names can contain credentials in a URL base. Report only key classes/scopes.
     git -C "$location" config --null --show-origin --name-only --get-regexp \
       '^(url\..*\.(insteadof|pushinsteadof)|remote\.origin\.pushurl)$' |
@@ -223,18 +240,28 @@ verify_push_policy() {
       done || true
     die "origin push destination differs from required HTTPS repository; scope SSH/URL rewrites outside this cache or remove its pushurl override" 3
   fi
-  if git -C "$location" config --get-all remote.origin.push >/dev/null; then
-    die "configured origin push refspec bypasses safe push policy" 3
+  local keys key
+  if keys=$(git -C "$location" config --name-only --get-regexp '^remote\..*\.(push|mirror)$'); then
+    :
   else
     status=$?
-    [ "$status" = 1 ] || die "cannot inspect origin push refspecs" 3
+    [ "$status" = 1 ] || die "cannot inspect remote push configuration" 3
   fi
-  if mirror=$(git -C "$location" config --bool remote.origin.mirror); then
-    [ "$mirror" != true ] || die "origin mirror mode bypasses safe push policy" 3
-  else
-    status=$?
-    [ "$status" = 1 ] || die "cannot inspect origin mirror mode" 3
-  fi
+  # Remote names can themselves contain sensitive text. Never log names or values.
+  # Read all effective configured remotes, including alternate branch push remotes.
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    case "$key" in
+    *.push) die "configured remote push refspec bypasses safe push policy" 3 ;;
+    *.mirror)
+      if mirror=$(git -C "$location" config --bool "$key" 2>/dev/null); then
+        [ "$mirror" != true ] || die "remote mirror mode bypasses safe push policy" 3
+      else
+        die "cannot inspect remote mirror mode" 3
+      fi ;;
+    esac
+  done <<< "$keys"
+
 }
 verify_push_policy "$CLONE"
 
@@ -257,6 +284,8 @@ git -C "$CLONE" config --local "branch.${LOCAL_BRANCH}.pushRemote" origin ||
   die "cannot configure push remote for ${LOCAL_BRANCH}" 3
 
 if [ -d "$WORKTREE/.git" ] || [ -f "$WORKTREE/.git" ]; then
+  # Validate worktree overrides before even fetching from inherited destinations.
+  verify_push_policy "$WORKTREE"
   # Reuse. Never discard work: if a previous agent left changes behind, say so and
   # let the caller decide rather than resetting over them.
   if [ -n "$(git -C "$WORKTREE" status --porcelain 2>/dev/null)" ]; then

@@ -1,7 +1,7 @@
 """Exercise the real workspace helper and Git pushes against a local remote."""
 import os
-import shlex
 import shutil
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -51,10 +51,18 @@ class PushPolicyTest(unittest.TestCase):
             real_git = shutil.which('git')
             wrapper = tools / 'git'
             wrapper.write_text(
-                '#!/bin/sh\nfor arg do\ncase "$arg" in clone|fetch|push)\n'
-                + 'exec ' + shlex.quote(real_git) + ' -c '
-                + shlex.quote(f'url.{remote}.insteadOf=https://github.com/test/repo.git')
-                + ' "$@";; esac\ndone\nexec ' + shlex.quote(real_git) + ' "$@"\n')
+                f'#!{sys.executable}\n'
+                'import subprocess, sys\n'
+                f'real_git = {real_git!r}\nremote = {str(remote)!r}\n'
+                'args = sys.argv[1:]\nuses_origin = "origin" in args\n'
+                'action = next((item for item in ("clone", "fetch", "push") if item in args), None)\n'
+                'if action is not None:\n'
+                ' args = [remote if item == "https://github.com/test/repo.git" or item == "origin" else item for item in args]\n'
+                ' if action == "fetch": args.append("+refs/heads/*:refs/remotes/origin/*")\n'
+                'result = subprocess.call([real_git, *args])\n'
+                'if action == "push" and uses_origin and result == 0:\n'
+                ' subprocess.check_call([real_git, *args[:args.index("push")], "fetch", "--quiet", remote, "+refs/heads/*:refs/remotes/origin/*"])\n'
+                'sys.exit(result)\n')
             wrapper.chmod(0o755)
 
             def initialize():
@@ -64,7 +72,11 @@ class PushPolicyTest(unittest.TestCase):
                     env=env, capture_output=True, text=True, check=True)
                 return Path(result.stdout.strip())
 
+            git(root, 'config', '--global', 'url.git@github.com:.insteadOf', 'https://github.com/')
             worktree = initialize()
+            self.assertEqual(git(worktree, 'remote', 'get-url', 'origin').stdout.strip(),
+                             'https://github.com/test/repo.git')
+            git(root, 'config', '--global', '--unset', 'url.git@github.com:.insteadOf')
             clone = root / 'cache/repos/test__repo'
             publish = root / 'publish.git'
             git(root, 'init', '--bare', '--initial-branch=master', str(publish))
@@ -110,8 +122,8 @@ class PushPolicyTest(unittest.TestCase):
                 ('--local', 'remote.origin.pushurl', str(publish)),
                 ('--global', f'url.{publish}.pushInsteadOf',
                  'https://github.com/test/repo.git'),
-                ('--global', 'url.git@github.com:.insteadOf', 'https://github.com/'),
-                ('--global', 'url.git@github.com:.pushInsteadOf', 'https://github.com/')]:
+                ('--global', 'url.PRIVATE_TOKEN@github.com:.insteadOf', 'https://github.com/test/repo.git'),
+                ('--global', 'url.PRIVATE_TOKEN@github.com:.pushInsteadOf', 'https://github.com/test/repo.git')]:
                 git(clone, 'config', scope, key, value)
                 with self.assertRaises(subprocess.CalledProcessError) as caught:
                     initialize()
@@ -120,6 +132,7 @@ class PushPolicyTest(unittest.TestCase):
                 if key.startswith('url.'):
                     self.assertIn('url.<redacted-base>.', caught.exception.stderr)
                     self.assertIn(str(home / '.gitconfig'), caught.exception.stderr)
+                self.assertNotIn('PRIVATE_TOKEN', caught.exception.stderr)
                 git(clone, 'config', scope, '--unset', key)
             for key, value in [('remote.origin.push', 'HEAD:refs/heads/master'),
                                ('remote.origin.mirror', 'true')]:
@@ -130,3 +143,34 @@ class PushPolicyTest(unittest.TestCase):
                 self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
                 git(root, 'config', '--global', '--unset', key)
 
+
+            # Common shorter SSH rewrites are repaired only for this cache URL.
+            for suffix in ['insteadOf', 'pushInsteadOf']:
+                key = f'url.git@github.com:.{suffix}'
+                git(root, 'config', '--global', key, 'https://github.com/')
+                initialize()
+                self.assertEqual(git(worktree, 'remote', 'get-url', '--push', 'origin').stdout.strip(),
+                                 'https://github.com/test/repo.git')
+                self.assertEqual(git(root, 'config', '--global', key).stdout.strip(), 'https://github.com/')
+                git(root, 'config', '--global', '--unset', key)
+            # An alternate remote's configured refspec/mirror bypasses defaults;
+            # reject it in both clone and effective worktree configuration.
+            for scope in ['--global', '--local', '--worktree']:
+                for key, value in [('remote.publish.push', 'HEAD:refs/heads/master'),
+                                   ('remote.publish.mirror', 'true'),
+                                   ('remote.publish.mirror', 'https://PRIVATE_TOKEN@example.invalid')]:
+                    location = worktree if scope == '--worktree' else clone
+                    git(location, 'config', scope, key, value)
+                    git(clone, 'config', 'branch.feature.pushRemote', 'publish')
+                    with self.assertRaises(subprocess.CalledProcessError) as caught:
+                        initialize()
+                    self.assertEqual(caught.exception.returncode, 3)
+                    self.assertNotIn('PRIVATE_TOKEN', caught.exception.stderr)
+                    self.assertNotEqual(git(publish, 'rev-parse', '--verify', 'master', check=False).returncode, 0)
+                    self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
+                    git(location, 'config', scope, '--unset', key)
+            initialize()
+            self.assertNotEqual(git(worktree, 'push', 'publish', check=False).returncode, 0)
+            git(worktree, 'checkout', 'feature')
+            self.assertNotEqual(git(worktree, 'push', check=False).returncode, 0)
+            self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)

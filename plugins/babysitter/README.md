@@ -98,16 +98,17 @@ All three commands show you the full roster and wait for a yes before anything i
 - Never force-pushed. A non-fast-forward rejection is handled by fetching and merging,
   never by overwriting.
 - The worktree checks out a local branch named `babysitter/pr-<N>`, not the PR's branch
-  name, so a reflexive `git push origin <branch>` cannot target the wrong ref.
+  name. Always give both source and destination explicitly; do not infer the PR
+  destination from the local branch name.
 - `push.default=nothing` is set on the clone and verified in the worktree's effective
   configuration. Every implicit push is refused, regardless of upstream branch names
   or remotes. Use the explicit `git push origin HEAD:<head-ref>` above.
   The clone default and each babysitter branch push remote are pinned to `origin`.
-  Configured origin push refspecs or mirror mode stop initialization because they
-  bypass `push.default`. The resolved push destination must be the expected HTTPS
-  GitHub repository. SSH rewrites, including those targeting the same repository,
-  are deliberately refused because this cache uses headless HTTPS authentication.
-  Scope such global rules outside the cache or remove the cache's push URL override.
+  Configured push refspecs or mirror mode on any remote stop initialization because they
+  bypass `push.default`. The resolved fetch and push destinations must be the expected HTTPS
+  GitHub repository. Per-clone exact HTTPS identity mappings neutralize common shorter global SSH
+  rewrites without editing global settings. Any remaining destination rewrite or
+  push URL override is refused because this cache uses headless HTTPS authentication.
   Refusals report the configuration key class and source file, with URL bases/values
   redacted so credentials cannot leak.
 
