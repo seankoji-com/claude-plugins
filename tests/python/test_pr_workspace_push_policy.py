@@ -205,16 +205,39 @@ class PushPolicyTest(unittest.TestCase):
             self.assertNotEqual(git(worktree, 'push', check=False).returncode, 0)
             self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
 
+            # URL spelling alone does not guarantee HTTPS when a custom VCS helper is set.
+            for scope in ['--global', '--local', '--worktree']:
+                location = worktree if scope == '--worktree' else clone
+                git(location, 'config', scope, 'remote.origin.vcs', 'PRIVATE_TOKEN')
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    initialize()
+                self.assertEqual(caught.exception.returncode, 3)
+                self.assertIn('custom origin transport helper', caught.exception.stderr)
+                self.assertNotIn('PRIVATE_TOKEN', caught.exception.stderr)
+                git(location, 'config', scope, '--unset', 'remote.origin.vcs')
+            helper_marker = root / 'helper-transport-attempted'
+            env['CLONE_ATTEMPT_MARKER'] = str(helper_marker)
+            git(root, 'config', '--global', 'remote.origin.vcs', 'PRIVATE_TOKEN')
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                initialize('custom-helper-cache')
+            self.assertEqual(caught.exception.returncode, 3)
+            self.assertFalse(helper_marker.exists())
+            git(root, 'config', '--global', '--unset', 'remote.origin.vcs')
+            env.pop('CLONE_ATTEMPT_MARKER')
+
             # First-time clone failures remain diagnosable without exposing URLs.
             env.pop('FAKE_GH_AUTH_READY', None)
+            git(root, 'config', '--global', 'url.git@github.com:.insteadOf', 'https://github.com/')
             env['TEST_CLONE_FAILURE'] = '1'
             with self.assertRaises(subprocess.CalledProcessError) as caught:
                 initialize('failed-cache')
             self.assertEqual(caught.exception.returncode, 3)
             self.assertNotIn('PRIVATE_TOKEN', caught.exception.stderr)
             self.assertIn('category=authentication', caught.exception.stderr)
+            self.assertIn('SSH keys alone cannot authenticate', caught.exception.stderr)
             self.assertEqual(list(root.glob('babysitter-clone-error.*')), [])
             env.pop('TEST_CLONE_FAILURE')
+            git(root, 'config', '--global', '--unset', 'url.git@github.com:.insteadOf')
             marker = root / 'transport-attempted'
             env['CLONE_ATTEMPT_MARKER'] = str(marker)
             key = 'url.ssh://git@alternate.example/test/repo.git.insteadOf'

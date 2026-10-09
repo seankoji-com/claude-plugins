@@ -69,13 +69,27 @@ report_policy_settings() {
       case "$key" in
       url.*.insteadof) key='url.<redacted-base>.insteadof' ;;
       url.*.pushinsteadof) key='url.<redacted-base>.pushinsteadof' ;;
-      remote.origin.pushurl) : ;;
+      remote.origin.pushurl | remote.origin.vcs) : ;;
       remote.*.push) key='remote.<redacted>.push' ;;
       remote.*.mirror) key='remote.<redacted>.mirror' ;;
       *) continue ;;
       esac
       printf 'pr-workspace.sh: inspect %s in %s (values redacted)\n' "$key" "$scope" >&2
     done || true
+}
+
+# A custom remote helper bypasses HTTPS even when get-url reports HTTPS.
+verify_origin_transport() {
+  local location="$1" status
+  local -a context
+  if [ -e "$location/.git" ]; then context=(-C "$location"); else context=(--git-dir="$location/.git"); fi
+  if git "${context[@]}" config --get-regexp '^remote\.origin\.vcs$' >/dev/null; then
+    report_policy_settings "$location" '^remote\.origin\.vcs$'
+    die "custom origin transport helper bypasses required HTTPS transport" 3
+  else
+    status=$?
+    [ "$status" = 1 ] || die "cannot inspect origin transport helper" 3
+  fi
 }
 
 while [ $# -gt 0 ]; do
@@ -156,7 +170,10 @@ mkdir -p "${ROOT}/repos" "${ROOT}/worktrees" || die "cannot create ${ROOT}" 3
 GH_READY=0
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   GH_READY=1
+else
+  note "HTTPS-only cache: run gh auth login or configure a working HTTPS credential helper; SSH keys alone cannot authenticate this cache"
 fi
+verify_origin_transport "$CLONE"
 
 if [ ! -d "$CLONE/.git" ]; then
   note "cloning ${REPO} (first PR seen in this repo)"
@@ -279,6 +296,7 @@ fi
 # Refuse inherited or reused settings rather than silently changing their meaning.
 verify_push_policy() {
   local location="$1" status mirror destination fetch_destination
+  verify_origin_transport "$location"
   if ! destination=$(git -C "$location" remote get-url --push --all origin 2>/dev/null); then
     report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
     die "cannot inspect origin push destination" 3

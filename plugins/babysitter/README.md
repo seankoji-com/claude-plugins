@@ -104,6 +104,7 @@ All three commands show you the full roster and wait for a yes before anything i
   configuration. Every implicit push is refused, regardless of upstream branch names
   or remotes. Use the explicit `git push origin HEAD:<head-ref>` above.
   The clone default and each babysitter branch push remote are pinned to `origin`.
+  Custom origin transport helpers are refused before cloning, fetching or handing off a worktree.
   Configured push refspecs or mirror mode on any remote stop initialization because they
   bypass `push.default`. The resolved fetch and push destinations must be the expected HTTPS
   GitHub repository. Per-clone exact HTTPS identity mappings neutralize common shorter global SSH
@@ -112,7 +113,9 @@ All three commands show you the full roster and wait for a yes before anything i
   Destination and remote refspec/mirror refusals report the configuration key class and source file, with URL bases/values
   redacted so credentials cannot leak. The literal HTTPS clone transport is validated
   before cloning; authenticated hosts supply Git credentials through `gh` without
-  allowing `gh repo clone` to resolve a different repository URL. Clone failures report a safe error category; private
+  allowing `gh repo clone` to resolve a different repository URL. Without authenticated `gh`,
+  a working HTTPS credential helper is required for private repositories; SSH keys alone cannot
+  authenticate this HTTPS-only cache. Clone failures report a safe error category; private
   temporary stderr capture is deleted on exit, including failure and interruption.
 
 ## Pre-push review
