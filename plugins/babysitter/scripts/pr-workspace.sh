@@ -161,7 +161,7 @@ if [ ! -d "$CLONE/.git" ]; then
     die "initial clone transport differs from required HTTPS repository; inspect inherited URL rewrites privately" 3
   report_clone_failure() {
     local category=unclassified
-    if grep -Eiq 'Authentication failed|could not read Username|Permission denied|publickey' "$clone_diagnostics"; then
+    if grep -Eiq 'Authentication failed|could not read Username|Permission denied.*publickey|publickey' "$clone_diagnostics"; then
       category=authentication
     elif grep -Eiq 'repository .*not found|Repository not found' "$clone_diagnostics"; then
       category=repository-not-found
@@ -169,6 +169,8 @@ if [ ! -d "$CLONE/.git" ]; then
       category=TLS
     elif grep -Eiq 'Could not resolve|unable to access|Connection|proxy|timed out' "$clone_diagnostics"; then
       category=network
+    elif grep -Eiq 'Permission denied|cannot create|could not create' "$clone_diagnostics"; then
+      category=filesystem
     elif grep -Eiq 'config|rewrite|protocol|bad boolean' "$clone_diagnostics"; then
       category=configuration
     fi
@@ -315,9 +317,18 @@ LOCAL_BRANCH="babysitter/pr-${PR_NUMBER}"
 git -C "$CLONE" config --local "branch.${LOCAL_BRANCH}.pushRemote" origin ||
   die "cannot configure push remote for ${LOCAL_BRANCH}" 3
 
+verify_worktree_policy() {
+  local location="$1"
+  verify_push_policy "$location"
+  [ "$(git -C "$location" config --get push.default)" = nothing ] &&
+    [ "$(git -C "$location" config --get remote.pushDefault)" = origin ] &&
+    [ "$(git -C "$location" config --get "branch.${LOCAL_BRANCH}.pushRemote")" = origin ] ||
+    die "effective safe push policy is not enforced for ${LOCAL_BRANCH}" 3
+}
+
 if [ -d "$WORKTREE/.git" ] || [ -f "$WORKTREE/.git" ]; then
   # Validate worktree overrides before even fetching from inherited destinations.
-  verify_push_policy "$WORKTREE"
+  verify_worktree_policy "$WORKTREE"
   # Reuse. Never discard work: if a previous agent left changes behind, say so and
   # let the caller decide rather than resetting over them.
   if [ -n "$(git -C "$WORKTREE" status --porcelain 2>/dev/null)" ]; then
@@ -336,10 +347,6 @@ else
   note "created ${WORKTREE} on ${LOCAL_BRANCH} (tracking origin/${BRANCH})"
 fi
 
-verify_push_policy "$WORKTREE"
-[ "$(git -C "$WORKTREE" config --get push.default)" = nothing ] &&
-  [ "$(git -C "$WORKTREE" config --get remote.pushDefault)" = origin ] &&
-  [ "$(git -C "$WORKTREE" config --get "branch.${LOCAL_BRANCH}.pushRemote")" = origin ] ||
-  die "effective safe push policy is not enforced for ${LOCAL_BRANCH}" 3
+verify_worktree_policy "$WORKTREE"
 
 echo "$WORKTREE"

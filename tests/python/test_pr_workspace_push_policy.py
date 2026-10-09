@@ -121,7 +121,18 @@ class PushPolicyTest(unittest.TestCase):
                     initialize()
                 self.assertEqual(caught.exception.returncode, 3)
                 self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
+                dirty = worktree / 'preserved-dirty-file'
+                dirty.write_text('preserve pending work')
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    initialize()
+                self.assertEqual(caught.exception.returncode, 3)
+                self.assertEqual(dirty.read_text(), 'preserve pending work')
                 git(worktree, 'config', '--worktree', '--unset', 'push.default')
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    initialize()
+                self.assertEqual(caught.exception.returncode, 4)
+                self.assertEqual(dirty.read_text(), 'preserve pending work')
+                dirty.unlink()
             for scope, key, value in [
                 ('--local', 'remote.origin.pushurl', str(publish)),
                 ('--global', f'url.{publish}.pushInsteadOf',
