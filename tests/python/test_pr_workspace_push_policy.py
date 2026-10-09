@@ -189,6 +189,13 @@ class PushPolicyTest(unittest.TestCase):
                         initialize()
                     self.assertEqual(caught.exception.returncode, 3)
                     self.assertNotIn('PRIVATE_TOKEN', caught.exception.stderr)
+                    self.assertNotIn('remote.publish', caught.exception.stderr)
+                    self.assertIn('remote.<redacted>.' + key.rsplit('.', 1)[1], caught.exception.stderr)
+                    config_path = (home / '.gitconfig' if scope == '--global' else
+                                   Path(git(location, 'rev-parse', '--absolute-git-dir').stdout.strip()) /
+                                   ('config.worktree' if scope == '--worktree' else 'config'))
+                    self.assertTrue(str(config_path) in caught.exception.stderr or
+                                    (scope == '--local' and 'file:.git/config' in caught.exception.stderr))
                     self.assertNotEqual(git(publish, 'rev-parse', '--verify', 'master', check=False).returncode, 0)
                     self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
                     git(location, 'config', scope, '--unset', key)

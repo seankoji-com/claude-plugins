@@ -109,7 +109,7 @@ All three commands show you the full roster and wait for a yes before anything i
   GitHub repository. Per-clone exact HTTPS identity mappings neutralize common shorter global SSH
   rewrites without editing global settings. Any remaining destination rewrite or
   push URL override is refused because this cache uses headless HTTPS authentication.
-  Refusals report the configuration key class and source file, with URL bases/values
+  Destination and remote refspec/mirror refusals report the configuration key class and source file, with URL bases/values
   redacted so credentials cannot leak. The literal HTTPS clone transport is validated
   before cloning; authenticated hosts supply Git credentials through `gh` without
   allowing `gh repo clone` to resolve a different repository URL. Clone failures report a safe error category; private

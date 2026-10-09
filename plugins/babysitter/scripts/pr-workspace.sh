@@ -55,6 +55,29 @@ die() {
 
 note() { echo "pr-workspace.sh: $1" >&2; }
 
+# Print configuration provenance without remote names, URL bases, or values.
+report_policy_settings() {
+  local location="$1" pattern="$2" scope key
+  local -a context
+  if [ -e "$location/.git" ]; then
+    context=(-C "$location")
+  else
+    context=(--git-dir="$location/.git")
+  fi
+  git "${context[@]}" config --null --show-origin --name-only --get-regexp "$pattern" |
+    while IFS= read -r -d '' scope && IFS= read -r -d '' key; do
+      case "$key" in
+      url.*.insteadof) key='url.<redacted-base>.insteadof' ;;
+      url.*.pushinsteadof) key='url.<redacted-base>.pushinsteadof' ;;
+      remote.origin.pushurl) : ;;
+      remote.*.push) key='remote.<redacted>.push' ;;
+      remote.*.mirror) key='remote.<redacted>.mirror' ;;
+      *) continue ;;
+      esac
+      printf 'pr-workspace.sh: inspect %s in %s (values redacted)\n' "$key" "$scope" >&2
+    done || true
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
   --repo)
@@ -229,8 +252,10 @@ fi
 #      `upstream` is unsafe when another worktree tracks the default branch.
 #      `nothing` refuses every implicit push, regardless of upstream names or
 #      remotes; callers must use the explicit HEAD:<head> push documented above.
-git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null ||
+if ! git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null; then
+  report_policy_settings "$CLONE" '^remote\..*\.(push|mirror)$'
   die "cannot configure HTTPS origin in ${CLONE}" 3
+fi
 
 # Exact per-clone identity mappings neutralize common inherited shorter SSH
 # rewrites without editing global configuration. The resolved push URL below
@@ -254,24 +279,17 @@ fi
 # Refuse inherited or reused settings rather than silently changing their meaning.
 verify_push_policy() {
   local location="$1" status mirror destination fetch_destination
-  destination=$(git -C "$location" remote get-url --push --all origin 2>/dev/null) ||
+  if ! destination=$(git -C "$location" remote get-url --push --all origin 2>/dev/null); then
+    report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
     die "cannot inspect origin push destination" 3
-  fetch_destination=$(git -C "$location" remote get-url --all origin 2>/dev/null) ||
+  fi
+  if ! fetch_destination=$(git -C "$location" remote get-url --all origin 2>/dev/null); then
+    report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
     die "cannot inspect origin fetch destination" 3
+  fi
   if [ "$destination" != "https://github.com/${REPO}.git" ] ||
     [ "$fetch_destination" != "https://github.com/${REPO}.git" ]; then
-    # Names can contain credentials in a URL base. Report only key classes/scopes.
-    git -C "$location" config --null --show-origin --name-only --get-regexp \
-      '^(url\..*\.(insteadof|pushinsteadof)|remote\.origin\.pushurl)$' |
-      while IFS= read -r -d '' scope && IFS= read -r -d '' key; do
-        case "$key" in
-        url.*.insteadof) key='url.<redacted-base>.insteadof' ;;
-        url.*.pushinsteadof) key='url.<redacted-base>.pushinsteadof' ;;
-        remote.origin.pushurl) : ;;
-        *) continue ;;
-        esac
-        printf 'pr-workspace.sh: inspect %s in %s (URL values redacted)\n' "$key" "$scope" >&2
-      done || true
+    report_policy_settings "$location" '^(url\..*\.(insteadof|pushinsteadof)|remote\.origin\.pushurl)$'
     die "origin push destination differs from required HTTPS repository; scope SSH/URL rewrites outside this cache or remove its pushurl override" 3
   fi
   local keys key
@@ -286,11 +304,17 @@ verify_push_policy() {
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     case "$key" in
-    *.push) die "configured remote push refspec bypasses safe push policy" 3 ;;
+    *.push)
+      report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
+      die "configured remote push refspec bypasses safe push policy" 3 ;;
     *.mirror)
       if mirror=$(git -C "$location" config --bool "$key" 2>/dev/null); then
-        [ "$mirror" != true ] || die "remote mirror mode bypasses safe push policy" 3
+        if [ "$mirror" = true ]; then
+          report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
+          die "remote mirror mode bypasses safe push policy" 3
+        fi
       else
+        report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
         die "cannot inspect remote mirror mode" 3
       fi ;;
     esac
