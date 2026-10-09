@@ -100,12 +100,16 @@ emit_contract() {
 stop_codex_broker() {
   [ -n "$SNAPSHOT" ] || return 0
   command -v pgrep >/dev/null 2>&1 || return 0
-  local pid args pidfile dir i
-  for pid in $(pgrep -f -- "app-server-broker\.mjs serve .*--cwd ${SNAPSHOT}( |\$)" 2>/dev/null); do
+  local pid args pidfile dir tries
+  # Prefilter with a constant pattern, then compare --cwd as a fixed string: the snapshot
+  # path comes from $TMPDIR and may hold regex metacharacters.
+  for pid in $(pgrep -f -- 'app-server-broker\.mjs serve' 2>/dev/null); do
     args="$(ps -o args= -p "$pid" 2>/dev/null)" || continue
+    case "$args " in *" --cwd ${SNAPSHOT} "*) ;; *) continue ;; esac
     pidfile="$(printf '%s' "$args" | sed -n 's/.*--pid-file \([^ ]*\).*/\1/p')"
     kill -TERM "$pid" 2>/dev/null || continue
-    for i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+    tries=0
+    while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 10 ]; do sleep 0.2; tries=$((tries + 1)); done
     kill -KILL "$pid" 2>/dev/null || true
     dir="$(dirname "$pidfile")"
     case "$(basename "$dir")" in cxc-*) [ -n "$pidfile" ] && rm -rf "$dir" ;; esac

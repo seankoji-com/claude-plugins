@@ -3,6 +3,8 @@
 import json
 import os
 from pathlib import Path
+import shlex
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -57,8 +59,8 @@ class CodexReviewContractTest(unittest.TestCase):
         definitions = SCRIPT.read_text().split('\nwhile [ "$#" -gt 0 ]; do', 1)[0]
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
-            snapshot = tmp / "run/repo"
-            other = tmp / "run/repo2"
+            snapshot = tmp / "run [1]+(x)/repo"
+            other = tmp / "run [1]+(x)/repo2"
             procs = {}
             for name, cwd in (("mine", snapshot), ("other", other)):
                 session = tmp / f"cxc-{name}"
@@ -67,11 +69,11 @@ class CodexReviewContractTest(unittest.TestCase):
                 procs[name] = (session, subprocess.Popen([
                     "sh", "-c", "sleep 30", "app-server-broker.mjs", "serve", "--endpoint",
                     f"unix:{session}/broker.sock", "--cwd", str(cwd), "--pid-file", f"{session}/broker.pid",
-                ]))
+                ], start_new_session=True))
             try:
                 subprocess.run(
                     ["bash"],
-                    input=definitions + f'\nTMP_ROOT=""\nSNAPSHOT={snapshot}\ncleanup\n',
+                    input=definitions + f'\nTMP_ROOT=""\nSNAPSHOT={shlex.quote(str(snapshot))}\ncleanup\n',
                     text=True, check=True, capture_output=True,
                 )
                 self.assertIsNotNone(procs["mine"][1].wait(timeout=5))
@@ -80,7 +82,10 @@ class CodexReviewContractTest(unittest.TestCase):
                 self.assertTrue(procs["other"][0].exists())
             finally:
                 for _, proc in procs.values():
-                    proc.kill()
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                     proc.wait()
 
 
