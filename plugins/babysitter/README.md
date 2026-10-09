@@ -102,7 +102,9 @@ All three commands show you the full roster and wait for a yes before anything i
 - `push.default=simple` is set on the clone. A bare push refuses local/upstream
   branch-name mismatches, including a feature branch accidentally tracking the default
   branch. Babysitter branches use the explicit `git push origin HEAD:<head-ref>` above.
-  Matching-name tracked branches can still use a bare push.
+  The clone default and each babysitter branch push remote are pinned to `origin`,
+  so a different push remote cannot bypass that refusal. Matching-name tracked
+  branches can still use a bare push.
 
 ## Pre-push review
 

@@ -56,10 +56,17 @@ class PushPolicyTest(unittest.TestCase):
 
             worktree = initialize()
             clone = root / 'cache/repos/test__repo'
+            publish = root / 'publish.git'
+            git(root, 'init', '--bare', '--initial-branch=master', str(publish))
+            git(clone, 'remote', 'add', 'publish', str(publish))
+            git(root, 'config', '--global', 'remote.pushDefault', 'publish')
+            git(clone, 'config', 'branch.babysitter/pr-1.pushRemote', 'publish')
             git(clone, 'config', 'push.default', 'upstream')
             initialize()  # Existing unsafe settings must be repaired on reuse.
             self.assertEqual(git(clone, 'config', 'push.default').stdout.strip(), 'simple')
             self.assertNotEqual(git(worktree, 'push', check=False).returncode, 0)
+            self.assertNotEqual(git(publish, 'rev-parse', '--verify',
+                                    'refs/heads/babysitter/pr-1', check=False).returncode, 0)
             master = git(remote, 'rev-parse', 'master').stdout.strip()
             git(worktree, 'config', 'user.email', 'test@example.invalid')
             git(worktree, 'config', 'user.name', 'Test')

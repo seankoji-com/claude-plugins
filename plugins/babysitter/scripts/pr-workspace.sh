@@ -203,6 +203,8 @@ fi
 
 git -C "$CLONE" config --local push.default simple ||
   die "cannot configure safe push policy in ${CLONE}" 3
+git -C "$CLONE" config --local remote.pushDefault origin ||
+  die "cannot configure push remote in ${CLONE}" 3
 
 git -C "$CLONE" fetch --prune --quiet origin ||
   die "fetch failed in ${CLONE}" 3
@@ -212,6 +214,10 @@ git -C "$CLONE" rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" >/dev
 
 # ---- worktree ----------------------------------------------------------------
 LOCAL_BRANCH="babysitter/pr-${PR_NUMBER}"
+# Simple checks upstream-name mismatches only when push and fetch remotes match.
+# Repair both selectors; a stale branch pushRemote overrides remote.pushDefault.
+git -C "$CLONE" config --local "branch.${LOCAL_BRANCH}.pushRemote" origin ||
+  die "cannot configure push remote for ${LOCAL_BRANCH}" 3
 
 if [ -d "$WORKTREE/.git" ] || [ -f "$WORKTREE/.git" ]; then
   # Reuse. Never discard work: if a previous agent left changes behind, say so and
@@ -231,5 +237,9 @@ else
     die "could not create worktree for ${REPO}#${PR_NUMBER}" 3
   note "created ${WORKTREE} on ${LOCAL_BRANCH} (tracking origin/${BRANCH})"
 fi
+
+[ "$(git -C "$WORKTREE" config --get remote.pushDefault)" = origin ] &&
+  [ "$(git -C "$WORKTREE" config --get "branch.${LOCAL_BRANCH}.pushRemote")" = origin ] ||
+  die "effective push remote is not origin for ${LOCAL_BRANCH}" 3
 
 echo "$WORKTREE"
