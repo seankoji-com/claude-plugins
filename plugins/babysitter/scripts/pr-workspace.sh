@@ -12,8 +12,7 @@
 # The PR's head branch is deliberately NOT checked out under its own name. The
 # worktree gets a local branch `babysitter/pr-<N>` pointing at origin/<head>, and
 # pushes go through `git push origin HEAD:<head>`. That keeps the same branch usable
-# from several worktrees and makes an accidental push to the wrong ref impossible to
-# write by habit.
+# from several worktrees without relying on implicit upstream selection.
 #
 # Usage:
 #   pr-workspace.sh --repo <owner/name> --pr <N> --branch <head-ref> [--root <dir>]
@@ -188,7 +187,9 @@ fi
 #      ref. The local branch here is deliberately `babysitter/pr-<N>`, so under that
 #      setting a bare `git push` silently creates a stray remote branch instead of
 #      updating the PR — worse than an error, because nothing says it went wrong.
-#      `upstream` can only push to the ref the branch tracks, which is the PR head.
+#      `upstream` is unsafe when another worktree tracks the default branch.
+#      `simple` refuses mismatched local/upstream names; callers must use the
+#      explicit HEAD:<head> push documented above for babysitter branches.
 git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null || true
 
 # Only when gh can actually serve credentials: clearing the chain and pointing it at a
@@ -200,7 +201,8 @@ if [ "$GH_READY" = "1" ]; then
   git -C "$CLONE" config --local --add credential.helper "!gh auth git-credential" 2>/dev/null || true
 fi
 
-git -C "$CLONE" config --local push.default upstream 2>/dev/null || true
+git -C "$CLONE" config --local push.default simple ||
+  die "cannot configure safe push policy in ${CLONE}" 3
 
 git -C "$CLONE" fetch --prune --quiet origin ||
   die "fetch failed in ${CLONE}" 3
