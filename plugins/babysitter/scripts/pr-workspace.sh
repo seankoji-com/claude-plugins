@@ -12,8 +12,7 @@
 # The PR's head branch is deliberately NOT checked out under its own name. The
 # worktree gets a local branch `babysitter/pr-<N>` pointing at origin/<head>, and
 # pushes go through `git push origin HEAD:<head>`. That keeps the same branch usable
-# from several worktrees and makes an accidental push to the wrong ref impossible to
-# write by habit.
+# from several worktrees without relying on implicit upstream selection.
 #
 # Usage:
 #   pr-workspace.sh --repo <owner/name> --pr <N> --branch <head-ref> [--root <dir>]
@@ -55,6 +54,43 @@ die() {
 }
 
 note() { echo "pr-workspace.sh: $1" >&2; }
+
+# Print configuration provenance without remote names, URL bases, or values.
+report_policy_settings() {
+  local location="$1" pattern="$2" scope key
+  local -a context
+  if [ -e "$location/.git" ]; then
+    context=(-C "$location")
+  else
+    context=(--git-dir="$location/.git")
+  fi
+  git "${context[@]}" config --null --show-origin --name-only --get-regexp "$pattern" |
+    while IFS= read -r -d '' scope && IFS= read -r -d '' key; do
+      case "$key" in
+      url.*.insteadof) key='url.<redacted-base>.insteadof' ;;
+      url.*.pushinsteadof) key='url.<redacted-base>.pushinsteadof' ;;
+      remote.origin.pushurl | remote.origin.vcs) : ;;
+      remote.*.push) key='remote.<redacted>.push' ;;
+      remote.*.mirror) key='remote.<redacted>.mirror' ;;
+      *) continue ;;
+      esac
+      printf 'pr-workspace.sh: inspect %s in %s (values redacted)\n' "$key" "$scope" >&2
+    done || true
+}
+
+# A custom remote helper bypasses HTTPS even when get-url reports HTTPS.
+verify_origin_transport() {
+  local location="$1" status
+  local -a context
+  if [ -e "$location/.git" ]; then context=(-C "$location"); else context=(--git-dir="$location/.git"); fi
+  if git "${context[@]}" config --get-regexp '^remote\.origin\.vcs$' >/dev/null; then
+    report_policy_settings "$location" '^remote\.origin\.vcs$'
+    die "custom origin transport helper bypasses required HTTPS transport" 3
+  else
+    status=$?
+    [ "$status" = 1 ] || die "cannot inspect origin transport helper" 3
+  fi
+}
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -134,35 +170,83 @@ mkdir -p "${ROOT}/repos" "${ROOT}/worktrees" || die "cannot create ${ROOT}" 3
 GH_READY=0
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
   GH_READY=1
+else
+  note "HTTPS-only cache: run gh auth login or configure a working HTTPS credential helper; SSH keys alone cannot authenticate this cache"
 fi
+verify_origin_transport "$CLONE"
 
 if [ ! -d "$CLONE/.git" ]; then
+  if [ -e "$CLONE" ] || [ -L "$CLONE" ]; then
+    die "cache path exists without a Git clone; preserve it and choose another root or reconcile it privately" 3
+  fi
   note "cloning ${REPO} (first PR seen in this repo)"
-  # gh inherits the user's existing GitHub auth, which a bare `git clone` of a
-  # private repo would not. Fall back to git for a host without gh configured.
+  # Use gh's headless credential helper when authenticated, while keeping Git's
+  # literal validated HTTPS URL. Otherwise retain the host's existing Git helpers.
   #
   # Retried once, because a clone here fails transiently more often than it fails
   # for real: a large repo has been observed stalling for minutes against an
   # ESTABLISHED connection and then dying, where an immediate bare retry succeeded.
-  # A partial clone directory left by the first attempt would make the second one
-  # fail on a non-empty target, so it goes first.
-  clone_once() {
-    if [ "$GH_READY" = "1" ]; then
-      gh repo clone "$REPO" "$CLONE" -- --quiet >/dev/null 2>&1
-    else
-      git clone --quiet "https://github.com/${REPO}.git" "$CLONE"
+  # Retry only when Git removed its failed target. Never delete a cache collision
+  # or a remaining partial clone; preserve it for private inspection.
+  clone_diagnostics=$(mktemp "${TMPDIR:-/tmp}/babysitter-clone-error.XXXXXX") ||
+    die "cannot create private clone diagnostics" 3
+  trap 'rm -f "$clone_diagnostics"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  # ls-remote --get-url performs no transport. Use the future clone Git directory
+  # and the same exact identity maps that clone --config installs before fetching.
+  initial_transport=$(git --git-dir="$CLONE/.git" \
+    -c "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
+    -c "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" \
+    ls-remote --get-url "https://github.com/${REPO}.git" 2>/dev/null) ||
+    die "cannot inspect initial clone transport; inspect inherited Git configuration privately" 3
+  [ "$initial_transport" = "https://github.com/${REPO}.git" ] ||
+    die "initial clone transport differs from required HTTPS repository; inspect inherited URL rewrites privately" 3
+  report_clone_failure() {
+    local category=unclassified
+    if grep -Eiq 'Authentication failed|could not read Username|Permission denied.*publickey|publickey' "$clone_diagnostics"; then
+      category=authentication
+    elif grep -Eiq 'repository .*not found|Repository not found' "$clone_diagnostics"; then
+      category=repository-not-found
+    elif grep -Eiq 'certificate|SSL|TLS' "$clone_diagnostics"; then
+      category=TLS
+    elif grep -Eiq 'Could not resolve|unable to access|Connection|proxy|timed out' "$clone_diagnostics"; then
+      category=network
+    elif grep -Eiq 'Permission denied|cannot create|could not create' "$clone_diagnostics"; then
+      category=filesystem
+    elif grep -Eiq 'config|rewrite|protocol|bad boolean' "$clone_diagnostics"; then
+      category=configuration
     fi
+    # Raw errors may contain credential-bearing URLs, even in config-key names.
+    note "clone failure category=${category}; diagnostic contents redacted"
   }
+  clone_once() {
+    local -a credential_options=()
+    if [ "$GH_READY" = "1" ]; then
+      # Keep Git's literal validated URL; gh repo clone may canonicalize aliases.
+      credential_options=(-c credential.helper= -c 'credential.helper=!gh auth git-credential')
+    fi
+    git ${credential_options[@]+"${credential_options[@]}"} clone --quiet \
+      --config "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
+      --config "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" \
+      "https://github.com/${REPO}.git" "$CLONE" 2>"$clone_diagnostics"
+  }
+
   if ! clone_once; then
+    if [ -e "$CLONE" ] || [ -L "$CLONE" ]; then
+      report_clone_failure
+      die "failed clone path remains; preserved for private inspection instead of retrying" 3
+    fi
     note "clone of ${REPO} failed — retrying once"
-    rm -rf "$CLONE"
     clone_once || {
+      report_clone_failure
       if [ "$GH_READY" = "1" ]; then
         die "clone of ${REPO} failed twice" 3
       fi
       die "clone of ${REPO} failed twice (and gh is unavailable for authenticated clone)" 3
     }
   fi
+  rm -f "$clone_diagnostics"
 fi
 
 # ---- make this clone pushable ------------------------------------------------
@@ -188,8 +272,22 @@ fi
 #      ref. The local branch here is deliberately `babysitter/pr-<N>`, so under that
 #      setting a bare `git push` silently creates a stray remote branch instead of
 #      updating the PR — worse than an error, because nothing says it went wrong.
-#      `upstream` can only push to the ref the branch tracks, which is the PR head.
-git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null || true
+#      `upstream` is unsafe when another worktree tracks the default branch.
+#      `nothing` refuses every implicit push, regardless of upstream names or
+#      remotes; callers must use the explicit HEAD:<head> push documented above.
+if ! git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null; then
+  report_policy_settings "$CLONE" '^remote\..*\.(push|mirror)$'
+  die "cannot configure HTTPS origin in ${CLONE}" 3
+fi
+
+# Exact per-clone identity mappings neutralize common inherited shorter SSH
+# rewrites without editing global configuration. The resolved push URL below
+# remains authoritative and refuses ambiguous exact rewrites/pushurl overrides.
+for rewrite in insteadOf pushInsteadOf; do
+  git -C "$CLONE" config --local --replace-all \
+    "url.https://github.com/${REPO}.git.${rewrite}" "https://github.com/${REPO}.git" ||
+    die "cannot scope HTTPS transport to this clone" 3
+done
 
 # Only when gh can actually serve credentials: clearing the chain and pointing it at a
 # gh that is not authenticated would replace a helper that might work with one that
@@ -200,7 +298,67 @@ if [ "$GH_READY" = "1" ]; then
   git -C "$CLONE" config --local --add credential.helper "!gh auth git-credential" 2>/dev/null || true
 fi
 
-git -C "$CLONE" config --local push.default upstream 2>/dev/null || true
+# Remote push refspecs and mirror mode take precedence over push.default.
+# Refuse inherited or reused settings rather than silently changing their meaning.
+verify_push_policy() {
+  local location="$1" status mirror destination fetch_destination
+  verify_origin_transport "$location"
+  if ! destination=$(git -C "$location" remote get-url --push --all origin 2>/dev/null); then
+    report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
+    die "cannot inspect origin push destination" 3
+  fi
+  if ! fetch_destination=$(git -C "$location" remote get-url --all origin 2>/dev/null); then
+    report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
+    die "cannot inspect origin fetch destination" 3
+  fi
+  if [ "$destination" != "https://github.com/${REPO}.git" ] ||
+    [ "$fetch_destination" != "https://github.com/${REPO}.git" ]; then
+    report_policy_settings "$location" '^(url\..*\.(insteadof|pushinsteadof)|remote\.origin\.pushurl)$'
+    die "origin push destination differs from required HTTPS repository; scope SSH/URL rewrites outside this cache or remove its pushurl override" 3
+  fi
+  local keys key
+  if keys=$(git -C "$location" config --name-only --get-regexp '^remote\..*\.(push|mirror)$'); then
+    :
+  else
+    status=$?
+    [ "$status" = 1 ] || die "cannot inspect remote push configuration" 3
+  fi
+  # Remote names can themselves contain sensitive text. Never log names or values.
+  # Read all effective configured remotes, including alternate branch push remotes.
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    case "$key" in
+    *.push)
+      report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
+      die "configured remote push refspec bypasses safe push policy" 3 ;;
+    *.mirror)
+      if mirror=$(git -C "$location" config --bool "$key" 2>/dev/null); then
+        if [ "$mirror" = true ]; then
+          report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
+          die "remote mirror mode bypasses safe push policy" 3
+        fi
+      else
+        report_policy_settings "$location" '^remote\..*\.(push|mirror)$'
+        die "cannot inspect remote mirror mode" 3
+      fi ;;
+    esac
+  done <<< "$keys"
+
+}
+verify_common_push_policy() {
+  local location="$1"
+  [ "$(git -C "$location" config --get push.default)" = nothing ] &&
+    [ "$(git -C "$location" config --get remote.pushDefault)" = origin ] ||
+    die "effective common safe push policy is not enforced" 3
+}
+
+verify_push_policy "$CLONE"
+
+git -C "$CLONE" config --local push.default nothing ||
+  die "cannot configure safe push policy in ${CLONE}" 3
+git -C "$CLONE" config --local remote.pushDefault origin ||
+  die "cannot configure push remote in ${CLONE}" 3
+verify_common_push_policy "$CLONE"
 
 git -C "$CLONE" fetch --prune --quiet origin ||
   die "fetch failed in ${CLONE}" 3
@@ -210,8 +368,22 @@ git -C "$CLONE" rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" >/dev
 
 # ---- worktree ----------------------------------------------------------------
 LOCAL_BRANCH="babysitter/pr-${PR_NUMBER}"
+# Keep push selection predictable too; a stale branch pushRemote overrides
+# remote.pushDefault. Explicit origin HEAD:<head> remains the supported push.
+git -C "$CLONE" config --local "branch.${LOCAL_BRANCH}.pushRemote" origin ||
+  die "cannot configure push remote for ${LOCAL_BRANCH}" 3
+
+verify_worktree_policy() {
+  local location="$1"
+  verify_push_policy "$location"
+  verify_common_push_policy "$location"
+  [ "$(git -C "$location" config --get "branch.${LOCAL_BRANCH}.pushRemote")" = origin ] ||
+    die "effective safe push policy is not enforced for ${LOCAL_BRANCH}" 3
+}
 
 if [ -d "$WORKTREE/.git" ] || [ -f "$WORKTREE/.git" ]; then
+  # Validate worktree overrides before even fetching from inherited destinations.
+  verify_worktree_policy "$WORKTREE"
   # Reuse. Never discard work: if a previous agent left changes behind, say so and
   # let the caller decide rather than resetting over them.
   if [ -n "$(git -C "$WORKTREE" status --porcelain 2>/dev/null)" ]; then
@@ -229,5 +401,7 @@ else
     die "could not create worktree for ${REPO}#${PR_NUMBER}" 3
   note "created ${WORKTREE} on ${LOCAL_BRANCH} (tracking origin/${BRANCH})"
 fi
+
+verify_worktree_policy "$WORKTREE"
 
 echo "$WORKTREE"
