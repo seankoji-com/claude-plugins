@@ -3,7 +3,10 @@
 import json
 import os
 from pathlib import Path
+import shlex
+import signal
 import subprocess
+import tempfile
 import unittest
 
 
@@ -48,6 +51,42 @@ class CodexReviewContractTest(unittest.TestCase):
         contract = json.loads(result.stdout)
         self.assertEqual(contract["status"], "skip")
         self.assertIsNone(contract["provider"])
+
+
+    def test_cleanup_stops_only_the_snapshot_broker(self):
+        # Fake brokers carry the argv shape codex-companion spawns; only the one whose
+        # --cwd is exactly the snapshot (and its cxc-* dir) may go.
+        definitions = SCRIPT.read_text().split('\nwhile [ "$#" -gt 0 ]; do', 1)[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            snapshot = tmp / "run [1]+(x)/repo"
+            other = tmp / "run [1]+(x)/repo2"
+            procs = {}
+            for name, cwd in (("mine", snapshot), ("other", other)):
+                session = tmp / f"cxc-{name}"
+                session.mkdir()
+                (session / "broker.pid").write_text("")
+                procs[name] = (session, subprocess.Popen([
+                    "sh", "-c", "sleep 30", "app-server-broker.mjs", "serve", "--endpoint",
+                    f"unix:{session}/broker.sock", "--cwd", str(cwd), "--pid-file", f"{session}/broker.pid",
+                ], start_new_session=True))
+            try:
+                subprocess.run(
+                    ["bash"],
+                    input=definitions + f'\nTMP_ROOT=""\nSNAPSHOT={shlex.quote(str(snapshot))}\ncleanup\n',
+                    text=True, check=True, capture_output=True,
+                )
+                self.assertIsNotNone(procs["mine"][1].wait(timeout=5))
+                self.assertFalse(procs["mine"][0].exists())
+                self.assertIsNone(procs["other"][1].poll())
+                self.assertTrue(procs["other"][0].exists())
+            finally:
+                for _, proc in procs.values():
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    proc.wait()
 
 
 if __name__ == "__main__":

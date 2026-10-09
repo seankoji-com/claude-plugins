@@ -54,6 +54,7 @@ REASON="unknown"
 EMITTED=0
 REVIEW_PID=""
 TMP_ROOT=""
+SNAPSHOT=""
 START_NS="$(date +%s000000000 2>/dev/null || echo 0)"
 
 log() { printf '%s\n' "$*" >&2; }
@@ -92,7 +93,33 @@ emit_contract() {
     '{status:$status, verdict:(if $verdict == "" then null else $verdict end), findings:$findings, model:(if $model == "" then null else $model end), provider:(if $status == "skip" then null else $provider end), session_id:(if $session_id == "" then null else $session_id end), duration_ms:$duration_ms, cost_usd:$cost_usd, reason:(if $reason == "" then null else $reason end)}' >&3
 }
 
-cleanup() { [ -z "$TMP_ROOT" ] || rm -rf "$TMP_ROOT"; }
+# codex-companion starts a detached app-server broker (and its `codex app-server`) keyed by
+# the --cwd it is given. Our snapshot cwd is unique and deleted below, so nothing else ever
+# reaps that broker — it would outlive this script and leak inotify instances and a process
+# pair per review. Stop it by its unique snapshot path, then drop its /tmp/cxc-* socket dir.
+stop_codex_broker() {
+  [ -n "$SNAPSHOT" ] || return 0
+  command -v pgrep >/dev/null 2>&1 || return 0
+  local pid args pidfile dir tries
+  # Prefilter with a constant pattern, then compare --cwd as a fixed string: the snapshot
+  # path comes from $TMPDIR and may hold regex metacharacters.
+  for pid in $(pgrep -f -- 'app-server-broker\.mjs serve' 2>/dev/null); do
+    args="$(ps -o args= -p "$pid" 2>/dev/null)" || continue
+    case "$args " in *" --cwd ${SNAPSHOT} "*) ;; *) continue ;; esac
+    pidfile="$(printf '%s' "$args" | sed -n 's/.*--pid-file \([^ ]*\).*/\1/p')"
+    kill -TERM "$pid" 2>/dev/null || continue
+    tries=0
+    while kill -0 "$pid" 2>/dev/null && [ "$tries" -lt 10 ]; do sleep 0.2; tries=$((tries + 1)); done
+    kill -KILL "$pid" 2>/dev/null || true
+    dir="$(dirname "$pidfile")"
+    case "$(basename "$dir")" in cxc-*) [ -n "$pidfile" ] && rm -rf "$dir" ;; esac
+  done
+}
+
+cleanup() {
+  stop_codex_broker
+  [ -z "$TMP_ROOT" ] || rm -rf "$TMP_ROOT"
+}
 on_exit() { cleanup; emit_contract; }
 trap on_exit EXIT
 trap '[ -z "$REVIEW_PID" ] || kill -TERM "$REVIEW_PID" 2>/dev/null; exit 129' HUP
