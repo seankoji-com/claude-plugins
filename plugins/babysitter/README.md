@@ -99,13 +99,12 @@ All three commands show you the full roster and wait for a yes before anything i
   never by overwriting.
 - The worktree checks out a local branch named `babysitter/pr-<N>`, not the PR's branch
   name, so a reflexive `git push origin <branch>` cannot target the wrong ref.
-- `push.default=simple` is set on the clone. A bare push refuses local/upstream
-  branch-name mismatches, including a feature branch accidentally tracking the default
-  branch. Babysitter branches use the explicit `git push origin HEAD:<head-ref>` above.
-  The clone default and each babysitter branch push remote are pinned to `origin`,
-  so a different push remote cannot bypass that refusal. Matching-name tracked
-  branches can still use a bare push. Configured origin push refspecs or mirror
-  mode stop initialization because they bypass `push.default`.
+- `push.default=nothing` is set on the clone and verified in the worktree's effective
+  configuration. Every implicit push is refused, regardless of upstream branch names
+  or remotes. Use the explicit `git push origin HEAD:<head-ref>` above.
+  The clone default and each babysitter branch push remote are pinned to `origin`.
+  Configured origin push refspecs or mirror mode stop initialization because they
+  bypass `push.default`.
 
 ## Pre-push review
 
@@ -196,7 +195,7 @@ racing on one clone corrupt its index.
 
 Each run also (re)applies three settings to the clone, so an existing one gets repaired
 rather than staying broken: `origin` forced to an HTTPS URL, `credential.helper` reset
-to just `gh`, and `push.default=simple`. All three exist because of push failures that
+to just `gh`, and `push.default=nothing`. All three exist because of push failures that
 looked like three unrelated problems — an ssh-agent refusing to sign, "could not read
 Username ... Device not configured", a stray remote branch — and were one clone's config
 each time. Fixing it on the clone fixes every PR in that repository at once.
@@ -260,7 +259,7 @@ notes are usually the ones that should become plugin changes rather than run-tim
 | --- | --- |
 | `list-prs.sh` | The only GitHub reader. `--org X`, `--repo X`, or `--repo X --pr N`. One GraphQL call (retried twice on failure — an org-wide query draws a 504 often enough to be routine), one JSON object per line, open PRs only. Exit 2 bad arguments, 3 query failed. Warns on stderr when a sweep is truncated by `--limit` (GitHub caps a search page at 100 and it does not paginate). |
 | `pr-events.sh` | Monitor event stream. Forwards unknown flags to `list-prs.sh` so the watch and the sweep can never disagree about scope. |
-| `pr-workspace.sh` | Cache clone + per-PR worktree. Also makes the clone pushable on every run: `origin` forced to HTTPS, credential helper pinned to `gh`, `push.default=simple`. Prints the path on stdout, progress on stderr. Exit 3 git failure, 4 dirty worktree left alone. |
+| `pr-workspace.sh` | Cache clone + per-PR worktree. Also makes the clone pushable on every run: `origin` forced to HTTPS, credential helper pinned to `gh`, `push.default=nothing`. Prints the path on stdout, progress on stderr. Exit 3 git failure, 4 dirty worktree left alone. |
 | `ocr-gate.sh` | Pre-push review, with a no-LLM `ocr delegate` fallback. Prints one summary line. Exit 0 clean/skipped, 1 findings, 2 could not review (or the review was incomplete) and could not be delegated, or skipped under `BABYSITTER_REVIEW_REQUIRED=1`, 3 delegated to the agent. |
 | `merge-pr.sh` | Updates a behind branch and merges with the checked head SHA. Requires complete review state and explicitly resolved threads; a `[babysitter]` comment never resolves a thread. Stops on head changes and unknown API outcomes. Explicit `--resolve-thread ID --verified-head SHA` resolves one verified thread after checking ownership/head, without merging. Eligible blockers may arm GitHub auto-merge with a head precondition at arming time; unresolved/truncated review state and head changes do not. Use `--no-auto` for a flow that must not arm future merges; it rejects an already-armed request. GitHub auto-merge can follow future eligible commits. Exit 0 merged or explicitly resolved, 2 bad arguments, 3 query/transport failed, 4 blocked. |
 | `audit-log.sh` | Shared appender for `~/.claude/audit.jsonl`; identical in every plugin that bundles it. |

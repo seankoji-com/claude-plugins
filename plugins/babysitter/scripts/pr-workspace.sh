@@ -188,8 +188,8 @@ fi
 #      setting a bare `git push` silently creates a stray remote branch instead of
 #      updating the PR — worse than an error, because nothing says it went wrong.
 #      `upstream` is unsafe when another worktree tracks the default branch.
-#      `simple` refuses mismatched local/upstream names; callers must use the
-#      explicit HEAD:<head> push documented above for babysitter branches.
+#      `nothing` refuses every implicit push, regardless of upstream names or
+#      remotes; callers must use the explicit HEAD:<head> push documented above.
 git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null || true
 
 # Only when gh can actually serve credentials: clearing the chain and pointing it at a
@@ -220,7 +220,7 @@ verify_push_policy() {
 }
 verify_push_policy "$CLONE"
 
-git -C "$CLONE" config --local push.default simple ||
+git -C "$CLONE" config --local push.default nothing ||
   die "cannot configure safe push policy in ${CLONE}" 3
 git -C "$CLONE" config --local remote.pushDefault origin ||
   die "cannot configure push remote in ${CLONE}" 3
@@ -233,8 +233,8 @@ git -C "$CLONE" rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" >/dev
 
 # ---- worktree ----------------------------------------------------------------
 LOCAL_BRANCH="babysitter/pr-${PR_NUMBER}"
-# Simple checks upstream-name mismatches only when push and fetch remotes match.
-# Repair both selectors; a stale branch pushRemote overrides remote.pushDefault.
+# Keep push selection predictable too; a stale branch pushRemote overrides
+# remote.pushDefault. Explicit origin HEAD:<head> remains the supported push.
 git -C "$CLONE" config --local "branch.${LOCAL_BRANCH}.pushRemote" origin ||
   die "cannot configure push remote for ${LOCAL_BRANCH}" 3
 
@@ -258,8 +258,9 @@ else
 fi
 
 verify_push_policy "$WORKTREE"
-[ "$(git -C "$WORKTREE" config --get remote.pushDefault)" = origin ] &&
+[ "$(git -C "$WORKTREE" config --get push.default)" = nothing ] &&
+  [ "$(git -C "$WORKTREE" config --get remote.pushDefault)" = origin ] &&
   [ "$(git -C "$WORKTREE" config --get "branch.${LOCAL_BRANCH}.pushRemote")" = origin ] ||
-  die "effective push remote is not origin for ${LOCAL_BRANCH}" 3
+  die "effective safe push policy is not enforced for ${LOCAL_BRANCH}" 3
 
 echo "$WORKTREE"

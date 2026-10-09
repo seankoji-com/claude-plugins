@@ -61,9 +61,12 @@ class PushPolicyTest(unittest.TestCase):
             git(clone, 'remote', 'add', 'publish', str(publish))
             git(root, 'config', '--global', 'remote.pushDefault', 'publish')
             git(clone, 'config', 'branch.babysitter/pr-1.pushRemote', 'publish')
+            git(clone, 'config', 'branch.babysitter/pr-1.remote', '.')
+            git(clone, 'config', 'branch.babysitter/pr-1.merge', 'refs/heads/master')
+            git(root, 'config', '--global', 'branch.autoSetupMerge', 'false')
             git(clone, 'config', 'push.default', 'upstream')
             initialize()  # Existing unsafe settings must be repaired on reuse.
-            self.assertEqual(git(clone, 'config', 'push.default').stdout.strip(), 'simple')
+            self.assertEqual(git(clone, 'config', 'push.default').stdout.strip(), 'nothing')
             self.assertNotEqual(git(worktree, 'push', check=False).returncode, 0)
             self.assertNotEqual(git(publish, 'rev-parse', '--verify',
                                     'refs/heads/babysitter/pr-1', check=False).returncode, 0)
@@ -80,7 +83,8 @@ class PushPolicyTest(unittest.TestCase):
                              git(worktree, 'rev-parse', 'HEAD').stdout)
             git(worktree, 'checkout', '-b', 'feature', '--track', 'origin/feature')
             git(worktree, 'commit', '--allow-empty', '-m', 'matching branch change')
-            git(worktree, 'push')
+            self.assertNotEqual(git(worktree, 'push', check=False).returncode, 0)
+            git(worktree, 'push', 'origin', 'HEAD:refs/heads/feature')
             self.assertEqual(git(remote, 'rev-parse', 'feature').stdout,
                              git(worktree, 'rev-parse', 'HEAD').stdout)
             self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
