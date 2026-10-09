@@ -57,6 +57,19 @@ permissions:
   pull-requests: read
   contents: read
 
+# Coalesce routine CI completions before they enter the serialized writer queue.
+# Seeds, controller signals and fork review resolution retain their own run IDs.
+concurrency:
+  group: >-
+    ${{ github.event_name == 'workflow_run' &&
+    github.event.workflow_run.event != 'pull_request_review' &&
+    github.event.workflow_run.name != 'PR Gatekeeper' &&
+    (github.event.workflow_run.pull_requests[0] != null ||
+    contains(fromJSON('["pull_request", "pull_request_target", "dynamic"]'), github.event.workflow_run.event)) &&
+    format('pr-gatekeeper-refresh-{0}', github.repository) ||
+    format('pr-gatekeeper-event-{0}', github.run_id) }}
+  cancel-in-progress: false
+
 jobs:
   recover-persona:
     # An independent event path; the reusable sends only PR identity to the
@@ -89,11 +102,8 @@ jobs:
     uses: seankoji-com/.github/.github/workflows/reusable-review-event.yml@main
 
   gatekeeper:
-    # Head, merge, and review-event evaluations publish to overlapping commits.
-    # Serialize repository-wide so an older approval cannot overtake a dismissal.
-    # queue:max preserves completion events when several PRs finish together.
-    # Only gate writers enter this queue. Skipped workflow events and independent
-    # recovery/review signals must not occupy the bounded writer queue.
+    # Serialize every head/merge publication. Routine CI arrivals are bounded
+    # above; keep event payloads in this queue until their signals are published.
     concurrency:
       group: pr-gatekeeper-${{ github.repository }}
       cancel-in-progress: false
@@ -119,6 +129,7 @@ jobs:
       head_sha: ${{ github.event.workflow_run.pull_requests[0].head.sha || github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.head_sha }}
       review_run_id: ${{ github.event.workflow_run.event == 'pull_request_review' && format('{0}', github.event.workflow_run.id) || '' }}
       runner-json: '["ubuntu-latest"]'
+      reconcile_open: true
       seed: ${{ github.event_name == 'pull_request_target' }}
       persona_state: ${{ inputs.persona_state || '' }}
       persona_pr: ${{ inputs.persona_pr || '' }}
