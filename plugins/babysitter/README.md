@@ -105,7 +105,11 @@ All three commands show you the full roster and wait for a yes before anything i
   The clone default and each babysitter branch push remote are pinned to `origin`.
   Configured origin push refspecs or mirror mode stop initialization because they
   bypass `push.default`. The resolved push destination must be the expected HTTPS
-  GitHub repository; push URL overrides or rewrites to another destination are refused.
+  GitHub repository. SSH rewrites, including those targeting the same repository,
+  are deliberately refused because this cache uses headless HTTPS authentication.
+  Scope such global rules outside the cache or remove the cache's push URL override.
+  Refusals report the configuration key class and source file, with URL bases/values
+  redacted so credentials cannot leak.
 
 ## Pre-push review
 

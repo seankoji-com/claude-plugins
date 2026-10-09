@@ -109,12 +109,17 @@ class PushPolicyTest(unittest.TestCase):
             for scope, key, value in [
                 ('--local', 'remote.origin.pushurl', str(publish)),
                 ('--global', f'url.{publish}.pushInsteadOf',
-                 'https://github.com/test/repo.git')]:
+                 'https://github.com/test/repo.git'),
+                ('--global', 'url.git@github.com:.insteadOf', 'https://github.com/'),
+                ('--global', 'url.git@github.com:.pushInsteadOf', 'https://github.com/')]:
                 git(clone, 'config', scope, key, value)
                 with self.assertRaises(subprocess.CalledProcessError) as caught:
                     initialize()
                 self.assertEqual(caught.exception.returncode, 3)
                 self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
+                if key.startswith('url.'):
+                    self.assertIn('url.<redacted-base>.', caught.exception.stderr)
+                    self.assertIn(str(home / '.gitconfig'), caught.exception.stderr)
                 git(clone, 'config', scope, '--unset', key)
             for key, value in [('remote.origin.push', 'HEAD:refs/heads/master'),
                                ('remote.origin.mirror', 'true')]:

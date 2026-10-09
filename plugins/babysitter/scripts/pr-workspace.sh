@@ -208,8 +208,21 @@ verify_push_policy() {
   local location="$1" status mirror destination
   destination=$(git -C "$location" remote get-url --push --all origin) ||
     die "cannot inspect origin push destination" 3
-  [ "$destination" = "https://github.com/${REPO}.git" ] ||
-    die "origin push destination differs from expected HTTPS repository; inspect remote.origin.pushurl and URL rewrite settings" 3
+  if [ "$destination" != "https://github.com/${REPO}.git" ]; then
+    # Names can contain credentials in a URL base. Report only key classes/scopes.
+    git -C "$location" config --null --show-origin --name-only --get-regexp \
+      '^(url\..*\.(insteadof|pushinsteadof)|remote\.origin\.pushurl)$' |
+      while IFS= read -r -d '' scope && IFS= read -r -d '' key; do
+        case "$key" in
+        url.*.insteadof) key='url.<redacted-base>.insteadof' ;;
+        url.*.pushinsteadof) key='url.<redacted-base>.pushinsteadof' ;;
+        remote.origin.pushurl) : ;;
+        *) continue ;;
+        esac
+        printf 'pr-workspace.sh: inspect %s in %s (URL values redacted)\n' "$key" "$scope" >&2
+      done || true
+    die "origin push destination differs from required HTTPS repository; scope SSH/URL rewrites outside this cache or remove its pushurl override" 3
+  fi
   if git -C "$location" config --get-all remote.origin.push >/dev/null; then
     die "configured origin push refspec bypasses safe push policy" 3
   else
