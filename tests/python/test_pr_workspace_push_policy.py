@@ -84,3 +84,12 @@ class PushPolicyTest(unittest.TestCase):
             self.assertEqual(git(remote, 'rev-parse', 'feature').stdout,
                              git(worktree, 'rev-parse', 'HEAD').stdout)
             self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
+            for key, value in [('remote.origin.push', 'HEAD:refs/heads/master'),
+                               ('remote.origin.mirror', 'true')]:
+                git(root, 'config', '--global', key, value)
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    initialize()
+                self.assertEqual(caught.exception.returncode, 3)
+                self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
+                git(root, 'config', '--global', '--unset', key)
+

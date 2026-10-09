@@ -201,6 +201,25 @@ if [ "$GH_READY" = "1" ]; then
   git -C "$CLONE" config --local --add credential.helper "!gh auth git-credential" 2>/dev/null || true
 fi
 
+# Remote push refspecs and mirror mode take precedence over push.default.
+# Refuse inherited or reused settings rather than silently changing their meaning.
+verify_push_policy() {
+  local location="$1" status mirror
+  if git -C "$location" config --get-all remote.origin.push >/dev/null; then
+    die "configured origin push refspec bypasses safe push policy" 3
+  else
+    status=$?
+    [ "$status" = 1 ] || die "cannot inspect origin push refspecs" 3
+  fi
+  if mirror=$(git -C "$location" config --bool remote.origin.mirror); then
+    [ "$mirror" != true ] || die "origin mirror mode bypasses safe push policy" 3
+  else
+    status=$?
+    [ "$status" = 1 ] || die "cannot inspect origin mirror mode" 3
+  fi
+}
+verify_push_policy "$CLONE"
+
 git -C "$CLONE" config --local push.default simple ||
   die "cannot configure safe push policy in ${CLONE}" 3
 git -C "$CLONE" config --local remote.pushDefault origin ||
@@ -238,6 +257,7 @@ else
   note "created ${WORKTREE} on ${LOCAL_BRANCH} (tracking origin/${BRANCH})"
 fi
 
+verify_push_policy "$WORKTREE"
 [ "$(git -C "$WORKTREE" config --get remote.pushDefault)" = origin ] &&
   [ "$(git -C "$WORKTREE" config --get "branch.${LOCAL_BRANCH}.pushRemote")" = origin ] ||
   die "effective push remote is not origin for ${LOCAL_BRANCH}" 3

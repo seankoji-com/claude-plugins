@@ -104,7 +104,8 @@ All three commands show you the full roster and wait for a yes before anything i
   branch. Babysitter branches use the explicit `git push origin HEAD:<head-ref>` above.
   The clone default and each babysitter branch push remote are pinned to `origin`,
   so a different push remote cannot bypass that refusal. Matching-name tracked
-  branches can still use a bare push.
+  branches can still use a bare push. Configured origin push refspecs or mirror
+  mode stop initialization because they bypass `push.default`.
 
 ## Pre-push review
 
