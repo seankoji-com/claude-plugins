@@ -30,11 +30,10 @@ repository you do not own.
   `git push origin HEAD:<head-ref>`. Never `git push` bare, never `git checkout
   <head-ref>`, never push to the base branch. The local branch is deliberately named
   something else so a habitual `git push origin <branch>` cannot do the wrong thing.
-  `pr-workspace.sh` also pins `push.default=upstream` in the clone, so a bare push can
-  now only reach the ref this branch tracks — but write the explicit refspec anyway.
-  Under the `current` default a bare push creates a *stray remote branch* named after
-  the local one and reports success, and that is not a failure mode to leave depending
-  on one config line.
+  `pr-workspace.sh` pins `push.default=simple` in the shared clone. A bare push
+  from `babysitter/pr-<N>` is refused because its name differs from the tracked PR
+  branch. The explicit refspec above is the supported push. Never change upstream
+  tracking or `push.default` to make a bare push work.
 - **Never force-push.** The PR branch is published; someone may have pulled it, and
   bot PRs get rewritten out from under you. If a push is rejected as non-fast-forward,
   fetch, merge, re-run the gate, push again. If it is rejected twice, return `blocked`.
