@@ -137,8 +137,8 @@ fi
 
 if [ ! -d "$CLONE/.git" ]; then
   note "cloning ${REPO} (first PR seen in this repo)"
-  # gh inherits the user's existing GitHub auth, which a bare `git clone` of a
-  # private repo would not. Fall back to git for a host without gh configured.
+  # Use gh's headless credential helper when authenticated, while keeping Git's
+  # literal validated HTTPS URL. Otherwise retain the host's existing Git helpers.
   #
   # Retried once, because a clone here fails transiently more often than it fails
   # for real: a large repo has been observed stalling for minutes against an
@@ -178,17 +178,17 @@ if [ ! -d "$CLONE/.git" ]; then
     note "clone failure category=${category}; diagnostic contents redacted"
   }
   clone_once() {
+    local -a credential_options=()
     if [ "$GH_READY" = "1" ]; then
-      gh repo clone "https://github.com/${REPO}.git" "$CLONE" -- --quiet \
-        --config "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
-        --config "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" >/dev/null 2>"$clone_diagnostics"
-    else
-      git clone --quiet \
-        --config "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
-        --config "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" \
-        "https://github.com/${REPO}.git" "$CLONE" 2>"$clone_diagnostics"
+      # Keep Git's literal validated URL; gh repo clone may canonicalize aliases.
+      credential_options=(-c credential.helper= -c 'credential.helper=!gh auth git-credential')
     fi
+    git "${credential_options[@]}" clone --quiet \
+      --config "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
+      --config "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" \
+      "https://github.com/${REPO}.git" "$CLONE" 2>"$clone_diagnostics"
   }
+
   if ! clone_once; then
     note "clone of ${REPO} failed — retrying once"
     rm -rf "$CLONE"
@@ -297,12 +297,20 @@ verify_push_policy() {
   done <<< "$keys"
 
 }
+verify_common_push_policy() {
+  local location="$1"
+  [ "$(git -C "$location" config --get push.default)" = nothing ] &&
+    [ "$(git -C "$location" config --get remote.pushDefault)" = origin ] ||
+    die "effective common safe push policy is not enforced" 3
+}
+
 verify_push_policy "$CLONE"
 
 git -C "$CLONE" config --local push.default nothing ||
   die "cannot configure safe push policy in ${CLONE}" 3
 git -C "$CLONE" config --local remote.pushDefault origin ||
   die "cannot configure push remote in ${CLONE}" 3
+verify_common_push_policy "$CLONE"
 
 git -C "$CLONE" fetch --prune --quiet origin ||
   die "fetch failed in ${CLONE}" 3
@@ -320,9 +328,8 @@ git -C "$CLONE" config --local "branch.${LOCAL_BRANCH}.pushRemote" origin ||
 verify_worktree_policy() {
   local location="$1"
   verify_push_policy "$location"
-  [ "$(git -C "$location" config --get push.default)" = nothing ] &&
-    [ "$(git -C "$location" config --get remote.pushDefault)" = origin ] &&
-    [ "$(git -C "$location" config --get "branch.${LOCAL_BRANCH}.pushRemote")" = origin ] ||
+  verify_common_push_policy "$location"
+  [ "$(git -C "$location" config --get "branch.${LOCAL_BRANCH}.pushRemote")" = origin ] ||
     die "effective safe push policy is not enforced for ${LOCAL_BRANCH}" 3
 }
 

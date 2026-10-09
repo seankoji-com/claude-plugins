@@ -110,8 +110,9 @@ All three commands show you the full roster and wait for a yes before anything i
   rewrites without editing global settings. Any remaining destination rewrite or
   push URL override is refused because this cache uses headless HTTPS authentication.
   Refusals report the configuration key class and source file, with URL bases/values
-  redacted so credentials cannot leak. First-time clone transport is validated
-  before any network access. Clone failures report a safe error category; private
+  redacted so credentials cannot leak. The literal HTTPS clone transport is validated
+  before cloning; authenticated hosts supply Git credentials through `gh` without
+  allowing `gh repo clone` to resolve a different repository URL. Clone failures report a safe error category; private
   temporary stderr capture is deleted on exit, including failure and interruption.
 
 ## Pre-push review

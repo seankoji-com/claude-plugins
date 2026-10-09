@@ -18,7 +18,7 @@ class PushPolicyTest(unittest.TestCase):
             home.mkdir()
             tools = root / 'bin'
             tools.mkdir()
-            (tools / 'gh').write_text('#!/bin/sh\nexit 1\n')
+            (tools / 'gh').write_text('#!/bin/sh\nif [ "${FAKE_GH_AUTH_READY:-0}" = 1 ] && [ "$1 $2" = "auth status" ]; then exit 0; fi\nexit 1\n')
             (tools / 'gh').chmod(0o755)
             env = {**os.environ, 'HOME': str(home),
                    'GIT_CONFIG_GLOBAL': str(home / '.gitconfig'),
@@ -115,6 +115,14 @@ class PushPolicyTest(unittest.TestCase):
                              git(worktree, 'rev-parse', 'HEAD').stdout)
             self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
             git(clone, 'config', 'extensions.worktreeConfig', 'true')
+            for key, value in [('push.default', 'current'), ('remote.pushDefault', 'publish')]:
+                git(clone, 'config', '--worktree', key, value)
+                self.assertEqual(git(worktree, 'config', 'push.default').stdout.strip(), 'nothing')
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    initialize()
+                self.assertEqual(caught.exception.returncode, 3)
+                self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
+                git(clone, 'config', '--worktree', '--unset', key)
             for override in ['upstream', 'current']:
                 git(worktree, 'config', '--worktree', 'push.default', override)
                 with self.assertRaises(subprocess.CalledProcessError) as caught:
@@ -211,3 +219,13 @@ class PushPolicyTest(unittest.TestCase):
             self.assertFalse(marker.exists(), 'unsafe clone transport was attempted')
             self.assertEqual(list(root.glob('babysitter-clone-error.*')), [])
             git(root, 'config', '--global', '--unset', key)
+
+            env['FAKE_GH_AUTH_READY'] = '1'
+            git(root, 'config', '--global', 'url.git@github.com:.insteadOf', 'https://github.com/')
+            authenticated = initialize('authenticated-cache')
+            self.assertTrue(marker.exists())
+            self.assertEqual(git(authenticated, 'remote', 'get-url', 'origin').stdout.strip(),
+                             'https://github.com/test/repo.git')
+            self.assertEqual(git(authenticated, 'config', '--get-all', 'credential.helper').stdout.splitlines(),
+                             ['', '!gh auth git-credential'])
+            self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
