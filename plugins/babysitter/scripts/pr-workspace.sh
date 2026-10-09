@@ -176,6 +176,9 @@ fi
 verify_origin_transport "$CLONE"
 
 if [ ! -d "$CLONE/.git" ]; then
+  if [ -e "$CLONE" ] || [ -L "$CLONE" ]; then
+    die "cache path exists without a Git clone; preserve it and choose another root or reconcile it privately" 3
+  fi
   note "cloning ${REPO} (first PR seen in this repo)"
   # Use gh's headless credential helper when authenticated, while keeping Git's
   # literal validated HTTPS URL. Otherwise retain the host's existing Git helpers.
@@ -183,8 +186,8 @@ if [ ! -d "$CLONE/.git" ]; then
   # Retried once, because a clone here fails transiently more often than it fails
   # for real: a large repo has been observed stalling for minutes against an
   # ESTABLISHED connection and then dying, where an immediate bare retry succeeded.
-  # A partial clone directory left by the first attempt would make the second one
-  # fail on a non-empty target, so it goes first.
+  # Retry only when Git removed its failed target. Never delete a cache collision
+  # or a remaining partial clone; preserve it for private inspection.
   clone_diagnostics=$(mktemp "${TMPDIR:-/tmp}/babysitter-clone-error.XXXXXX") ||
     die "cannot create private clone diagnostics" 3
   trap 'rm -f "$clone_diagnostics"' EXIT
@@ -230,8 +233,11 @@ if [ ! -d "$CLONE/.git" ]; then
   }
 
   if ! clone_once; then
+    if [ -e "$CLONE" ] || [ -L "$CLONE" ]; then
+      report_clone_failure
+      die "failed clone path remains; preserved for private inspection instead of retrying" 3
+    fi
     note "clone of ${REPO} failed — retrying once"
-    rm -rf "$CLONE"
     clone_once || {
       report_clone_failure
       if [ "$GH_READY" = "1" ]; then

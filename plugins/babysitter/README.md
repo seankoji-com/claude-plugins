@@ -260,7 +260,7 @@ notes are usually the ones that should become plugin changes rather than run-tim
 
 | | |
 | --- | --- |
-| `gh` | required, authenticated (`gh auth status`) |
+| `gh` | required for babysitter commands, authenticated (`gh auth status`); the standalone workspace helper can instead retain a working HTTPS credential helper |
 | `jq` | required |
 | `git` | required |
 | `ocr` or `ocr-pre-pr.sh` | optional — without it the pre-push review is skipped and reported as skipped |

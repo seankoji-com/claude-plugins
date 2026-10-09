@@ -52,13 +52,15 @@ class PushPolicyTest(unittest.TestCase):
             wrapper = tools / 'git'
             wrapper.write_text(
                 f'#!{sys.executable}\n'
-                'import os, subprocess, sys\n'
+                'import os, pathlib, subprocess, sys\n'
                 f'real_git = {real_git!r}\nremote = {str(remote)!r}\n'
                 'args = sys.argv[1:]\nuses_origin = "origin" in args\n'
                 'action = next((item for item in ("clone", "fetch", "push") if item in args), None)\n'
                 'if action == "clone" and os.environ.get("CLONE_ATTEMPT_MARKER"):\n'
                 ' open(os.environ["CLONE_ATTEMPT_MARKER"], "w").close()\n'
                 'if action == "clone" and os.environ.get("TEST_CLONE_FAILURE"):\n'
+                ' if os.environ.get("TEST_PARTIAL_CLONE") == "1":\n'
+                '  partial = pathlib.Path(args[-1]); partial.mkdir(parents=True); (partial / "preserve-me").write_text("partial clone data")\n'
                 ' sys.stderr.write("fatal: Authentication failed for https://user:PRIVATE_TOKEN@github.com/test/repo.git\\n"); sys.exit(1)\n'
                 'if action is not None:\n'
                 ' args = [remote if item == "https://github.com/test/repo.git" or item == "origin" else item for item in args]\n'
@@ -224,6 +226,27 @@ class PushPolicyTest(unittest.TestCase):
             self.assertFalse(helper_marker.exists())
             git(root, 'config', '--global', '--unset', 'remote.origin.vcs')
             env.pop('CLONE_ATTEMPT_MARKER')
+
+            # Existing collisions and failed partial clones must never be deleted.
+            collision = root / 'collision-cache/repos/test__repo'
+            collision.mkdir(parents=True)
+            sentinel = collision / 'preserve-me'
+            sentinel.write_text('existing user data')
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                initialize('collision-cache')
+            self.assertEqual(caught.exception.returncode, 3)
+            self.assertEqual(sentinel.read_text(), 'existing user data')
+            self.assertIn('cache path exists', caught.exception.stderr)
+            env['TEST_CLONE_FAILURE'] = '1'
+            env['TEST_PARTIAL_CLONE'] = '1'
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                initialize('partial-cache')
+            self.assertEqual(caught.exception.returncode, 3)
+            self.assertIn('preserved for private inspection', caught.exception.stderr)
+            self.assertEqual((root / 'partial-cache/repos/test__repo/preserve-me').read_text(),
+                             'partial clone data')
+            env.pop('TEST_CLONE_FAILURE')
+            env.pop('TEST_PARTIAL_CLONE')
 
             # First-time clone failures remain diagnosable without exposing URLs.
             env.pop('FAKE_GH_AUTH_READY', None)
