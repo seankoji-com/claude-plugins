@@ -88,6 +88,14 @@ class PushPolicyTest(unittest.TestCase):
             self.assertEqual(git(remote, 'rev-parse', 'feature').stdout,
                              git(worktree, 'rev-parse', 'HEAD').stdout)
             self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
+            git(clone, 'config', 'extensions.worktreeConfig', 'true')
+            for override in ['upstream', 'current']:
+                git(worktree, 'config', '--worktree', 'push.default', override)
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    initialize()
+                self.assertEqual(caught.exception.returncode, 3)
+                self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
+                git(worktree, 'config', '--worktree', '--unset', 'push.default')
             for key, value in [('remote.origin.push', 'HEAD:refs/heads/master'),
                                ('remote.origin.mirror', 'true')]:
                 git(root, 'config', '--global', key, value)
