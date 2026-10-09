@@ -206,7 +206,7 @@ if [ ! -d "$CLONE/.git" ]; then
       # Keep Git's literal validated URL; gh repo clone may canonicalize aliases.
       credential_options=(-c credential.helper= -c 'credential.helper=!gh auth git-credential')
     fi
-    git "${credential_options[@]}" clone --quiet \
+    git ${credential_options[@]+"${credential_options[@]}"} clone --quiet \
       --config "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
       --config "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" \
       "https://github.com/${REPO}.git" "$CLONE" 2>"$clone_diagnostics"

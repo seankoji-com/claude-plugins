@@ -206,6 +206,7 @@ class PushPolicyTest(unittest.TestCase):
             self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
 
             # First-time clone failures remain diagnosable without exposing URLs.
+            env.pop('FAKE_GH_AUTH_READY', None)
             env['TEST_CLONE_FAILURE'] = '1'
             with self.assertRaises(subprocess.CalledProcessError) as caught:
                 initialize('failed-cache')
@@ -226,6 +227,14 @@ class PushPolicyTest(unittest.TestCase):
             self.assertFalse(marker.exists(), 'unsafe clone transport was attempted')
             self.assertEqual(list(root.glob('babysitter-clone-error.*')), [])
             git(root, 'config', '--global', '--unset', key)
+
+            unauthenticated = initialize('unauthenticated-cache')
+            self.assertTrue(marker.exists())
+            self.assertEqual(git(unauthenticated, 'remote', 'get-url', 'origin').stdout.strip(),
+                             'https://github.com/test/repo.git')
+            self.assertNotIn('!gh auth git-credential',
+                             git(unauthenticated, 'config', '--get-all', 'credential.helper',
+                                 check=False).stdout)
 
             env['FAKE_GH_AUTH_READY'] = '1'
             git(root, 'config', '--global', 'url.git@github.com:.insteadOf', 'https://github.com/')
