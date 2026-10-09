@@ -104,7 +104,8 @@ All three commands show you the full roster and wait for a yes before anything i
   or remotes. Use the explicit `git push origin HEAD:<head-ref>` above.
   The clone default and each babysitter branch push remote are pinned to `origin`.
   Configured origin push refspecs or mirror mode stop initialization because they
-  bypass `push.default`.
+  bypass `push.default`. The resolved push destination must be the expected HTTPS
+  GitHub repository; push URL overrides or rewrites to another destination are refused.
 
 ## Pre-push review
 

@@ -1,5 +1,7 @@
 """Exercise the real workspace helper and Git pushes against a local remote."""
 import os
+import shlex
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -44,8 +46,16 @@ class PushPolicyTest(unittest.TestCase):
             git(seed, 'commit', '--allow-empty', '-m', 'seed')
             git(seed, 'remote', 'add', 'origin', str(remote))
             git(seed, 'push', 'origin', 'HEAD:master', 'HEAD:feature')
-            git(root, 'config', '--global', f'url.{remote}.insteadOf',
-                'https://github.com/test/repo.git')
+            # Route only transport operations to the local bare remote. Configuration
+            # inspection still uses real Git and sees the production HTTPS destination.
+            real_git = shutil.which('git')
+            wrapper = tools / 'git'
+            wrapper.write_text(
+                '#!/bin/sh\nfor arg do\ncase "$arg" in clone|fetch|push)\n'
+                + 'exec ' + shlex.quote(real_git) + ' -c '
+                + shlex.quote(f'url.{remote}.insteadOf=https://github.com/test/repo.git')
+                + ' "$@";; esac\ndone\nexec ' + shlex.quote(real_git) + ' "$@"\n')
+            wrapper.chmod(0o755)
 
             def initialize():
                 result = subprocess.run(
@@ -96,6 +106,16 @@ class PushPolicyTest(unittest.TestCase):
                 self.assertEqual(caught.exception.returncode, 3)
                 self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
                 git(worktree, 'config', '--worktree', '--unset', 'push.default')
+            for scope, key, value in [
+                ('--local', 'remote.origin.pushurl', str(publish)),
+                ('--global', f'url.{publish}.pushInsteadOf',
+                 'https://github.com/test/repo.git')]:
+                git(clone, 'config', scope, key, value)
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    initialize()
+                self.assertEqual(caught.exception.returncode, 3)
+                self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
+                git(clone, 'config', scope, '--unset', key)
             for key, value in [('remote.origin.push', 'HEAD:refs/heads/master'),
                                ('remote.origin.mirror', 'true')]:
                 git(root, 'config', '--global', key, value)

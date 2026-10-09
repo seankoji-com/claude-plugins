@@ -190,7 +190,8 @@ fi
 #      `upstream` is unsafe when another worktree tracks the default branch.
 #      `nothing` refuses every implicit push, regardless of upstream names or
 #      remotes; callers must use the explicit HEAD:<head> push documented above.
-git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" 2>/dev/null || true
+git -C "$CLONE" remote set-url origin "https://github.com/${REPO}.git" ||
+  die "cannot configure HTTPS origin in ${CLONE}" 3
 
 # Only when gh can actually serve credentials: clearing the chain and pointing it at a
 # gh that is not authenticated would replace a helper that might work with one that
@@ -204,7 +205,11 @@ fi
 # Remote push refspecs and mirror mode take precedence over push.default.
 # Refuse inherited or reused settings rather than silently changing their meaning.
 verify_push_policy() {
-  local location="$1" status mirror
+  local location="$1" status mirror destination
+  destination=$(git -C "$location" remote get-url --push --all origin) ||
+    die "cannot inspect origin push destination" 3
+  [ "$destination" = "https://github.com/${REPO}.git" ] ||
+    die "origin push destination differs from expected HTTPS repository; inspect remote.origin.pushurl and URL rewrite settings" 3
   if git -C "$location" config --get-all remote.origin.push >/dev/null; then
     die "configured origin push refspec bypasses safe push policy" 3
   else
