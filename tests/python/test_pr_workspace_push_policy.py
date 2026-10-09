@@ -23,7 +23,7 @@ class PushPolicyTest(unittest.TestCase):
             env = {**os.environ, 'HOME': str(home),
                    'GIT_CONFIG_GLOBAL': str(home / '.gitconfig'),
                    'GIT_CONFIG_NOSYSTEM': '1',
-                   'PATH': f'{tools}:{os.environ["PATH"]}'}
+                   'PATH': f'{tools}:{os.environ["PATH"]}', 'TMPDIR': str(root)}
             for key in list(env):
                 if key.startswith('GIT_CONFIG_KEY_') or key.startswith('GIT_CONFIG_VALUE_'):
                     env.pop(key)
@@ -52,10 +52,12 @@ class PushPolicyTest(unittest.TestCase):
             wrapper = tools / 'git'
             wrapper.write_text(
                 f'#!{sys.executable}\n'
-                'import subprocess, sys\n'
+                'import os, subprocess, sys\n'
                 f'real_git = {real_git!r}\nremote = {str(remote)!r}\n'
                 'args = sys.argv[1:]\nuses_origin = "origin" in args\n'
                 'action = next((item for item in ("clone", "fetch", "push") if item in args), None)\n'
+                'if action == "clone" and os.environ.get("TEST_CLONE_FAILURE"):\n'
+                ' sys.stderr.write("fatal: Authentication failed for https://user:PRIVATE_TOKEN@github.com/test/repo.git\\n"); sys.exit(1)\n'
                 'if action is not None:\n'
                 ' args = [remote if item == "https://github.com/test/repo.git" or item == "origin" else item for item in args]\n'
                 ' if action == "fetch": args.append("+refs/heads/*:refs/remotes/origin/*")\n'
@@ -65,10 +67,10 @@ class PushPolicyTest(unittest.TestCase):
                 'sys.exit(result)\n')
             wrapper.chmod(0o755)
 
-            def initialize():
+            def initialize(cache="cache"):
                 result = subprocess.run(
                     ['bash', str(SCRIPT), '--repo', 'test/repo', '--pr', '1',
-                     '--branch', 'feature', '--root', str(root / 'cache')],
+                     '--branch', 'feature', '--root', str(root / cache)],
                     env=env, capture_output=True, text=True, check=True)
                 return Path(result.stdout.strip())
 
@@ -174,3 +176,17 @@ class PushPolicyTest(unittest.TestCase):
             git(worktree, 'checkout', 'feature')
             self.assertNotEqual(git(worktree, 'push', check=False).returncode, 0)
             self.assertEqual(git(remote, 'rev-parse', 'master').stdout.strip(), master)
+
+            # First-time clone failures remain diagnosable without exposing URLs.
+            env['TEST_CLONE_FAILURE'] = '1'
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                initialize('failed-cache')
+            self.assertEqual(caught.exception.returncode, 3)
+            self.assertNotIn('PRIVATE_TOKEN', caught.exception.stderr)
+            self.assertIn('category=authentication', caught.exception.stderr)
+            line = next(line for line in caught.exception.stderr.splitlines()
+                        if 'private diagnostics retained at ' in line)
+            diagnostics = Path(line.split('private diagnostics retained at ', 1)[1])
+            self.assertEqual(diagnostics.stat().st_mode & 0o777, 0o600)
+            self.assertIn('PRIVATE_TOKEN', diagnostics.read_text())
+            diagnostics.unlink()

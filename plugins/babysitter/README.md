@@ -110,7 +110,9 @@ All three commands show you the full roster and wait for a yes before anything i
   rewrites without editing global settings. Any remaining destination rewrite or
   push URL override is refused because this cache uses headless HTTPS authentication.
   Refusals report the configuration key class and source file, with URL bases/values
-  redacted so credentials cannot leak.
+  redacted so credentials cannot leak. Failed first-time clones report an error
+  category and retain raw diagnostics in a private mode-600 temporary file for
+  local inspection; successful clones remove that file.
 
 ## Pre-push review
 

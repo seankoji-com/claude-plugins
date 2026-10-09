@@ -145,28 +145,48 @@ if [ ! -d "$CLONE/.git" ]; then
   # ESTABLISHED connection and then dying, where an immediate bare retry succeeded.
   # A partial clone directory left by the first attempt would make the second one
   # fail on a non-empty target, so it goes first.
+  clone_diagnostics=$(mktemp "${TMPDIR:-/tmp}/babysitter-clone-error.XXXXXX") ||
+    die "cannot create private clone diagnostics" 3
+  report_clone_failure() {
+    local category=unclassified
+    if grep -Eiq 'Authentication failed|could not read Username|Permission denied|publickey' "$clone_diagnostics"; then
+      category=authentication
+    elif grep -Eiq 'repository .*not found|Repository not found' "$clone_diagnostics"; then
+      category=repository-not-found
+    elif grep -Eiq 'certificate|SSL|TLS' "$clone_diagnostics"; then
+      category=TLS
+    elif grep -Eiq 'Could not resolve|unable to access|Connection|proxy|timed out' "$clone_diagnostics"; then
+      category=network
+    elif grep -Eiq 'config|rewrite|protocol|bad boolean' "$clone_diagnostics"; then
+      category=configuration
+    fi
+    # Raw errors may contain credential-bearing URLs, even in config-key names.
+    note "clone failure category=${category}; private diagnostics retained at ${clone_diagnostics}"
+  }
   clone_once() {
     if [ "$GH_READY" = "1" ]; then
       gh repo clone "https://github.com/${REPO}.git" "$CLONE" -- --quiet \
         --config "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
-        --config "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" >/dev/null 2>&1
+        --config "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" >/dev/null 2>"$clone_diagnostics"
     else
       git clone --quiet \
         --config "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
         --config "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" \
-        "https://github.com/${REPO}.git" "$CLONE" 2>/dev/null
+        "https://github.com/${REPO}.git" "$CLONE" 2>"$clone_diagnostics"
     fi
   }
   if ! clone_once; then
     note "clone of ${REPO} failed — retrying once"
     rm -rf "$CLONE"
     clone_once || {
+      report_clone_failure
       if [ "$GH_READY" = "1" ]; then
         die "clone of ${REPO} failed twice" 3
       fi
       die "clone of ${REPO} failed twice (and gh is unavailable for authenticated clone)" 3
     }
   fi
+  rm -f "$clone_diagnostics"
 fi
 
 # ---- make this clone pushable ------------------------------------------------
