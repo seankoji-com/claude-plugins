@@ -147,6 +147,18 @@ if [ ! -d "$CLONE/.git" ]; then
   # fail on a non-empty target, so it goes first.
   clone_diagnostics=$(mktemp "${TMPDIR:-/tmp}/babysitter-clone-error.XXXXXX") ||
     die "cannot create private clone diagnostics" 3
+  trap 'rm -f "$clone_diagnostics"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  # ls-remote --get-url performs no transport. Use the future clone Git directory
+  # and the same exact identity maps that clone --config installs before fetching.
+  initial_transport=$(git --git-dir="$CLONE/.git" \
+    -c "url.https://github.com/${REPO}.git.insteadOf=https://github.com/${REPO}.git" \
+    -c "url.https://github.com/${REPO}.git.pushInsteadOf=https://github.com/${REPO}.git" \
+    ls-remote --get-url "https://github.com/${REPO}.git" 2>/dev/null) ||
+    die "cannot inspect initial clone transport; inspect inherited Git configuration privately" 3
+  [ "$initial_transport" = "https://github.com/${REPO}.git" ] ||
+    die "initial clone transport differs from required HTTPS repository; inspect inherited URL rewrites privately" 3
   report_clone_failure() {
     local category=unclassified
     if grep -Eiq 'Authentication failed|could not read Username|Permission denied|publickey' "$clone_diagnostics"; then
@@ -161,7 +173,7 @@ if [ ! -d "$CLONE/.git" ]; then
       category=configuration
     fi
     # Raw errors may contain credential-bearing URLs, even in config-key names.
-    note "clone failure category=${category}; private diagnostics retained at ${clone_diagnostics}"
+    note "clone failure category=${category}; diagnostic contents redacted"
   }
   clone_once() {
     if [ "$GH_READY" = "1" ]; then

@@ -56,6 +56,8 @@ class PushPolicyTest(unittest.TestCase):
                 f'real_git = {real_git!r}\nremote = {str(remote)!r}\n'
                 'args = sys.argv[1:]\nuses_origin = "origin" in args\n'
                 'action = next((item for item in ("clone", "fetch", "push") if item in args), None)\n'
+                'if action == "clone" and os.environ.get("CLONE_ATTEMPT_MARKER"):\n'
+                ' open(os.environ["CLONE_ATTEMPT_MARKER"], "w").close()\n'
                 'if action == "clone" and os.environ.get("TEST_CLONE_FAILURE"):\n'
                 ' sys.stderr.write("fatal: Authentication failed for https://user:PRIVATE_TOKEN@github.com/test/repo.git\\n"); sys.exit(1)\n'
                 'if action is not None:\n'
@@ -184,9 +186,17 @@ class PushPolicyTest(unittest.TestCase):
             self.assertEqual(caught.exception.returncode, 3)
             self.assertNotIn('PRIVATE_TOKEN', caught.exception.stderr)
             self.assertIn('category=authentication', caught.exception.stderr)
-            line = next(line for line in caught.exception.stderr.splitlines()
-                        if 'private diagnostics retained at ' in line)
-            diagnostics = Path(line.split('private diagnostics retained at ', 1)[1])
-            self.assertEqual(diagnostics.stat().st_mode & 0o777, 0o600)
-            self.assertIn('PRIVATE_TOKEN', diagnostics.read_text())
-            diagnostics.unlink()
+            self.assertEqual(list(root.glob('babysitter-clone-error.*')), [])
+            env.pop('TEST_CLONE_FAILURE')
+            marker = root / 'transport-attempted'
+            env['CLONE_ATTEMPT_MARKER'] = str(marker)
+            key = 'url.ssh://git@alternate.example/test/repo.git.insteadOf'
+            git(root, 'config', '--global', key, 'https://github.com/test/repo.git')
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                initialize('unsafe-first-clone')
+            self.assertEqual(caught.exception.returncode, 3)
+            self.assertIn('initial clone transport differs', caught.exception.stderr)
+            self.assertNotIn('alternate.example', caught.exception.stderr)
+            self.assertFalse(marker.exists(), 'unsafe clone transport was attempted')
+            self.assertEqual(list(root.glob('babysitter-clone-error.*')), [])
+            git(root, 'config', '--global', '--unset', key)
