@@ -1,4 +1,5 @@
 """Execute the CI runner/report seams with disposable tests and Git revisions."""
+import json
 import os
 from pathlib import Path
 import re
@@ -14,17 +15,17 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / '.github/workflows/validate.yml'
 
 
-def step(name):
+def step(name, workflow=WORKFLOW):
     # Read this workflow's literal step body, not a second copy of its commands.
     match = re.search(r'^      - name: ' + re.escape(name) + r'\n(.*?)(?=^      - |^  \S|\Z)',
-                      WORKFLOW.read_text(), re.M | re.S)
+                      workflow.read_text(), re.M | re.S)
     if not match:
         raise AssertionError('missing workflow step: ' + name)
     return match.group(1)
 
 
-def command(name):
-    body = step(name)
+def command(name, workflow=WORKFLOW):
+    body = step(name, workflow)
     match = re.search(r'^        run: (.*)\n', body, re.M)
     if not match:
         raise AssertionError('missing run command: ' + name)
@@ -141,6 +142,54 @@ class ValidateRunnerTest(unittest.TestCase):
         self.assertIn('fetch-depth: 0', checkout)
         self.assertEqual(behavioral.count('run: bash tests/run-python.sh'), 1)
         self.assertNotIn('unittest discover', behavioral)
+
+    def test_workflow_syntax_compiles_every_file_without_executing(self):
+        scripts = self.root / 'plugins/fixture/scripts'
+        scripts.mkdir(parents=True)
+        marker = 'require("node:fs").writeFileSync("executed", "bad");'
+        (scripts / 'first.workflow.js').write_text(
+            'export const meta = {name: "fixture"};\n' + marker + '\nreturn await agent(args);\n')
+        (scripts / 'second.workflow.js').write_text('export const meta = {};\nreturn 1;\n')
+        (scripts / 'ordinary.js').write_text(marker)
+        result = self.run_shell(command('node --check all shipped Workflow scripts'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name in ('first.workflow.js', 'second.workflow.js', 'ordinary.js'):
+            self.assertIn('Checking plugins/fixture/scripts/' + name, result.stdout)
+        self.assertFalse((self.root / 'executed').exists())
+        for name, source in (
+            ('first.workflow.js', 'export const meta = {};\nreturn await (;'),
+            ('second.workflow.js', 'export const meta = {};\nexport const unexpected = 1;'),
+            ('ordinary.js', 'const broken = ;'),
+        ):
+            target = scripts / name
+            original = target.read_text()
+            try:
+                target.write_text(source)
+                result = self.run_shell(command('node --check all shipped Workflow scripts'))
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('SyntaxError', result.stderr)
+            finally:
+                target.write_text(original)
+
+    def test_version_bump_push_preserves_literal_head_ref(self):
+        workflow = ROOT / '.github/workflows/version-bump.yml'
+        name = 'Commit version bumps'
+        self.assertIn('HEAD_REF: ${{ github.head_ref }}', step(name, workflow))
+        script = command(name, workflow)
+        self.assertNotIn('${{', script)
+        stubs = self.root / 'bin'
+        stubs.mkdir()
+        git = stubs / 'git'
+        git.write_text('#!/usr/bin/env python3\nimport json, sys\n'
+                       'with open("git-argv.jsonl", "a") as out: out.write(json.dumps(sys.argv[1:]) + "\\n")\n')
+        git.chmod(0o755)
+        head = 'repair/";$(touch injected);`touch injected-too`'
+        result = self.run_shell(script, HEAD_REF=head, PATH=str(stubs) + os.pathsep + self.env['PATH'])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = [json.loads(line) for line in (self.root / 'git-argv.jsonl').read_text().splitlines()]
+        self.assertEqual(calls[-1], ['push', 'origin', 'HEAD:' + head])
+        self.assertFalse((self.root / 'injected').exists())
+        self.assertFalse((self.root / 'injected-too').exists())
 
 
 if __name__ == '__main__':

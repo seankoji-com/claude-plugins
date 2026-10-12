@@ -182,7 +182,13 @@ jobs:
           for f in plugins/*/scripts/*.js; do
             [ -f "$f" ] || continue
             echo "Checking $f..."
-            node --check "$f"
+            if [[ "$f" == *.workflow.js ]]; then
+              # Workflow executes an async body with ambient bindings and exported meta.
+              # Compile the entire body as the runtime fixtures do, without executing it.
+              node -e 'const fs = require("node:fs"); const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor; new AsyncFunction("agent", "parallel", "phase", "args", "log", fs.readFileSync(process.argv[1], "utf8").replace(/^export const meta\b/m, "const meta"));' "$f"
+            else
+              node --check "$f"
+            fi
           done
 
       - name: python3 --check all shipped Python scripts
