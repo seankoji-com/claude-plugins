@@ -4,9 +4,11 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -61,16 +63,29 @@ class CodexReviewContractTest(unittest.TestCase):
             tmp = Path(tmp)
             snapshot = tmp / "run [1]+(x)/repo"
             other = tmp / "run [1]+(x)/repo2"
+            broker = tmp / "app-server-broker.mjs"
+            # `sh -c 'sleep 30'` execs sleep on macOS and loses the broker argv.
+            # Mirror spawnBrokerProcess's Node argv, with no socket or real provider.
+            broker.write_text(
+                'import { writeFileSync } from "node:fs";\n'
+                'writeFileSync(process.argv[process.argv.indexOf("--pid-file") + 1], String(process.pid));\n'
+                'setTimeout(() => {}, 30000);\n'
+            )
+            node = shutil.which("node")
+            self.assertIsNotNone(node, "Node is required for the fake broker fixture")
             procs = {}
-            for name, cwd in (("mine", snapshot), ("other", other)):
-                session = tmp / f"cxc-{name}"
-                session.mkdir()
-                (session / "broker.pid").write_text("")
-                procs[name] = (session, subprocess.Popen([
-                    "sh", "-c", "sleep 30", "app-server-broker.mjs", "serve", "--endpoint",
-                    f"unix:{session}/broker.sock", "--cwd", str(cwd), "--pid-file", f"{session}/broker.pid",
-                ], start_new_session=True))
             try:
+                for name, cwd in (("mine", snapshot), ("other", other)):
+                    session = tmp / f"cxc-{name}"
+                    session.mkdir()
+                    procs[name] = (session, subprocess.Popen([
+                        node, str(broker), "serve", "--endpoint",
+                        f"unix:{session}/broker.sock", "--cwd", str(cwd), "--pid-file", f"{session}/broker.pid",
+                    ], start_new_session=True))
+                    deadline = time.monotonic() + 5
+                    while not (session / "broker.pid").exists() and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue((session / "broker.pid").exists())
                 subprocess.run(
                     ["bash"],
                     input=definitions + f'\nTMP_ROOT=""\nSNAPSHOT={shlex.quote(str(snapshot))}\ncleanup\n',
