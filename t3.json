@@ -1,15 +1,15 @@
 {
   "$schema": "https://t3.codes/schema/t3.json",
-  "scripts": {
-    "Tests": {
+  "scripts": [
+    {
       "name": "Tests",
       "command": "bash tests/run.sh && bash tests/run-python.sh && bash tests/run-js.sh",
       "icon": "test"
     },
-    "Lint": {
+    {
       "name": "Lint",
       "command": "find plugins -name '*.sh' -exec shellcheck --severity=warning {} + && bash build/dist-lint.sh",
       "icon": "lint"
     }
-  }
+  ]
 }
