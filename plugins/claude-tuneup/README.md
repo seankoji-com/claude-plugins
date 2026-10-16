@@ -44,7 +44,7 @@ Reads the last 50 session transcripts and builds raw frequency tables for Bash c
 
 **Phase 2 — Audit**
 
-Compares `~/.claude/settings.json` against `.claude/settings.json` (and `.claude/settings.local.json` if present) and proposes:
+Compares the resolved `GLOBAL_SETTINGS_TARGET` against `.claude/settings.json` (and `.claude/settings.local.json` if present). For rendered settings, the global target is the verified source. The runtime file still establishes effective permission coverage; runtime-only rules do not justify removing portable project rules. The audit proposes:
 
 - Strip exact duplicates that appear in both files
 - Strip entries in the narrower file that are prefix-subsumed by a broader rule in any file

@@ -162,8 +162,8 @@ Read in parallel:
   permission coverage, and the source for portable global add/remove/move proposals.
   A runtime-only rule cannot justify removing a portable project rule.
 - Name the exact target in each approval and diff. Use it consistently for backup,
-  edits, validation, rollback, source-repository handling and reporting. Run step 3's
-  preflight/backups and step 5's validation for edits even with `--scan-only`.
+  edits, validation, rollback, source-repository handling and reporting. Run step 4's
+  shared preflight/backups and step 5's validation for edits even with `--scan-only`.
 
 ### 2. Phase 1 — Scan (skip if `--audit-only`)
 
@@ -194,16 +194,6 @@ If scan output is dominated by `python3 -c` / heredoc / for-loop invocations, do
 Present candidates grouped by scope via `AskUserQuestion` (multi-select) — guarantee any risk-class candidate (per **Safety rules**) a dedicated question slot rather than letting it get silently crowded out when higher-priority items fill all four. Apply accepted additions.
 
 ### 3. Phase 2 — Scope audit (skip if `--scan-only`)
-
-Pre-step A — validate before touching anything: for the runtime `~/.claude/settings.json`, `GLOBAL_SETTINGS_TARGET` (if different), `.claude/settings.json` (if present), and `.claude/settings.local.json` (if present), run `jq '.' <file> >/dev/null`. If ANY fails to parse, STOP immediately — no backup, no edits. Backing up an already-malformed file preserves the corruption, and edits on top of it compound it with no path back to known-good. Report the offending file and its parse error, then abort the run.
-
-Pre-step B — back up every settings file the audit may edit so a validation failure can roll back atomically. For each of these files that exists, create a timestamped snapshot in the same directory:
-
-- `GLOBAL_SETTINGS_TARGET` → `<target>.bak.<timestamp>` next to the verified edit target. Check its repository's backup-ignore rules; use mode 0600 and never stage backups. Do not back up the runtime file in place of a separate source target.
-- `.claude/settings.json` → `.claude/settings.json.bak.$(date +%Y%m%d-%H%M%S)`
-- `.claude/settings.local.json` → `.claude/settings.local.json.bak.$(date +%Y%m%d-%H%M%S)`
-
-Prune stale backups right after creating the new ones: for each backup glob, keep only the 5 most-recent files and delete the rest — `ls -t <glob> 2>/dev/null | tail -n +6 | xargs -r rm -f`. Run this only for the selected `<target>.bak.*`, `.claude/settings.json.bak.*`, and `.claude/settings.local.json.bak.*`. Keep-last-5 (not age-based) because runs are irregular — a `-mtime +30` cutoff would let backups pile up indefinitely between infrequent runs, while keep-last-5 bounds disk usage regardless of run cadence.
 
 **3a. Duplicates & cross-file prefix subsumption**
 
@@ -269,7 +259,19 @@ Group changes into `AskUserQuestion` blocks:
 - Env vars (separate, never auto-applied)
 - CLAUDE.md (flagged only, never auto-edited)
 
-If `--dry-run`, print the full proposal and stop. Otherwise apply accepted changes:
+If `--dry-run`, print the full proposal and stop. If there are no accepted settings edits, skip the backup and edit steps. Otherwise run the following shared preflight and backups before applying any accepted settings change, including Phase 1 additions with `--scan-only`. These safeguards are independent of the Phase 2 scope audit.
+
+Pre-step A — validate before touching anything: for the runtime `~/.claude/settings.json`, `GLOBAL_SETTINGS_TARGET` (if different), `.claude/settings.json` (if present), and `.claude/settings.local.json` (if present), run `jq '.' <file> >/dev/null`. If ANY fails to parse, STOP immediately — no backup, no edits. Backing up an already-malformed file preserves the corruption, and edits on top of it compound it with no path back to known-good. Report the offending file and its parse error, then abort the run.
+
+Pre-step B — back up every settings file the run may edit so a validation failure can roll back atomically. For each of these files that exists, create a timestamped snapshot in the same directory with mode 0600. If a required backup cannot be created and kept private, stop before settings edits and report the exact failure; do not redirect it to `/tmp/`.
+
+- `GLOBAL_SETTINGS_TARGET` → `<target>.bak.<timestamp>` next to the verified edit target. Check its repository's backup-ignore rules; use mode 0600 and never stage backups. Do not back up the runtime file in place of a separate source target.
+- `.claude/settings.json` → `.claude/settings.json.bak.$(date +%Y%m%d-%H%M%S)`
+- `.claude/settings.local.json` → `.claude/settings.local.json.bak.$(date +%Y%m%d-%H%M%S)`
+
+Prune stale backups right after creating the new ones: for each backup glob, keep only the 5 most-recent files and delete the rest — `ls -t <glob> 2>/dev/null | tail -n +6 | xargs -r rm -f`. Run this only for the selected `<target>.bak.*`, `.claude/settings.json.bak.*`, and `.claude/settings.local.json.bak.*`. Keep-last-5 (not age-based) because runs are irregular — a `-mtime +30` cutoff would let backups pile up indefinitely between infrequent runs, while keep-last-5 bounds disk usage regardless of run cadence.
+
+Apply only the accepted changes:
 
 - Edit the verified `GLOBAL_SETTINGS_TARGET`; do not substitute the runtime file when a renderer manages it
 - Edit `.claude/settings.json`
@@ -280,7 +282,7 @@ Sort `permissions.allow` alphabetically after edits.
 
 ### 5. Validate
 
-Post-edit safety net (the pre-flight check in step 3 catches pre-existing corruption; this catches edits that broke a previously-valid file). For each modified file: `jq '.' <file> >/dev/null`. On parse failure, restore all backed-up files from their `.bak.` snapshots atomically — `cp <file>.bak.<ts> <file>` for each backed-up file — and stop with a clear error listing which file(s) failed validation. Restoring all backed-up files (even if only one failed) keeps the settings set consistent rather than leaving one rolled-back file alongside newly-edited siblings.
+Post-edit safety net (the shared pre-flight check in step 4 catches pre-existing corruption; this catches edits that broke a previously-valid file). For each modified file: `jq '.' <file> >/dev/null`. On parse failure, restore all backed-up files from their `.bak.` snapshots atomically — `cp <file>.bak.<ts> <file>` for each backed-up file — and stop with a clear error listing which file(s) failed validation. Restoring all backed-up files (even if only one failed) keeps the settings set consistent rather than leaving one rolled-back file alongside newly-edited siblings.
 
 After validation, apply the documented renderer only within existing authorization
 and the repository's rollout rules; otherwise report activation pending. Source
@@ -354,7 +356,7 @@ After the report, capture what went sideways so the skill improves over time. Wi
 Walk through these checks against this run. Each is one bullet in the log entry; mark `none` when the check passes cleanly.
 
 - **Auto-mode write blocks**: did any Edit/Write/cp attempt against a settings file or `~/.claude/**` get denied as "agent self-configuration"? Note the exact path. (Known: the auto-mode classifier intermittently blocks additions to `~/.claude/settings.json`. **Pure-removal edits using an empty `new_string` succeed.** For additions that are blocked, generate a `jq` command and suggest `! <cmd>` so the user can run it in-session.)
-- **Backup fallback used**: did the backup destination need to fall back from `<dir>/settings.json.bak.<ts>` to `/tmp/`? Note the dest.
+- **Backup and rollback**: did each selected edit target receive its own mode-0600 `<target>.bak.<timestamp>` snapshot, and did failed validation restore the backed-up settings set? Record the actual target and backup paths or the exact backup failure; never silently redirect backups to another path.
 - **De-dupe misses**: how many Phase 1 candidates turned out to be already covered by a prefix-match of an existing allow rule (i.e. the user would never have been prompted in practice)? The frequency scanner counts raw invocations and doesn't subtract patterns the harness was already auto-allowing via existing rules — surface that gap.
 - **Mode mismatch**: was `AskUserQuestion` skipped because the user signaled autonomous mode ("work without stopping", `--yes`, etc.)? List which decisions were applied via safe-default heuristics instead of explicit confirmation.
 - **Risk-class candidates**: did any proposed candidate match a class that arguably belongs on the safety-block list — e.g. `awk *` (has `system()` and `getline | "cmd"`), `find * -exec *`, `sed` with the `e` substitution flag, `xargs` without `--no-run-if-empty` + safe-flag check? Note each.
