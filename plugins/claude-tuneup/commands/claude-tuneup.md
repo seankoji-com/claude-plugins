@@ -30,7 +30,7 @@ Flags:
 - `--audit-only` — Phase 2 only
 - `--dry-run` — print proposals from both phases, don't write (skips Phase 3)
 - `--no-reflect` — run Phases 1 + 2 but skip Phase 3
-- (no flag) — run all three, scan first (adds can create new duplicates the audit catches)
+- (no flag) — run all three; scan and audit propose changes before step 4's shared approval and apply
 
 Capture the run start time now — run `date +%s` and hold the value for the audit log
 entry in step 7 (Report) below — that step always runs it, regardless of which flags
@@ -48,6 +48,7 @@ generic default — the command works out of the box with no config.
 
 ```json
 {
+  "global_settings_source": null,
   "extra_global_bash_heads": [],
   "extra_global_read_paths": [],
   "project_scan_dirs": [],
@@ -56,6 +57,9 @@ generic default — the command works out of the box with no config.
 }
 ```
 
+- `global_settings_source` — optional absolute or `~/` path to the authoritative
+  global settings source. Use the source repository's documented edit path when a
+  renderer manages the runtime file; this option never authorizes extra writes.
 - `extra_global_bash_heads` — additional Bash command heads to treat as globally safe
   read-only-ish patterns (still filtered through **Safety rules** below — this can't
   bypass the interpreter/shell/installer block list). Example: a link checker or a
@@ -74,7 +78,7 @@ See `README.md` for a filled-in example config.
 
 ## Scope rules
 
-**Global** (`~/.claude/settings.json` — may be a symlink; follow it before writing) — patterns that apply anywhere:
+**Global** (the verified `GLOBAL_SETTINGS_TARGET` selected below) — patterns that apply anywhere:
 
 - Generic Bash heads: `git`, `gh`, `npm`, `npx`, `jq`, `mkdir`, `ping`, `traceroute`, `dig`, `route get`, `ipconfig`, `scutil`, `op`, `openssl`, `security`, `ssh-add`, `tar`, `unzip`, `xargs`, `time`, `sleep`, `wait`, plus anything listed in `extra_global_bash_heads` (see **Configuration** above)
 - All `mcp__*` tools EXCEPT ones whose target is project-state
@@ -132,11 +136,34 @@ Read in parallel:
 
 - Run both `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scan_perms.py --json` (patterns, source lines, and completed/error/unobserved result counts from the last 50 transcripts) and `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/scan_perms.py` (SSH/sudo drill prefixes). Read the JSON-cited transcript lines for the complete remote command and quote style before forming a rule; drill prefixes are not complete shell commands. If the script is absent, Phase 1 is unavailable; run with `--audit-only`.
 - `~/.claude/claude-tuneup.config.json` if it exists — see **Configuration** above; fall back to the documented defaults for any field it omits, and to all defaults if the file is absent entirely.
-- `~/.claude/settings.json` — follow the symlink to the real file if it's a link
+- `~/.claude/settings.json` — effective runtime settings, read even when a separate source manages them
 - `.claude/settings.json` if it exists
 - `.claude/settings.local.json` if it exists
 - `CLAUDE.md` and `~/.claude/CLAUDE.md` for the 3e check
 - Recursive scan of `CLAUDE.md` plus any `project_scan_dirs` for SSH aliases this repo uses; files matching `project_compose_globs` for container names — informs scope classification
+
+**Resolve the global edit target before proposing or applying changes.**
+`GLOBAL_SETTINGS_TARGET` below means the verified file path, not a shell expression.
+
+- Read supplied dotfiles instructions and settings provenance. A real runtime file
+  can be rendered; absence of a symlink does not make it the portable source.
+- Use `global_settings_source` when configured, otherwise discover the source from
+  the owner's documented renderer/edit path. Expand only a leading `~/`; never
+  evaluate path text as shell code. Resolve existing symlinks and verify that the
+  file is the documented source, rather than another generated/runtime copy.
+  Honor the source repository's worktree rules; do not edit a live Stow checkout.
+- When no renderer manages the file, use the resolved runtime file as the target.
+  For a managed file, portable edits go to its source. An explicitly requested
+  machine-local override may target the runtime file and must be labeled local.
+- If a configured source is missing, invalid, or cannot be verified, or a managed
+  source cannot be found, stop before settings writes and report the proposal.
+  Never silently fall back to editing the rendered runtime file.
+- Read both files when source and runtime differ. Use the runtime for effective
+  permission coverage, and the source for portable global add/remove/move proposals.
+  A runtime-only rule cannot justify removing a portable project rule.
+- Name the exact target in each approval and diff. Use it consistently for backup,
+  edits, validation, rollback, source-repository handling and reporting. Run step 4's
+  shared preflight/backups and step 5's validation for edits even with `--scan-only`.
 
 ### 2. Phase 1 — Scan (skip if `--audit-only`)
 
@@ -164,19 +191,11 @@ For each candidate:
 
 If scan output is dominated by `python3 -c` / heredoc / for-loop invocations, don't try to allowlist them individually — they vary too much to form a stable rule. Recommend a structural fix instead: swap to `jq` (already auto-allowed) or an available MCP tool where one exists, or adopt `sandbox.autoAllowBashIfSandboxed` plus a purpose-built triage hook (e.g. an `ssh-triage`-style script) for a whole class of read-only remote calls.
 
-Present candidates grouped by scope via `AskUserQuestion` (multi-select) — guarantee any risk-class candidate (per **Safety rules**) a dedicated question slot rather than letting it get silently crowded out when higher-priority items fill all four. Apply accepted additions.
+Prepare candidates grouped by scope for step 4's `AskUserQuestion` (multi-select). Guarantee any risk-class candidate (per **Safety rules**) a dedicated question slot rather than letting it get silently crowded out when higher-priority items fill all four. This phase only proposes additions: do not edit settings here. All accepted Phase 1 additions are applied in step 4 after its preflight and backups, then validated in step 5.
 
 ### 3. Phase 2 — Scope audit (skip if `--scan-only`)
 
-Pre-step A — validate before touching anything: for each of `~/.claude/settings.json` (resolve the symlink first), `.claude/settings.json` (if present), and `.claude/settings.local.json` (if present), run `jq '.' <file> >/dev/null`. If ANY fails to parse, STOP immediately — no backup, no edits. Backing up an already-malformed file preserves the corruption, and edits on top of it compound it with no path back to known-good. Report the offending file and its parse error, then abort the run.
-
-Pre-step B — back up every settings file the audit may edit so a validation failure can roll back atomically. For each of these files that exists, create a timestamped snapshot in the same directory:
-
-- `~/.claude/settings.json` → `<dir>/settings.json.bak.$(date +%Y%m%d-%H%M%S)`. Resolve the symlink first so the `.bak` lives in the storage dir (where the matching `.gitignore` rule covers it).
-- `.claude/settings.json` → `.claude/settings.json.bak.$(date +%Y%m%d-%H%M%S)`
-- `.claude/settings.local.json` → `.claude/settings.local.json.bak.$(date +%Y%m%d-%H%M%S)`
-
-Prune stale backups right after creating the new ones: for each backup glob, keep only the 5 most-recent files and delete the rest — `ls -t <glob> 2>/dev/null | tail -n +6 | xargs -r rm -f`. Run this for `<dir>/settings.json.bak.*`, `.claude/settings.json.bak.*`, and `.claude/settings.local.json.bak.*`. Keep-last-5 (not age-based) because runs are irregular — a `-mtime +30` cutoff would let backups pile up indefinitely between infrequent runs, while keep-last-5 bounds disk usage regardless of run cadence.
+This phase only proposes changes. Every settings write waits for step 4's approvals, preflight and backups.
 
 **3a. Duplicates & cross-file prefix subsumption**
 
@@ -231,20 +250,40 @@ Iterate `global.allow` + `project.allow` for `mcp__<server>__*` rules. For each,
 
 Exception: if `<server>` is named in `~/.claude/CLAUDE.md` (or this repo's `CLAUDE.md`) as a server the user relies on, absence is more likely a session-connect gap than a truly dead server — flag it as "not connected this session" rather than proposing removal.
 
-Flag for removal — NEVER auto-remove; ask via `AskUserQuestion`. Case-drift stragglers are a recurring pattern across runs (an MCP server renaming/relaunching under different casing, or getting disconnected outright, leaves the old rule behind) — check `claude-tuneup.notes.md` for ones specific to your own setup.
+Flag for removal — NEVER auto-remove; include it in step 4's explicit `AskUserQuestion` confirmation. Case-drift stragglers are a recurring pattern across runs (an MCP server renaming/relaunching under different casing, or getting disconnected outright, leaves the old rule behind) — check `claude-tuneup.notes.md` for ones specific to your own setup.
 
 ### 4. Confirm & apply
 
+If `--dry-run`, print the full proposal and stop before approval questions, backups or settings edits.
+
 Group changes into `AskUserQuestion` blocks:
 
-- Phase 1 adds (presented in step 2)
+- Phase 1 adds (prepared in step 2)
 - Phase 2 3a/3b/3c (one combined multi-select)
+- Machine-local runtime overrides (separate explicit confirmation; name the runtime target and label the changes local)
+- Stale MCP entries (3f; explicit confirmation, never auto-removed)
 - Env vars (separate, never auto-applied)
 - CLAUDE.md (flagged only, never auto-edited)
 
-If `--dry-run`, print the full proposal and stop. Otherwise apply accepted changes:
+If there are no accepted settings edits, skip the backup and edit steps. Otherwise record the exact edit targets and their approved scope: the verified `GLOBAL_SETTINGS_TARGET` for portable changes, the actual runtime `~/.claude/settings.json` for an explicitly approved machine-local override, and the project/local settings paths as needed. When a separate portable source manages the runtime, a purported local override must not resolve back to that source; stop until the documented real-file migration is available rather than relabeling a source write as local. Deduplicate targets that resolve to the same file. A separate source and runtime file are separate targets when both have approved edits. Use this target list for backups, writes, validation and rollback. Run the shared safeguards below before any settings change, including Phase 1 additions with `--scan-only`; they are independent of Phase 2.
 
-- Edit `~/.claude/settings.json` (resolve symlink first; the write tool refuses symlink writes)
+Pre-step A — validate before touching anything: for the runtime `~/.claude/settings.json`, `GLOBAL_SETTINGS_TARGET` (if different), `.claude/settings.json` (if present), and `.claude/settings.local.json` (if present), run `jq '.' <file> >/dev/null`. If ANY fails to parse, STOP immediately — no backup, no edits. Backing up an already-malformed file preserves the corruption, and edits on top of it compound it with no path back to known-good. Report the offending file and its parse error, then abort the run.
+
+Pre-step B — back up every existing file in the approved target list so a validation failure can roll back the settings set. Create each snapshot in the same directory with mode 0600, without overwriting an existing backup (use a unique suffix on collision). Record original absence for a target the run will create. If a required backup cannot be created and kept private, stop before settings edits and report the exact failure; do not redirect it to `/tmp/`.
+
+- `GLOBAL_SETTINGS_TARGET` → `<target>.bak.<timestamp>` next to the verified edit target. Check its repository's backup-ignore rules; use mode 0600 and never stage backups. Do not back up the runtime file in place of a separate source target.
+- Runtime `~/.claude/settings.json` → `~/.claude/settings.json.bak.<timestamp>` when it is an approved local-override target distinct from `GLOBAL_SETTINGS_TARGET`. If both source and runtime are selected, back up both; if they resolve to the same file, back it up once.
+- `.claude/settings.json` → `.claude/settings.json.bak.$(date +%Y%m%d-%H%M%S)`
+- `.claude/settings.local.json` → `.claude/settings.local.json.bak.$(date +%Y%m%d-%H%M%S)`
+
+For each selected target, including an approved runtime override, preserve this run's snapshot and the 4 most-recent other snapshots. Prune only verified snapshots in that exact target's backup family. Treat each filename as one literal path, including spaces or shell metacharacters; do not split unquoted glob output through `xargs`. Leave unrelated backups alone. Keeping at most 5 snapshots bounds disk usage across irregular runs.
+
+Apply only the accepted changes:
+
+Record each target's pre-edit bytes or absence as its initial expected state. Before each write, including alphabetical sorting, compare the target with its last-known expected state; stop if it differs. After each successful write, verify that the result matches the intended bytes and update the expected state to those exact bytes before another edit. Retain the original snapshot or absence and this run's last verified written bytes separately for rollback. If a write fails or its result cannot be verified, stop and report the unknown state without overwriting it.
+
+- Apply portable global edits to the verified `GLOBAL_SETTINGS_TARGET`; never silently substitute the rendered runtime file
+- Apply an explicitly approved machine-local override to its separately listed and backed-up runtime target; label it local
 - Edit `.claude/settings.json`
 - Edit `.claude/settings.local.json` if relevant
 - Keep each settings-edit small and traceable to one named `AskUserQuestion` approval — a combined/broad rewrite can get denied as self-modification even when the equivalent scoped edit wouldn't. Try the direct `Edit` first; fall back to a `jq` command (surfaced for the user to run) only if it actually gets blocked.
@@ -253,9 +292,14 @@ Sort `permissions.allow` alphabetically after edits.
 
 ### 5. Validate
 
-Post-edit safety net (the pre-flight check in step 3 catches pre-existing corruption; this catches edits that broke a previously-valid file). For each modified file: `jq '.' <file> >/dev/null`. On parse failure, restore all backed-up files from their `.bak.` snapshots atomically — `cp <file>.bak.<ts> <file>` for each backed-up file — and stop with a clear error listing which file(s) failed validation. Restoring all three files (even if only one failed) keeps the settings set consistent rather than leaving one rolled-back file alongside newly-edited siblings.
+Post-edit safety net (step 4's shared preflight catches pre-existing corruption). For each modified target: `jq '.' <file> >/dev/null`. On parse failure, first check that each target still matches this run's last written bytes. If it does, restore an existing target from its recorded snapshot, including a selected runtime override, or remove a settings file this run created whose original absence was recorded. If it differs, or this run's written state is unknown, preserve the current file and private backup and report a recovery conflict; do not overwrite or delete concurrent work. Stop with a clear error listing failed validation or restoration paths. Use the exact recorded target/backup pairs rather than reconstructing names or restoring a source backup over the runtime file. Report any rollback failure; never claim a consistent settings set until restoration is verified.
 
-### 6. Commit (project only)
+After validation, apply the documented renderer only within existing authorization
+and the repository's rollout rules; otherwise report activation pending. Source
+changes do not prove runtime activation. Never overwrite the runtime file to
+simulate that render.
+
+### 6. Commit
 
 If `.claude/settings.json` was modified AND it's tracked in git:
 
@@ -265,7 +309,11 @@ If `.claude/settings.json` was modified AND it's tracked in git:
 
 If `git` errors with a config issue (e.g. unresolved merge conflict in `~/.gitconfig`), surface the error and stop — don't try to work around it.
 
-Don't touch git state for `~/.claude/settings.json` (managed via dotfiles, not this repo's git) or `.claude/settings.local.json` (gitignored).
+For a tracked global source in another repository, follow that repository's worktree
+and signing rules. Commit only when that repository's changes are authorized, stage
+only the source paths, and never include them in this project's commit. Otherwise
+report the uncommitted source patch. Runtime overrides and ignored
+`.claude/settings.local.json` are never committed.
 
 ### 7. Report
 
@@ -305,7 +353,7 @@ Then print the concise summary:
 - Phase 2: D duplicates stripped, P moved global → project, G removed/moved project → global
 - E env vars flagged
 - C CLAUDE.md items flagged
-- Backups at `~/.claude/settings.json.bak.<ts>`, `.claude/settings.json.bak.<ts>`, `.claude/settings.local.json.bak.<ts>` (each in its source directory; `/tmp/` fallback if the source dir was blocked)
+- Report the selected global source/runtime paths, actual backup paths, and whether source changes were rendered or await activation. A machine-local override is not a portable source change.
 - If committed: commit SHA
 - If Phase 3 ran: F findings logged to `claude-tuneup.notes.md`
 
@@ -318,7 +366,7 @@ After the report, capture what went sideways so the skill improves over time. Wi
 Walk through these checks against this run. Each is one bullet in the log entry; mark `none` when the check passes cleanly.
 
 - **Auto-mode write blocks**: did any Edit/Write/cp attempt against a settings file or `~/.claude/**` get denied as "agent self-configuration"? Note the exact path. (Known: the auto-mode classifier intermittently blocks additions to `~/.claude/settings.json`. **Pure-removal edits using an empty `new_string` succeed.** For additions that are blocked, generate a `jq` command and suggest `! <cmd>` so the user can run it in-session.)
-- **Backup fallback used**: did the backup destination need to fall back from `<dir>/settings.json.bak.<ts>` to `/tmp/`? Note the dest.
+- **Backup and rollback**: did each selected edit target receive its own mode-0600 `<target>.bak.<timestamp>` snapshot, and did failed validation restore the backed-up settings set? Record the actual target and backup paths or the exact backup failure; never silently redirect backups to another path.
 - **De-dupe misses**: how many Phase 1 candidates turned out to be already covered by a prefix-match of an existing allow rule (i.e. the user would never have been prompted in practice)? The frequency scanner counts raw invocations and doesn't subtract patterns the harness was already auto-allowing via existing rules — surface that gap.
 - **Mode mismatch**: was `AskUserQuestion` skipped because the user signaled autonomous mode ("work without stopping", `--yes`, etc.)? List which decisions were applied via safe-default heuristics instead of explicit confirmation.
 - **Risk-class candidates**: did any proposed candidate match a class that arguably belongs on the safety-block list — e.g. `awk *` (has `system()` and `getline | "cmd"`), `find * -exec *`, `sed` with the `e` substitution flag, `xargs` without `--no-run-if-empty` + safe-flag check? Note each.
@@ -353,7 +401,7 @@ entries into a proposed, operator-gated command-body edit.
 - Permission rules are exact-prefix match: `Bash(npm *)` covers `Bash(npm test)` but not vice versa. Prefer the broader rule when classifying adds.
 - Never add a write/mutation pattern automatically — surface it for the user to explicitly approve.
 - Don't dedupe across quote styles — `'foo *` and `"foo *` are distinct in Claude's matcher.
-- If `~/.claude/settings.json` is a symlink, follow it to the real file before writing.
-- In a worktree, `.claude/settings.json` edits go through git like any tracked file; `.claude/settings.local.json` is per-checkout, so update both worktree and main copy if both exist.
+- Resolve `GLOBAL_SETTINGS_TARGET` as above; a rendered real file is not its portable source.
+- In a worktree, `.claude/settings.json` edits go through git like any tracked file. `.claude/settings.local.json` is per-checkout; never mirror its changes automatically into the main checkout.
 - If `.claude/` is excluded via sparse-checkout, a normal worktree can't see it to edit it — work branch-only in a transient worktree with `git sparse-checkout disable` applied, then remove the worktree after pushing.
 - The transcript scanner is read-only — `--audit-only` is safe to re-run.

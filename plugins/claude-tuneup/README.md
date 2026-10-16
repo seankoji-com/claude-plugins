@@ -44,7 +44,7 @@ Reads the last 50 session transcripts and builds raw frequency tables for Bash c
 
 **Phase 2 — Audit**
 
-Compares `~/.claude/settings.json` against `.claude/settings.json` (and `.claude/settings.local.json` if present) and proposes:
+Compares the resolved `GLOBAL_SETTINGS_TARGET` against `.claude/settings.json` (and `.claude/settings.local.json` if present). For rendered settings, the global target is the verified source. The runtime file still establishes effective permission coverage; runtime-only rules do not justify removing portable project rules. The audit proposes:
 
 - Strip exact duplicates that appear in both files
 - Strip entries in the narrower file that are prefix-subsumed by a broader rule in any file
@@ -54,7 +54,10 @@ Compares `~/.claude/settings.json` against `.claude/settings.json` (and `.claude
 - Flag env vars that belong to a different project
 - Flag CLAUDE.md content in the wrong scope (never auto-edits — print only)
 
-Before touching anything, Phase 2 validates that `~/.claude/settings.json`, `.claude/settings.json`, and `.claude/settings.local.json` all parse as JSON, then takes a timestamped backup of `~/.claude/settings.json` (`settings.json.bak.<timestamp>`, next to the real file). If a settings file is modified and later fails to re-parse, it's restored from that backup automatically. If `.claude/settings.json` was modified and is tracked in git, the command commits it (`git commit -m "chore(.claude): ..."`, no push) so the change shows up in your repo's history like any other tracked edit.
+Before writing, the command resolves the authoritative global target, validates
+settings JSON and backs up the selected edit targets. Failed post-edit validation
+restores those backups. See the command's target-resolution and commit steps for
+rendered settings and source repositories.
 
 **Phase 3 — Self-reflect**
 
@@ -78,6 +81,7 @@ Compose filenames, extra Bash heads you consider globally safe), drop an optiona
 
 ```json
 {
+  "global_settings_source": null,
   "extra_global_bash_heads": ["lychee", "axiom"],
   "extra_global_read_paths": ["~/.cloudflare/**"],
   "project_scan_dirs": ["network/", "hardware/"],
@@ -90,6 +94,11 @@ Compose filenames, extra Bash heads you consider globally safe), drop an optiona
 this looks like filled in, not universal defaults.) Every field is optional; anything
 omitted falls back to the generic default described in `commands/claude-tuneup.md`. The
 command works with zero configuration.
+
+For rendered global settings, set `global_settings_source` to the verified source
+path (absolute or `~/`), or supply the source repository's documented edit path.
+Portable changes use that source; explicit runtime overrides remain machine-local.
+The command stops before settings writes when a managed source cannot be verified.
 
 ---
 
@@ -120,7 +129,7 @@ Run from any git repo (or globally — Phase 2 always audits the global settings
 | `--no-reflect` | Run Phases 1 and 2 but skip the self-reflect log (Phase 3) |
 | _(no flag)_ | All three phases in order: scan → audit → reflect |
 
-Default (no flag) is recommended: running Phase 1 before Phase 2 ensures that any new entries added by the scan are immediately checked by the audit for duplicates.
+The default run collects scan additions and audits existing settings before the shared approval, preflight, backup and apply steps. Neither proposal phase writes settings.
 
 ---
 
@@ -131,9 +140,9 @@ Default (no flag) is recommended: running Phase 1 before Phase 2 ensures that an
 - Permission rules are exact-prefix match: `Bash(npm *)` covers `Bash(npm test)` but not vice versa. The command prefers the broader rule when classifying new additions.
 - Env vars flagged in Phase 2 are **never auto-removed** — they require explicit confirmation via `AskUserQuestion`.
 - CLAUDE.md scope findings are printed as `file:line` notes and never auto-edited.
-- If `~/.claude/settings.json` is a symlink (common in dotfiles setups), the command follows it to the real file before writing.
-- **Backup and rollback**: before any Phase 2 edit, `~/.claude/settings.json` is copied to `settings.json.bak.<timestamp>` next to the real file (falling back to `/tmp/` if that directory is blocked). All three settings files are validated as parseable JSON *before* the backup is taken and *after* edits are applied — a pre-existing parse failure aborts the run before anything is touched; a post-edit parse failure restores from the backup automatically. To manually revert, copy the `.bak.<timestamp>` file back over `~/.claude/settings.json`.
-- **Auto-commit**: if `.claude/settings.json` is modified and tracked in git, the command runs `git add .claude/settings.json` and `git commit -m "chore(.claude): ..."` (no push). `~/.claude/settings.json` and `.claude/settings.local.json` are never committed by this tool.
+- **Global target**: runtime settings are read for effective permissions. Portable edits use the verified managed source, resolving symlinks where needed. A real runtime file may still be rendered. Source changes are reported separately from activation through its documented renderer.
+- **Backup and rollback**: validate the runtime and every selected settings target before writes, then back up each edit target privately next to that target. Post-edit JSON failure restores all backed-up targets. This also applies to `--scan-only` edits.
+- **Commits**: tracked project settings follow the project commit flow. A tracked global source follows its own repository's worktree/signing rules and existing commit authorization. Runtime overrides and ignored local settings are not committed.
 - The self-reflect log lives at `~/.claude/claude-tuneup.notes.md` — one level above `commands/` so it is not auto-registered as a slash command.
 - Phase 3 also appends a structured entry to `~/.claude/audit.jsonl` (shared across plugins in this marketplace — schema in the root `AGENTS.md`). Best-effort: skipped with a warning, not a failure, if `jq` is missing.
 - To remove: `claude plugin uninstall claude-tuneup@seankoji`. The built-in `/fewer-permission-prompts` covers Phase 1 alone.
