@@ -30,7 +30,7 @@ Flags:
 - `--audit-only` — Phase 2 only
 - `--dry-run` — print proposals from both phases, don't write (skips Phase 3)
 - `--no-reflect` — run Phases 1 + 2 but skip Phase 3
-- (no flag) — run all three, scan first (adds can create new duplicates the audit catches)
+- (no flag) — run all three; scan and audit propose changes before step 4's shared approval and apply
 
 Capture the run start time now — run `date +%s` and hold the value for the audit log
 entry in step 7 (Report) below — that step always runs it, regardless of which flags
@@ -260,6 +260,7 @@ Group changes into `AskUserQuestion` blocks:
 
 - Phase 1 adds (prepared in step 2)
 - Phase 2 3a/3b/3c (one combined multi-select)
+- Machine-local runtime overrides (separate explicit confirmation; name the runtime target and label the changes local)
 - Stale MCP entries (3f; explicit confirmation, never auto-removed)
 - Env vars (separate, never auto-applied)
 - CLAUDE.md (flagged only, never auto-edited)
@@ -279,7 +280,7 @@ For each selected target, including an approved runtime override, preserve this 
 
 Apply only the accepted changes:
 
-Record each target's pre-edit state and this run's intended written bytes. Before each write, check that the target still matches the inspected state; stop on a concurrent change instead of overwriting it. Retain the exact bytes written by this run for rollback checks.
+Record each target's pre-edit bytes or absence as its initial expected state. Before each write, including alphabetical sorting, compare the target with its last-known expected state; stop if it differs. After each successful write, verify that the result matches the intended bytes and update the expected state to those exact bytes before another edit. Retain the original snapshot or absence and this run's last verified written bytes separately for rollback. If a write fails or its result cannot be verified, stop and report the unknown state without overwriting it.
 
 - Apply portable global edits to the verified `GLOBAL_SETTINGS_TARGET`; never silently substitute the rendered runtime file
 - Apply an explicitly approved machine-local override to its separately listed and backed-up runtime target; label it local
@@ -401,6 +402,6 @@ entries into a proposed, operator-gated command-body edit.
 - Never add a write/mutation pattern automatically — surface it for the user to explicitly approve.
 - Don't dedupe across quote styles — `'foo *` and `"foo *` are distinct in Claude's matcher.
 - Resolve `GLOBAL_SETTINGS_TARGET` as above; a rendered real file is not its portable source.
-- In a worktree, `.claude/settings.json` edits go through git like any tracked file; `.claude/settings.local.json` is per-checkout, so update both worktree and main copy if both exist.
+- In a worktree, `.claude/settings.json` edits go through git like any tracked file. `.claude/settings.local.json` is per-checkout; never mirror its changes automatically into the main checkout.
 - If `.claude/` is excluded via sparse-checkout, a normal worktree can't see it to edit it — work branch-only in a transient worktree with `git sparse-checkout disable` applied, then remove the worktree after pushing.
 - The transcript scanner is read-only — `--audit-only` is safe to re-run.

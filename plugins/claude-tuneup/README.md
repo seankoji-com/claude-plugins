@@ -129,7 +129,7 @@ Run from any git repo (or globally — Phase 2 always audits the global settings
 | `--no-reflect` | Run Phases 1 and 2 but skip the self-reflect log (Phase 3) |
 | _(no flag)_ | All three phases in order: scan → audit → reflect |
 
-Default (no flag) is recommended: running Phase 1 before Phase 2 ensures that any new entries added by the scan are immediately checked by the audit for duplicates.
+The default run collects scan additions and audits existing settings before the shared approval, preflight, backup and apply steps. Neither proposal phase writes settings.
 
 ---
 
