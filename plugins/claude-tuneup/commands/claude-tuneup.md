@@ -279,6 +279,8 @@ For each selected target, including an approved runtime override, preserve this 
 
 Apply only the accepted changes:
 
+Record each target's pre-edit state and this run's intended written bytes. Before each write, check that the target still matches the inspected state; stop on a concurrent change instead of overwriting it. Retain the exact bytes written by this run for rollback checks.
+
 - Apply portable global edits to the verified `GLOBAL_SETTINGS_TARGET`; never silently substitute the rendered runtime file
 - Apply an explicitly approved machine-local override to its separately listed and backed-up runtime target; label it local
 - Edit `.claude/settings.json`
@@ -289,7 +291,7 @@ Sort `permissions.allow` alphabetically after edits.
 
 ### 5. Validate
 
-Post-edit safety net (step 4's shared preflight catches pre-existing corruption). For each modified target: `jq '.' <file> >/dev/null`. On parse failure, restore every existing target from its recorded snapshot, including a selected runtime override; remove only settings files this run created whose original absence was recorded. Stop with a clear error listing failed validation or restoration paths. Use the exact recorded target/backup pairs rather than reconstructing names or restoring a source backup over the runtime file. Report any rollback failure; never claim a consistent settings set until restoration is verified.
+Post-edit safety net (step 4's shared preflight catches pre-existing corruption). For each modified target: `jq '.' <file> >/dev/null`. On parse failure, first check that each target still matches this run's last written bytes. If it does, restore an existing target from its recorded snapshot, including a selected runtime override, or remove a settings file this run created whose original absence was recorded. If it differs, or this run's written state is unknown, preserve the current file and private backup and report a recovery conflict; do not overwrite or delete concurrent work. Stop with a clear error listing failed validation or restoration paths. Use the exact recorded target/backup pairs rather than reconstructing names or restoring a source backup over the runtime file. Report any rollback failure; never claim a consistent settings set until restoration is verified.
 
 After validation, apply the documented renderer only within existing authorization
 and the repository's rollout rules; otherwise report activation pending. Source
