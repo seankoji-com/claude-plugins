@@ -149,7 +149,8 @@ Read in parallel:
   can be rendered; absence of a symlink does not make it the portable source.
 - Use `global_settings_source` when configured, otherwise discover the source from
   the owner's documented renderer/edit path. Expand only a leading `~/`; never
-  evaluate path text as shell code. Resolve existing symlinks and verify the file.
+  evaluate path text as shell code. Resolve existing symlinks and verify that the
+  file is the documented source, rather than another generated/runtime copy.
   Honor the source repository's worktree rules; do not edit a live Stow checkout.
 - When no renderer manages the file, use the resolved runtime file as the target.
   For a managed file, portable edits go to its source. An explicitly requested
@@ -277,13 +278,14 @@ If `--dry-run`, print the full proposal and stop. Otherwise apply accepted chang
 
 Sort `permissions.allow` alphabetically after edits.
 
-Source changes do not prove runtime activation. Apply the documented renderer only
-within existing authorization and the repository's rollout rules; otherwise report
-activation pending. Never overwrite the runtime file to simulate that render.
-
 ### 5. Validate
 
 Post-edit safety net (the pre-flight check in step 3 catches pre-existing corruption; this catches edits that broke a previously-valid file). For each modified file: `jq '.' <file> >/dev/null`. On parse failure, restore all backed-up files from their `.bak.` snapshots atomically — `cp <file>.bak.<ts> <file>` for each backed-up file — and stop with a clear error listing which file(s) failed validation. Restoring all backed-up files (even if only one failed) keeps the settings set consistent rather than leaving one rolled-back file alongside newly-edited siblings.
+
+After validation, apply the documented renderer only within existing authorization
+and the repository's rollout rules; otherwise report activation pending. Source
+changes do not prove runtime activation. Never overwrite the runtime file to
+simulate that render.
 
 ### 6. Commit
 
