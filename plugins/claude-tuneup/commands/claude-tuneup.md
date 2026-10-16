@@ -191,9 +191,11 @@ For each candidate:
 
 If scan output is dominated by `python3 -c` / heredoc / for-loop invocations, don't try to allowlist them individually — they vary too much to form a stable rule. Recommend a structural fix instead: swap to `jq` (already auto-allowed) or an available MCP tool where one exists, or adopt `sandbox.autoAllowBashIfSandboxed` plus a purpose-built triage hook (e.g. an `ssh-triage`-style script) for a whole class of read-only remote calls.
 
-Present candidates grouped by scope via `AskUserQuestion` (multi-select) — guarantee any risk-class candidate (per **Safety rules**) a dedicated question slot rather than letting it get silently crowded out when higher-priority items fill all four. Apply accepted additions.
+Prepare candidates grouped by scope for step 4's `AskUserQuestion` (multi-select). Guarantee any risk-class candidate (per **Safety rules**) a dedicated question slot rather than letting it get silently crowded out when higher-priority items fill all four. This phase only proposes additions: do not edit settings here. All accepted Phase 1 additions are applied in step 4 after its preflight and backups, then validated in step 5.
 
 ### 3. Phase 2 — Scope audit (skip if `--scan-only`)
+
+This phase only proposes changes. Every settings write waits for step 4's approvals, preflight and backups.
 
 **3a. Duplicates & cross-file prefix subsumption**
 
@@ -248,32 +250,37 @@ Iterate `global.allow` + `project.allow` for `mcp__<server>__*` rules. For each,
 
 Exception: if `<server>` is named in `~/.claude/CLAUDE.md` (or this repo's `CLAUDE.md`) as a server the user relies on, absence is more likely a session-connect gap than a truly dead server — flag it as "not connected this session" rather than proposing removal.
 
-Flag for removal — NEVER auto-remove; ask via `AskUserQuestion`. Case-drift stragglers are a recurring pattern across runs (an MCP server renaming/relaunching under different casing, or getting disconnected outright, leaves the old rule behind) — check `claude-tuneup.notes.md` for ones specific to your own setup.
+Flag for removal — NEVER auto-remove; include it in step 4's explicit `AskUserQuestion` confirmation. Case-drift stragglers are a recurring pattern across runs (an MCP server renaming/relaunching under different casing, or getting disconnected outright, leaves the old rule behind) — check `claude-tuneup.notes.md` for ones specific to your own setup.
 
 ### 4. Confirm & apply
 
+If `--dry-run`, print the full proposal and stop before approval questions, backups or settings edits.
+
 Group changes into `AskUserQuestion` blocks:
 
-- Phase 1 adds (presented in step 2)
+- Phase 1 adds (prepared in step 2)
 - Phase 2 3a/3b/3c (one combined multi-select)
+- Stale MCP entries (3f; explicit confirmation, never auto-removed)
 - Env vars (separate, never auto-applied)
 - CLAUDE.md (flagged only, never auto-edited)
 
-If `--dry-run`, print the full proposal and stop. If there are no accepted settings edits, skip the backup and edit steps. Otherwise run the following shared preflight and backups before applying any accepted settings change, including Phase 1 additions with `--scan-only`. These safeguards are independent of the Phase 2 scope audit.
+If there are no accepted settings edits, skip the backup and edit steps. Otherwise record the exact edit targets and their approved scope: the verified `GLOBAL_SETTINGS_TARGET` for portable changes, the actual runtime `~/.claude/settings.json` for an explicitly approved machine-local override, and the project/local settings paths as needed. When a separate portable source manages the runtime, a purported local override must not resolve back to that source; stop until the documented real-file migration is available rather than relabeling a source write as local. Deduplicate targets that resolve to the same file. A separate source and runtime file are separate targets when both have approved edits. Use this target list for backups, writes, validation and rollback. Run the shared safeguards below before any settings change, including Phase 1 additions with `--scan-only`; they are independent of Phase 2.
 
 Pre-step A — validate before touching anything: for the runtime `~/.claude/settings.json`, `GLOBAL_SETTINGS_TARGET` (if different), `.claude/settings.json` (if present), and `.claude/settings.local.json` (if present), run `jq '.' <file> >/dev/null`. If ANY fails to parse, STOP immediately — no backup, no edits. Backing up an already-malformed file preserves the corruption, and edits on top of it compound it with no path back to known-good. Report the offending file and its parse error, then abort the run.
 
-Pre-step B — back up every settings file the run may edit so a validation failure can roll back atomically. For each of these files that exists, create a timestamped snapshot in the same directory with mode 0600. If a required backup cannot be created and kept private, stop before settings edits and report the exact failure; do not redirect it to `/tmp/`.
+Pre-step B — back up every existing file in the approved target list so a validation failure can roll back the settings set. Create each snapshot in the same directory with mode 0600, without overwriting an existing backup (use a unique suffix on collision). Record original absence for a target the run will create. If a required backup cannot be created and kept private, stop before settings edits and report the exact failure; do not redirect it to `/tmp/`.
 
 - `GLOBAL_SETTINGS_TARGET` → `<target>.bak.<timestamp>` next to the verified edit target. Check its repository's backup-ignore rules; use mode 0600 and never stage backups. Do not back up the runtime file in place of a separate source target.
+- Runtime `~/.claude/settings.json` → `~/.claude/settings.json.bak.<timestamp>` when it is an approved local-override target distinct from `GLOBAL_SETTINGS_TARGET`. If both source and runtime are selected, back up both; if they resolve to the same file, back it up once.
 - `.claude/settings.json` → `.claude/settings.json.bak.$(date +%Y%m%d-%H%M%S)`
 - `.claude/settings.local.json` → `.claude/settings.local.json.bak.$(date +%Y%m%d-%H%M%S)`
 
-Prune stale backups right after creating the new ones: for each backup glob, keep only the 5 most-recent files and delete the rest — `ls -t <glob> 2>/dev/null | tail -n +6 | xargs -r rm -f`. Run this only for the selected `<target>.bak.*`, `.claude/settings.json.bak.*`, and `.claude/settings.local.json.bak.*`. Keep-last-5 (not age-based) because runs are irregular — a `-mtime +30` cutoff would let backups pile up indefinitely between infrequent runs, while keep-last-5 bounds disk usage regardless of run cadence.
+For each selected target, including an approved runtime override, preserve this run's snapshot and the 4 most-recent other snapshots. Prune only verified snapshots in that exact target's backup family. Treat each filename as one literal path, including spaces or shell metacharacters; do not split unquoted glob output through `xargs`. Leave unrelated backups alone. Keeping at most 5 snapshots bounds disk usage across irregular runs.
 
 Apply only the accepted changes:
 
-- Edit the verified `GLOBAL_SETTINGS_TARGET`; do not substitute the runtime file when a renderer manages it
+- Apply portable global edits to the verified `GLOBAL_SETTINGS_TARGET`; never silently substitute the rendered runtime file
+- Apply an explicitly approved machine-local override to its separately listed and backed-up runtime target; label it local
 - Edit `.claude/settings.json`
 - Edit `.claude/settings.local.json` if relevant
 - Keep each settings-edit small and traceable to one named `AskUserQuestion` approval — a combined/broad rewrite can get denied as self-modification even when the equivalent scoped edit wouldn't. Try the direct `Edit` first; fall back to a `jq` command (surfaced for the user to run) only if it actually gets blocked.
@@ -282,7 +289,7 @@ Sort `permissions.allow` alphabetically after edits.
 
 ### 5. Validate
 
-Post-edit safety net (the shared pre-flight check in step 4 catches pre-existing corruption; this catches edits that broke a previously-valid file). For each modified file: `jq '.' <file> >/dev/null`. On parse failure, restore all backed-up files from their `.bak.` snapshots atomically — `cp <file>.bak.<ts> <file>` for each backed-up file — and stop with a clear error listing which file(s) failed validation. Restoring all backed-up files (even if only one failed) keeps the settings set consistent rather than leaving one rolled-back file alongside newly-edited siblings.
+Post-edit safety net (step 4's shared preflight catches pre-existing corruption). For each modified target: `jq '.' <file> >/dev/null`. On parse failure, restore every existing target from its recorded snapshot, including a selected runtime override; remove only settings files this run created whose original absence was recorded. Stop with a clear error listing failed validation or restoration paths. Use the exact recorded target/backup pairs rather than reconstructing names or restoring a source backup over the runtime file. Report any rollback failure; never claim a consistent settings set until restoration is verified.
 
 After validation, apply the documented renderer only within existing authorization
 and the repository's rollout rules; otherwise report activation pending. Source
