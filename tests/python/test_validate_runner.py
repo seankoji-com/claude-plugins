@@ -13,11 +13,13 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / '.github/workflows/validate.yml'
+# The next job key. A two-space comment is not a boundary: it can sit inside a job.
+NEXT_JOB = r'^  [A-Za-z0-9_-]+:[ \t]*$'
 
 
 def step(name, workflow=WORKFLOW):
     # Read this workflow's literal step body, not a second copy of its commands.
-    match = re.search(r'^      - name: ' + re.escape(name) + r'\n(.*?)(?=^      - |^  \S|\Z)',
+    match = re.search(r'^      - name: ' + re.escape(name) + r'\n(.*?)(?=^      - |' + NEXT_JOB + r'|\Z)',
                       workflow.read_text(), re.M | re.S)
     if not match:
         raise AssertionError('missing workflow step: ' + name)
@@ -25,7 +27,7 @@ def step(name, workflow=WORKFLOW):
 
 
 def job(name, workflow=WORKFLOW):
-    match = re.search(r'^  ' + re.escape(name) + r':\n(.*?)(?=^  \S|\Z)',
+    match = re.search(r'^  ' + re.escape(name) + r':\n(.*?)(?=' + NEXT_JOB + r'|\Z)',
                       workflow.read_text(), re.M | re.S)
     if not match:
         raise AssertionError('missing workflow job: ' + name)
@@ -159,6 +161,33 @@ class ValidateRunnerTest(unittest.TestCase):
             self.assertEqual(WORKFLOW.read_text().count('run: bash ' + suite + '\n'), 1, suite)
         self.assertNotIn('continue-on-error', shell_js)
         self.assertNotIn('if:', shell_js)
+
+    def test_slices_end_at_job_keys_not_two_space_comments(self):
+        workflow = self.root / 'fixture.yml'
+        workflow.write_text(textwrap.dedent('''\
+            jobs:
+              first:
+                runs-on: ubuntu-latest
+              # two-space comment inside a job
+                continue-on-error: true
+                steps:
+                  - name: Only
+              # two-space comment inside a step
+                    continue-on-error: true
+                    run: bash tests/run.sh
+
+              # two-space comment between jobs
+              last:
+                steps:
+                  - name: Final
+                    run: echo last
+            '''))
+        first = job('first', workflow)
+        self.assertIn('    continue-on-error: true\n    steps:', first)
+        self.assertNotIn('last', first)
+        self.assertIn('continue-on-error: true', step('Only', workflow))
+        self.assertEqual(command('Only', workflow), 'bash tests/run.sh')
+        self.assertTrue(job('last', workflow).endswith('run: echo last\n'))
 
     def test_workflow_syntax_compiles_every_file_without_executing(self):
         scripts = self.root / 'plugins/fixture/scripts'
