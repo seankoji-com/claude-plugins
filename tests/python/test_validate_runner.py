@@ -24,6 +24,14 @@ def step(name, workflow=WORKFLOW):
     return match.group(1)
 
 
+def job(name, workflow=WORKFLOW):
+    match = re.search(r'^  ' + re.escape(name) + r':\n(.*?)(?=^  \S|\Z)',
+                      workflow.read_text(), re.M | re.S)
+    if not match:
+        raise AssertionError('missing workflow job: ' + name)
+    return match.group(1)
+
+
 def command(name, workflow=WORKFLOW):
     body = step(name, workflow)
     match = re.search(r'^        run: (.*)\n', body, re.M)
@@ -136,12 +144,21 @@ class ValidateRunnerTest(unittest.TestCase):
             result = self.run_shell(command('Verify checkout revision'), GITHUB_SHA=expected,
                                     GITHUB_HEAD_REF='fixture-head')
             self.assertEqual(result.returncode, exit_code, result.stdout + result.stderr)
-        behavioral = WORKFLOW.read_text().split('  behavioral-tests:\n')[1].split('  macos-syntax:\n')[0]
-        checkout = behavioral.split('      - name:')[0]
-        self.assertNotIn('ref:', checkout)
-        self.assertIn('fetch-depth: 0', checkout)
+        behavioral = job('behavioral-tests')
+        shell_js = job('shell-js-tests')
+        for body in (behavioral, shell_js):
+            checkout = body.split('      - name:')[0]
+            self.assertNotIn('ref:', checkout)
+            self.assertIn('fetch-depth: 0', checkout)
+            self.assertIn('      - name: Verify checkout revision\n', body)
         self.assertEqual(behavioral.count('run: bash tests/run-python.sh'), 1)
         self.assertNotIn('unittest discover', behavioral)
+        # Each suite runs exactly once across the workflow, in an enforcing job.
+        for suite in ('tests/run.sh', 'tests/run-js.sh'):
+            self.assertEqual(shell_js.count('run: bash ' + suite + '\n'), 1, suite)
+            self.assertEqual(WORKFLOW.read_text().count('run: bash ' + suite + '\n'), 1, suite)
+        self.assertNotIn('continue-on-error', shell_js)
+        self.assertNotIn('if:', shell_js)
 
     def test_workflow_syntax_compiles_every_file_without_executing(self):
         scripts = self.root / 'plugins/fixture/scripts'

@@ -302,17 +302,11 @@ jobs:
       - name: Verify checkout revision
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
-      - name: Run tests/run.sh
-        run: bash tests/run.sh
-
       - name: Install Python coverage
         run: python3 -m pip install 'coverage==7.16.1'
 
       - name: Run tests/run-python.sh
         run: bash tests/run-python.sh --coverage
-
-      - name: Run tests/run-js.sh
-        run: bash tests/run-js.sh
 
       # Tests execute once and enforce failures. Reporting stays advisory,
       # including after a failed test run; cancelled runs do not report/upload.
@@ -335,6 +329,27 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # Shell and JS suites run beside the Python job instead of before/after it,
+  # taking them off the slowest job's critical path. Separate runner, so no
+  # fixture or coverage state is shared. The gatekeeper blocks on every check
+  # run, so this job gates merges like behavioral-tests does.
+  shell-js-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # workflow-policy-eval.js reads its pinned baseline commit
+
+      - name: Verify checkout revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Run tests/run.sh
+        run: bash tests/run.sh
+
+      - name: Run tests/run-js.sh
+        run: bash tests/run-js.sh
+
   macos-syntax:
     runs-on: macos-latest
     timeout-minutes: 5
@@ -348,7 +363,7 @@ jobs:
         # These scripts target macOS system Bash 3.2; `bash -n` is a syntax-only
         # parse (no execution) and catches Bash 4+ constructs that would break on
         # the oldest supported interpreter.  The full behavioral test harness
-        # (tests/run.sh) requires Bash 4+ and runs in the `behavioral-tests` job
+        # (tests/run.sh) requires Bash 4+ and runs in the `shell-js-tests` job
         # on ubuntu-latest — this job only verifies that shipped scripts parse
         # under the oldest supported Bash.
         run: |
