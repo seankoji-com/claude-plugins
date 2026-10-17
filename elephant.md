@@ -240,8 +240,9 @@ Five things must change **together** — missing one breaks the marketplace:
 
 ### CI checks (cite `.github/workflows/validate.yml`)
 
-Runs on every push and PR (`validate.yml:3`). Two jobs — `validate` (15 checks across the marketplace + all 6
-plugins) and `behavioral-tests` (3 test-runner steps):
+Runs on every push and PR (`validate.yml:3`). Jobs include `validate` (15 checks across the marketplace + all 6
+plugins), `behavioral-tests` (Python suite: `tests/run-python.sh --coverage`), and `shell-js-tests`
+(`tests/run.sh`, `tests/run-js.sh`):
 1. **Marketplace manifest** — `marketplace.json` is valid JSON (`:16-19`).
 2. **All plugin manifests** — each `plugins/*/.claude-plugin/plugin.json` is valid JSON, has a non-empty
    `name`, has **no** `commands` field, and has a `version` (`:21-33`).
