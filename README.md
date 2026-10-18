@@ -1,5 +1,9 @@
 # claude-plugins
 
+> [!NOTE]
+> **Looking for the current workflows? Use [t3-plugins](https://github.com/seankoji-com/t3-plugins).**
+> t3-plugins is the successor to this marketplace. It carries imps and the other workflows forward for T3 Code across model providers ([docs](https://seankoji-com.github.io/t3-plugins/)). This repository stays for its history and for the Claude Code plugins that began here.
+
 <p align="center">
   <img src="docs/assets/claude-plugins-hero.png" alt="claude-plugins banner" width="720">
 </p>
