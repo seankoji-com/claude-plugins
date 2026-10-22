@@ -1,11 +1,10 @@
 # Maintaining claude-plugins
 
-Extended maintainer prose that doesn't fit the budget-capped `CLAUDE.md` (≤200 lines) or
-`AGENTS.md` (≤300 lines). Those two files carry the load-bearing core — the add-a-plugin
-checklist, invariants, and audit-log schema, verbatim-identical between them inside
+Extended maintainer prose linked from canonical `AGENTS.md` (≤300 lines). Its
 `<!-- BEGIN SHARED-MAINTAINER-BLOCK -->` / `<!-- END SHARED-MAINTAINER-BLOCK -->` markers
-— and point here for depth. This file has no line budget and is not auto-loaded by any
-agent runtime; read it deliberately.
+bound the add-a-plugin checklist, invariants and audit-log schema. `CLAUDE.md` contains
+only the native `@AGENTS.md` import. This file has no line budget and is not
+auto-loaded by any agent runtime; read it deliberately.
 
 Every platform-behavior claim below cites `docs/platform-matrix.md`, including its
 `## PR 2 re-verification` section. If you need a platform fact this file doesn't cite,
@@ -40,8 +39,8 @@ exceptions it allows (two comment-only platform-assumption headers, plus the
 audit log" section).
 
 `build/dist-lint.sh` is the mechanical gate on generated output (the reviewer diff
-excludes `dist/` itself), including a self-test that the shared maintainer block stays
-identical between `CLAUDE.md` and `AGENTS.md`. `.github/workflows/validate.yml`
+excludes `dist/` itself), including a self-test that requires the marked maintainer
+block in `AGENTS.md` and an exact import-only `CLAUDE.md`. `.github/workflows/validate.yml`
 regenerates on `ubuntu-latest` and fails on drift — that doubles as the cross-machine
 determinism check, since the generator must produce byte-identical output regardless of
 host.
