@@ -1,8 +1,12 @@
 # AGENTS.md — maintainer guide for claude-plugins
 
-This file is loaded by AI agent runtimes for sessions **inside this repo** — Claude Code
-also reads its own `CLAUDE.md`, which carries the identical shared block below. This
-file is for **marketplace maintainers**. Plugin *users* never see it.
+This is the canonical guide for **marketplace maintainers** working inside this repo.
+`CLAUDE.md` imports it using Claude Code's native import syntax. Plugin *users* never
+see it. Product-native commands, agents and skills under `plugins/` remain product
+source, separate from these maintainer instructions.
+
+T3 and the selected shared workflow own model selection, delegation, worktrees and
+watches across providers. Portable roles and references grant no tools or authority.
 
 **Agy caveat — read before relying on this file for Agy sessions.** Agy does not
 auto-load `AGENTS.md` (or any `GEMINI.md`) from the working directory, not even inside a
@@ -124,19 +128,19 @@ jq . .claude-plugin/marketplace.json && for f in plugins/*/.claude-plugin/plugin
 grep -rn --include="*.md" 'CLAUDE_PLUGIN_ROOT' plugins/*/commands/ | head  # confirm rewrites landed
 ```
 See `.github/workflows/validate.yml` for the full check suite; `build/dist-lint.sh`
-gates generated `dist/` output separately, including a self-test that the shared block
-above stays identical between this file and `CLAUDE.md`.
+gates generated `dist/` output separately, including a self-test that this file owns
+the marked maintainer block and `CLAUDE.md` contains only `@AGENTS.md`.
 
 A push to a holding/integration branch also triggers `version-bump.yml` (a bot commit
 that bumps `plugin.json` versions) and re-runs `validate.yml` against that new commit —
 a CI-monitor "failed" event can therefore fire while the real run is still `in_progress`
-on the bumped commit. Poll `gh run view --json status,conclusion` (or the equivalent
-GitHub API call) to completion before treating a failure notification as real or
-dispatching a fixer.
+on the bumped commit. Verify the current head and completed check result before
+treating a failure notification as real or dispatching a fixer. In T3, the coordinator
+owns the native PR watch; workers return pending state without watching or polling.
 
 A subagent's own sandboxed worktree can fail `git checkout`/`git commit` with an EPERM
 on provenance-attributed files even though the identical command succeeds in a normal
-orchestrator shell on the same tree. If this happens, run the gate commands from the
-orchestrator instead, in a fresh worktree created with `git worktree add <absolute path
-under $TMPDIR> origin/<branch>` — use an absolute path, since `$TMPDIR` resolves
-differently between a sandboxed subagent's Bash calls and the orchestrator's own.
+orchestrator shell on the same tree. Report the failure to the coordinator and use
+the supported runtime recovery path without bypassing a denied operation. T3 owns
+any replacement worktree and its thread binding; use its returned absolute path,
+since `$TMPDIR` can resolve differently between worker and coordinator shells.

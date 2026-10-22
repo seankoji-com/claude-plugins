@@ -50,7 +50,7 @@ Usage: build/dist-lint.sh [--scope <plugin>] [--check-frozen-sources] [--self-te
   -h, --help               this text
 
 Invariants checked: regen-diff, unsubstituted-ref, absolute-path, manifest, budget,
-mirrored-block, gate-stripped, uninstall-prefix, frozen-sources, readme-marker.
+canonical-import, gate-stripped, uninstall-prefix, frozen-sources, readme-marker.
 EOF
 }
 
@@ -254,33 +254,32 @@ check_budget() {
   return $status
 }
 
-# ------------------------------------------------------------- 6. mirrored-block
+# ------------------------------------------------------------- 6. canonical-import
 #
-# CLAUDE.md and AGENTS.md must carry a byte-identical SHARED-MAINTAINER-BLOCK (contract:
-# 'Maintainer invariants stay auto-loaded'). Neither file carrying the block yet is not
-# this check's failure — that's task 10/31's job; only a *mismatch* is.
+# AGENTS.md owns one non-empty, properly paired maintainer block. CLAUDE.md is exactly
+# its native import. Missing files or markers fail, including when both are missing.
 
-check_mirrored_block() {
-  local root="$1" status=0
+check_canonical_import() {
+  local root="$1"
   local claude="$root/CLAUDE.md" agents="$root/AGENTS.md"
-  local c_has=0 a_has=0
-  [ -f "$claude" ] && grep -q 'BEGIN SHARED-MAINTAINER-BLOCK' "$claude" 2>/dev/null && c_has=1
-  [ -f "$agents" ] && grep -q 'BEGIN SHARED-MAINTAINER-BLOCK' "$agents" 2>/dev/null && a_has=1
-  if [ "$c_has" = 0 ] && [ "$a_has" = 0 ]; then
-    return 0
-  fi
-  if [ "$c_has" != "$a_has" ]; then
-    echo "mirrored-block: SHARED-MAINTAINER-BLOCK present in only one of CLAUDE.md/AGENTS.md" >&2
+  if [ ! -f "$agents" ] || [ ! -f "$claude" ]; then
+    echo "canonical-import: AGENTS.md and CLAUDE.md are both required" >&2
     return 1
   fi
-  if ! diff -u \
-      <(sed -n '/BEGIN SHARED-MAINTAINER-BLOCK/,/END SHARED-MAINTAINER-BLOCK/p' "$claude") \
-      <(sed -n '/BEGIN SHARED-MAINTAINER-BLOCK/,/END SHARED-MAINTAINER-BLOCK/p' "$agents") \
-      >&2; then
-    echo "mirrored-block: SHARED-MAINTAINER-BLOCK differs between CLAUDE.md and AGENTS.md" >&2
-    status=1
+  if ! awk '
+    /^<!-- BEGIN SHARED-MAINTAINER-BLOCK -->$/ { starts++; inside=1; next }
+    /^<!-- END SHARED-MAINTAINER-BLOCK -->$/ { ends++; if (!inside) bad=1; inside=0; next }
+    inside && /[^[:space:]]/ { content++ }
+    END { exit !(starts == 1 && ends == 1 && content > 0 && !inside && !bad) }
+  ' "$agents"; then
+    echo "canonical-import: AGENTS.md must own one non-empty SHARED-MAINTAINER-BLOCK" >&2
+    return 1
   fi
-  return $status
+  if ! cmp -s "$claude" <(printf '@AGENTS.md\n'); then
+    echo "canonical-import: CLAUDE.md must contain only @AGENTS.md with a final newline" >&2
+    return 1
+  fi
+  return 0
 }
 
 # ------------------------------------------------------------- 7. gate-stripped
@@ -755,25 +754,38 @@ self_test() {
     "check_budget '$tmp/budget/broken'" \
     "check_budget '$tmp/budget/correct'"
 
-  # 6. mirrored-block
-  mkdir -p "$tmp/block/correct" "$tmp/block/broken"
-  {
-    echo "# CLAUDE.md"
-    echo "<!-- BEGIN SHARED-MAINTAINER-BLOCK -->"
-    echo "shared content"
-    echo "<!-- END SHARED-MAINTAINER-BLOCK -->"
-  } > "$tmp/block/correct/CLAUDE.md"
-  cp "$tmp/block/correct/CLAUDE.md" "$tmp/block/correct/AGENTS.md"
-  cp "$tmp/block/correct/CLAUDE.md" "$tmp/block/broken/CLAUDE.md" 2>/dev/null || { mkdir -p "$tmp/block/broken"; cp "$tmp/block/correct/CLAUDE.md" "$tmp/block/broken/CLAUDE.md"; }
+  # 6. canonical-import: keep missing-both and malformed-block regressions explicit.
+  mkdir -p "$tmp/block/correct"
+  printf '@AGENTS.md\n' > "$tmp/block/correct/CLAUDE.md"
   {
     echo "# AGENTS.md"
     echo "<!-- BEGIN SHARED-MAINTAINER-BLOCK -->"
-    echo "DIFFERENT content"
+    echo "canonical maintainer rules"
     echo "<!-- END SHARED-MAINTAINER-BLOCK -->"
-  } > "$tmp/block/broken/AGENTS.md"
-  st_case "mirrored-block" \
-    "check_mirrored_block '$tmp/block/broken'" \
-    "check_mirrored_block '$tmp/block/correct'"
+  } > "$tmp/block/correct/AGENTS.md"
+  local fixture
+  for fixture in missing-both missing-agents missing-claude missing-markers missing-start \
+      missing-end duplicate-block empty-block reversed-block wrong-import duplicate-native missing-newline; do
+    mkdir -p "$tmp/block/$fixture"
+    cp "$tmp/block/correct/AGENTS.md" "$tmp/block/correct/CLAUDE.md" "$tmp/block/$fixture/"
+    case "$fixture" in
+      missing-both) rm "$tmp/block/$fixture/AGENTS.md" "$tmp/block/$fixture/CLAUDE.md" ;;
+      missing-agents) rm "$tmp/block/$fixture/AGENTS.md" ;;
+      missing-claude) rm "$tmp/block/$fixture/CLAUDE.md" ;;
+      missing-markers) printf '# AGENTS.md\n' > "$tmp/block/$fixture/AGENTS.md" ;;
+      missing-start) sed '/BEGIN SHARED-MAINTAINER-BLOCK/d' "$tmp/block/correct/AGENTS.md" > "$tmp/block/$fixture/AGENTS.md" ;;
+      missing-end) sed '/END SHARED-MAINTAINER-BLOCK/d' "$tmp/block/correct/AGENTS.md" > "$tmp/block/$fixture/AGENTS.md" ;;
+      duplicate-block) cat "$tmp/block/correct/AGENTS.md" >> "$tmp/block/$fixture/AGENTS.md" ;;
+      empty-block) sed '/canonical maintainer rules/d' "$tmp/block/correct/AGENTS.md" > "$tmp/block/$fixture/AGENTS.md" ;;
+      reversed-block) printf '<!-- END SHARED-MAINTAINER-BLOCK -->\nrules\n<!-- BEGIN SHARED-MAINTAINER-BLOCK -->\n' > "$tmp/block/$fixture/AGENTS.md" ;;
+      wrong-import) printf '@MISSING.md\n' > "$tmp/block/$fixture/CLAUDE.md" ;;
+      duplicate-native) cat "$tmp/block/correct/AGENTS.md" >> "$tmp/block/$fixture/CLAUDE.md" ;;
+      missing-newline) printf '@AGENTS.md' > "$tmp/block/$fixture/CLAUDE.md" ;;
+    esac
+    st_case "canonical-import ($fixture)" \
+      "check_canonical_import '$tmp/block/$fixture'" \
+      "check_canonical_import '$tmp/block/correct'"
+  done
 
   # 7. gate-stripped
   mkdir -p "$tmp/gate/correct" "$tmp/gate/broken"
@@ -952,7 +964,7 @@ run_lint() {
   check_absolute_path "$dist" && echo "ok   absolute-path" || { echo "FAIL absolute-path"; status=1; }
   check_manifest "$dist" && echo "ok   manifest" || { echo "FAIL manifest"; status=1; }
   check_budget "$ROOT" && echo "ok   budget" || { echo "FAIL budget"; status=1; }
-  check_mirrored_block "$ROOT" && echo "ok   mirrored-block" || { echo "FAIL mirrored-block"; status=1; }
+  check_canonical_import "$ROOT" && echo "ok   canonical-import" || { echo "FAIL canonical-import"; status=1; }
   check_gate_stripped "$dist" && echo "ok   gate-stripped" || { echo "FAIL gate-stripped"; status=1; }
   check_uninstall_prefix_repo "$ROOT" && echo "ok   uninstall-prefix" || { echo "FAIL uninstall-prefix"; status=1; }
   # frozen-sources is opt-in (--check-frozen-sources), NOT part of the default lint that
