@@ -1,0 +1,38 @@
+# OpenCode greenkeeper signal — synced from seankoji-com/.github (panel/call-reusable-opencode-greenkeeper.yml)
+# Asks the private controller to look at one same-repository, non-draft pull
+# request. Passes the optional app private key. Does not check out pull-request
+# code. Repair stays off until OPENCODE_GREENKEEPER_MODE is set on
+# seankoji-com/.github-private.
+name: OpenCode greenkeeper signal
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_run:
+    workflows: ['*']
+    types: [completed]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+
+jobs:
+  signal:
+    if: >-
+      (
+        (github.event_name == 'pull_request_target' || github.event_name == 'pull_request_review') &&
+        github.event.pull_request.draft == false &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      ) ||
+      (
+        github.event_name == 'workflow_run' &&
+        (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
+        github.event.workflow_run.name != 'OpenCode greenkeeper signal' &&
+        github.event.workflow_run.pull_requests[0].number != ''
+      )
+    uses: seankoji-com/.github/.github/workflows/reusable-opencode-greenkeeper-signal.yml@main
+    secrets:
+      app_private_key: ${{ secrets.SEANKOJI_CI_PRIVATE_KEY }}
+    with:
+      runner-json: '["ubuntu-latest"]'
