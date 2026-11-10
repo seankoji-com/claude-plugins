@@ -82,6 +82,7 @@ jobs:
     # a reusable-workflow caller job, and the whole file then fails to parse,
     # so the required gate never posts. The reusable skips itself when the
     # key is absent and marks every step advisory, so this job cannot go red.
+    # Public export: the called reusable selects its own GitHub-hosted runner.
     if: github.event_name == 'pull_request_target'
     # Must cover the called job's own grant (contents + pull-requests read): a
     # called workflow can only downgrade permissions, so a narrower caller is
