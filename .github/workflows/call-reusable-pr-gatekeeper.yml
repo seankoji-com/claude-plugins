@@ -57,20 +57,22 @@ permissions:
   pull-requests: read
   contents: read
 
-# Coalesce routine CI completions per head before they enter the serialized
-# writer queue. The key is the same head the gatekeeper job evaluates, so a
-# replaced pending event is always for this head and the surviving run re-reads
-# it; no other PR loses its refresh. Seeds, controller signals and fork review
-# resolution retain their own run IDs.
+# Coalesce repeated seeds separately from CI and reconciler refreshes per head.
+# A seed cannot replace an evaluation: it only posts pending. Repeated plain
+# dispatches must not keep adding writer jobs while a runner is unavailable.
+# Preserve review resolution and controller state signals under their run IDs.
 concurrency:
   group: >-
-    ${{ github.event_name == 'workflow_run' &&
+    ${{ github.event_name == 'pull_request_target' &&
+    format('pr-gatekeeper-seed-{0}-{1}-{2}', github.repository, github.event.pull_request.number, github.event.pull_request.head.sha) ||
+    ((github.event_name == 'workflow_dispatch' && inputs.persona_state == '') ||
+    (github.event_name == 'workflow_run' &&
     github.event.workflow_run.event != 'pull_request_review' &&
     github.event.workflow_run.name != 'PR Gatekeeper' &&
     (github.event.workflow_run.pull_requests[0] != null ||
-    contains(fromJSON('["pull_request", "pull_request_target", "dynamic"]'), github.event.workflow_run.event)) &&
+    contains(fromJSON('["pull_request", "pull_request_target", "dynamic"]'), github.event.workflow_run.event)))) &&
     format('pr-gatekeeper-refresh-{0}-{1}', github.repository,
-    github.event.workflow_run.pull_requests[0].head.sha || github.event.workflow_run.head_sha) ||
+    github.event.workflow_run.pull_requests[0].head.sha || github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.head_sha) ||
     format('pr-gatekeeper-event-{0}', github.run_id) }}
   cancel-in-progress: false
 
@@ -107,8 +109,8 @@ jobs:
     uses: seankoji-com/.github/.github/workflows/reusable-review-event.yml@main
 
   gatekeeper:
-    # Serialize every head/merge publication. Routine CI arrivals are bounded
-    # above; keep event payloads in this queue until their signals are published.
+    # Serialize every head/merge publication. Repeated seeds, CI and plain
+    # reconciler arrivals coalesce above; retain review/controller signals.
     # Keep this group repo-wide: a resolved review can publish to a head other
     # than any per-head key, so per-head writer groups would race.
     concurrency:
