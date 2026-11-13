@@ -17,6 +17,18 @@ on:
 permissions:
   contents: read
 
+# Coalesce the signal per PR. A superseded signal has no value: the controller
+# reads the PR's current state when it acts. The workflow_run branch on a
+# main-branch run has no PR number, so it falls back to the unique run id and is
+# never cancelled.
+concurrency:
+  group: >-
+    opencode-greenkeeper-${{
+    github.event.pull_request.number ||
+    github.event.workflow_run.pull_requests[0].number ||
+    github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   signal:
     if: >-
