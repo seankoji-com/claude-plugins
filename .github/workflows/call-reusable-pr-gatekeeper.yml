@@ -109,14 +109,29 @@ jobs:
     uses: seankoji-com/.github/.github/workflows/reusable-review-event.yml@main
 
   gatekeeper:
-    # Serialize every head/merge publication. Repeated seeds, CI and plain
-    # reconciler arrivals coalesce above; retain review/controller signals.
-    # Keep this group repo-wide: a resolved review can publish to a head other
-    # than any per-head key, so per-head writer groups would race.
-    concurrency:
-      group: pr-gatekeeper-${{ github.repository }}
-      cancel-in-progress: false
-      queue: max
+    # No job-level `concurrency`, deliberately (#4434). A job concurrency group
+    # is one shared FIFO queue, and a job only asks for a runner once it holds
+    # that group's single slot. With `queue: max` it holds 100 pending entries
+    # and GitHub then cancels each further job BEFORE creating it, so the run
+    # fails with no job, no log and no check run.
+    #
+    # Both halves of that happened on 12-13 November 2026. The repo-wide group
+    # `pr-gatekeeper-<repo>` first dropped 233 admitted runs with no gatekeeper
+    # job at all (#4434), and then, once the queue drained, let only one gate
+    # evaluation queue for a runner at a time: on 13 November the job for head
+    # c2df7b9e (PR #4450) waited from 04:45Z without a runner while its pending
+    # composite check held `gatekeeper / all-checks-passed`, so the PR stayed
+    # BLOCKED with every constituent check green. The same caller file succeeds
+    # in repositories with a smaller `workflow_run: ["*"]` fan-in, so the shared
+    # queue, not the reusable or its inputs, is the fault.
+    #
+    # Per-head coalescing already lives on the workflow-level `concurrency`
+    # above, where a replaced run is `cancelled` rather than failed and the
+    # surviving run still posts the verdict for that head. Dropping the job
+    # group does not weaken the gate: the evaluator still refuses on any failing
+    # or pending constituent check.
+    # The required context is `<this job id> / all-checks-passed`, so this job
+    # must never gain a `name:` that would rename the context.
     # Guarding at the job level, not inside a step: an in-job early exit still
     # claims a self-hosted runner first, and fleet capacity is scarce.
     #   - Skipping the gate's own runs stops it re-triggering itself, which
