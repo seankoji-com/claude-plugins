@@ -5,6 +5,11 @@
 # Uses this repository's own GITHUB_TOKEN to post the check run — never an App
 # identity, so the ruleset's context match stays unambiguous.
 name: PR Gatekeeper
+# Free diagnostics: the run list names the event and the head the gate resolved,
+# so a missing context identifies itself without opening a job that may not exist.
+run-name: >-
+  Gate ${{ github.event_name }} ·
+  ${{ github.event.workflow_run.pull_requests[0].head.sha || github.event.workflow_run.head_sha || github.event.pull_request.head.sha || inputs.head_sha || github.run_id }}
 
 on:
   # The wildcard is deliberate and load-bearing: `workflows` is a REQUIRED key
